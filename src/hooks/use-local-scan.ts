@@ -1,5 +1,5 @@
 import { useCallback, useRef, useEffect } from "react";
-import { useLocalLibraryStore, isAudioFile, fileIdFromPath } from "../stores/local-library.store";
+import { useLocalLibraryStore, fileIdFromPath } from "../stores/local-library.store";
 import {
   getScanState,
   updateScanState,
@@ -18,7 +18,8 @@ import {
 } from "../services/local-database";
 
 const DIR_BATCH = 10;
-const WATCH_INTERVAL = 10000;
+const FILE_BATCH = 5;
+const WATCH_INTERVAL = 15000;
 
 const AUDIO_EXTENSIONS = new Set([
   ".mp3", ".flac", ".ogg", ".wav", ".m4a", ".aac", ".wma", ".opus", ".aiff", ".alac",
@@ -28,12 +29,15 @@ export function useLocalScan() {
   const pausedRef = useRef(false);
   const abortRef = useRef(false);
   const watchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scanningRef = useRef(false);
   const mountedRef = useRef(true);
+  const scannedCounter = useRef(0);
 
-  const { setRootFolder, setScanStatus, setScanProgress, setLastScanned, reset: resetStore } =
+  const { setRootFolder, setScanStatus, setScanProgress, setLastScanned } =
     useLocalLibraryStore();
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       if (watchTimerRef.current) clearTimeout(watchTimerRef.current);
@@ -45,38 +49,39 @@ export function useLocalScan() {
     setScanStatus("paused");
   }, [setScanStatus]);
 
-  const resume = useCallback(async () => {
+  const resume = useCallback(() => {
+    if (scanningRef.current) return;
     pausedRef.current = false;
     abortRef.current = false;
     setScanStatus("scanning");
-    processQueue();
+    runScanner();
   }, [setScanStatus]);
 
-  const startScan = useCallback(
-    async (folder: string) => {
-      setRootFolder(folder);
-      pausedRef.current = false;
-      abortRef.current = false;
+  const startScan = useCallback(async (folder: string) => {
+    setRootFolder(folder);
+    pausedRef.current = false;
+    abortRef.current = false;
+    scanningRef.current = false;
+    scannedCounter.current = 0;
 
-      await deleteAllSongs();
-      await clearQueue();
-      await updateScanState({
-        root_folder: folder,
-        scan_status: "scanning",
-        total_files: 0,
-        scanned_files: 0,
-        current_dir: folder,
-        last_scanned_at: null,
-      });
+    await deleteAllSongs();
+    await clearQueue();
+    await updateScanState({
+      root_folder: folder,
+      scan_status: "scanning",
+      total_files: 0,
+      scanned_files: 0,
+      current_dir: folder,
+      last_scanned_at: null,
+      watcher_enabled: 0,
+    });
 
-      setScanStatus("scanning");
-      setScanProgress({ total: 0, done: 0, currentDir: folder });
+    setScanStatus("scanning");
+    setScanProgress({ total: 0, done: 0, currentDir: folder });
 
-      enqueueScan([{ type: "dir", path: folder }]);
-      processQueue();
-    },
-    [setRootFolder, setScanStatus, setScanProgress]
-  );
+    await enqueueScan([{ type: "dir", path: folder }]);
+    runScanner();
+  }, [setRootFolder, setScanStatus, setScanProgress]);
 
   const rescan = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -90,32 +95,20 @@ export function useLocalScan() {
   const abort = useCallback(() => {
     abortRef.current = true;
     pausedRef.current = false;
+    scanningRef.current = false;
     if (watchTimerRef.current) clearTimeout(watchTimerRef.current);
-    updateScanState({ scan_status: "idle" });
+    updateScanState({ scan_status: "idle", watcher_enabled: 0 });
     setScanStatus("idle");
   }, [setScanStatus]);
 
-  // Process scan queue (dirs + files)
-  async function processQueue() {
+  async function runScanner() {
     if (abortRef.current || pausedRef.current || !mountedRef.current) return;
+    if (scanningRef.current) return;
+    scanningRef.current = true;
 
-    let processed = 0;
+    await processQueueBatch();
 
-    while (processed < DIR_BATCH) {
-      const item = await dequeueScan();
-      if (!item) break;
-
-      if (item.type === "dir") {
-        await processDir(item.path);
-      } else if (item.type === "file") {
-        await processFile(item.path);
-      }
-
-      processed++;
-      if (processed % 3 === 0) {
-        await yieldToUI();
-      }
-    }
+    scanningRef.current = false;
 
     if (abortRef.current || !mountedRef.current) return;
 
@@ -123,7 +116,31 @@ export function useLocalScan() {
     if (remaining === 0) {
       await finishScan();
     } else if (!pausedRef.current) {
-      setTimeout(processQueue, 0);
+      setTimeout(runScanner, 0);
+    }
+  }
+
+  async function processQueueBatch() {
+    let dirs = 0;
+    let files = 0;
+
+    while (dirs < DIR_BATCH) {
+      if (abortRef.current || pausedRef.current) return;
+      const item = await dequeueScan();
+      if (!item) break;
+
+      if (item.type === "dir") {
+        await processDir(item.path);
+        dirs++;
+      } else if (item.type === "file") {
+        await processFile(item.path);
+        files++;
+      }
+
+      if ((dirs + files) % 3 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      if (files >= FILE_BATCH && dirs >= 1) break;
     }
   }
 
@@ -135,31 +152,35 @@ export function useLocalScan() {
       const fsPlugin = await import("@tauri-apps/plugin-fs");
       const entries = await fsPlugin.readDir(dirPath);
       const subdirs: string[] = [];
-      const files: string[] = [];
+      const audioFiles: string[] = [];
 
       for (const entry of entries) {
         if (abortRef.current) return;
+        if (!entry.name) continue;
         const fullPath = `${dirPath}/${entry.name}`;
         if (entry.children) {
           subdirs.push(fullPath);
-        } else if (entry.name) {
+        } else {
           const ext = entry.name.toLowerCase().slice(entry.name.lastIndexOf("."));
           if (AUDIO_EXTENSIONS.has(ext)) {
-            files.push(fullPath);
+            audioFiles.push(fullPath);
           }
         }
       }
 
-      if (subdirs.length > 0) {
-        enqueueScan(subdirs.map((p) => ({ type: "dir", path: p })));
-      }
-      if (files.length > 0) {
-        enqueueScan(files.map((p) => ({ type: "file", path: p })));
+      const batch: { type: string; path: string }[] = [];
+      for (const d of subdirs) batch.push({ type: "dir", path: d });
+      for (const f of audioFiles) batch.push({ type: "file", path: f });
+
+      if (batch.length > 0) {
+        await enqueueScan(batch);
       }
 
-      const state = await getScanState();
+      const currentState = await getScanState();
+      const scanned = scannedCounter.current + 1;
+      scannedCounter.current = scanned;
       await updateScanState({
-        scanned_files: (state?.scanned_files || 0) + 1,
+        scanned_files: scanned,
         current_dir: dirPath,
       });
     } catch (err) {
@@ -172,7 +193,6 @@ export function useLocalScan() {
     try {
       const fsPlugin = await import("@tauri-apps/plugin-fs");
       const data = await fsPlugin.readFile(filePath);
-      const buffer = data.buffer as ArrayBuffer;
 
       let metadata: {
         name: string;
@@ -194,8 +214,8 @@ export function useLocalScan() {
       try {
         const mm = await import("music-metadata");
         const result = await mm.parseBuffer(
-          new Uint8Array(buffer),
-          { path: filePath, mimeType: "audio/mpeg" },
+          data,
+          { path: filePath },
           { duration: true, skipCovers: true, skipPostHeaders: false }
         );
 
@@ -214,22 +234,37 @@ export function useLocalScan() {
           sample_rate: format.sampleRate || null,
           genre: common.genre?.[0] || null,
           year: common.year || null,
-          file_size: format.numberOfSamples || 0,
+          file_size: data.byteLength || data.length,
           file_extension: filePath.split(".").pop()?.toLowerCase() || "",
           last_modified: null,
         };
       } catch {
-        // Fallback: metadata from path
+        // Fallback: metadata from path structure
         const fileName = filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Unknown";
-        const parts = filePath.replace(/\\/g, "/").split("/");
-        const relParts = (await getScanState())?.root_folder
-          ? filePath.replace((await getScanState())!.root_folder, "").split("/").filter(Boolean)
-          : parts.slice(-3);
+        const scanState = await getScanState();
+        const rootFolder = scanState?.root_folder || "";
+        const relPath = rootFolder
+          ? filePath.replace(rootFolder, "").replace(/^\/+/, "")
+          : "";
+        const relParts = relPath ? relPath.split("/").filter(Boolean) : [];
+
+        let artist = "Unknown Artist";
+        let album: string | null = null;
+
+        if (relParts.length >= 3) {
+          artist = relParts[relParts.length - 3];
+          album = relParts[relParts.length - 2];
+        } else if (relParts.length === 2) {
+          album = relParts[relParts.length - 2];
+          artist = relParts[relParts.length - 3] || "Unknown Artist";
+        } else if (relParts.length === 1) {
+          artist = relParts[0];
+        }
 
         metadata = {
           name: fileName,
-          artist_name: relParts.length >= 2 ? relParts[relParts.length - 3] || "Unknown Artist" : "Unknown Artist",
-          album_name: relParts.length >= 2 ? relParts[relParts.length - 2] : null,
+          artist_name: artist,
+          album_name: album,
           album_artist: null,
           track_number: null,
           disc_number: null,
@@ -238,7 +273,7 @@ export function useLocalScan() {
           sample_rate: null,
           genre: null,
           year: null,
-          file_size: data.length,
+          file_size: data.byteLength || data.length,
           file_extension: filePath.split(".").pop()?.toLowerCase() || "",
           last_modified: null,
         };
@@ -266,10 +301,9 @@ export function useLocalScan() {
 
       await batchInsertSongs([song]);
 
-      const state = await getScanState();
-      await updateScanState({
-        scanned_files: (state?.scanned_files || 0) + 1,
-      });
+      const scanned = scannedCounter.current + 1;
+      scannedCounter.current = scanned;
+      setScanProgress({ done: scanned, currentDir: filePath });
     } catch (err) {
       console.warn(`[scan] error processing file ${filePath}:`, err);
     }
@@ -278,6 +312,7 @@ export function useLocalScan() {
   async function finishScan() {
     if (abortRef.current || !mountedRef.current) return;
     const count = await getSongCount();
+    scannedCounter.current = count;
     await updateScanState({
       scan_status: "done",
       total_files: count,
@@ -289,15 +324,10 @@ export function useLocalScan() {
     setScanStatus("done");
     setLastScanned(Date.now());
     setScanProgress({ total: count, done: count, currentDir: "" });
-    startWatcher();
-  }
-
-  // Directory watcher (polling)
-  function startWatcher() {
-    if (watchTimerRef.current) clearTimeout(watchTimerRef.current);
     scheduleWatch();
   }
 
+  // Directory watcher (polling — root level for new dirs, checks all known paths for deletion)
   function scheduleWatch() {
     if (!mountedRef.current) return;
     watchTimerRef.current = setTimeout(checkForChanges, WATCH_INTERVAL);
@@ -315,51 +345,69 @@ export function useLocalScan() {
       const dbPaths = new Set(await getAllPaths());
       const fsPaths = new Set<string>();
       const root = state.root_folder;
-      if (!root) {
-        scheduleWatch();
-        return;
-      }
+      if (!root) { scheduleWatch(); return; }
 
-      // Quick scan root dir for changes (depth 1)
       const fsPlugin = await import("@tauri-apps/plugin-fs");
-      const topEntries = await fsPlugin.readDir(root);
 
-      const newFiles: string[] = [];
-      let foundChanges = false;
+      // Recursively scan root (up to 2 levels deep)
+      const pendingDirs = [root];
+      const visited = new Set<string>();
+      const foundNewFiles: string[] = [];
 
-      for (const entry of topEntries) {
-        if (!entry.name) continue;
-        const fullPath = `${root}/${entry.name}`;
+      while (pendingDirs.length > 0) {
+        if (!mountedRef.current) { scheduleWatch(); return; }
+        const dir = pendingDirs.shift()!;
+        if (visited.has(dir)) continue;
+        visited.add(dir);
+        if (visited.size > 200) break;
 
-        if (!entry.children) {
+        let dirEntries;
+        try {
+          dirEntries = await fsPlugin.readDir(dir);
+        } catch {
+          continue;
+        }
+
+        for (const entry of dirEntries) {
+          if (!entry.name) continue;
+          const fullPath = `${dir}/${entry.name}`;
+
+          if (entry.children) {
+            pendingDirs.push(fullPath);
+            continue;
+          }
+
           const ext = entry.name.toLowerCase().slice(entry.name.lastIndexOf("."));
-          if (AUDIO_EXTENSIONS.has(ext)) {
-            fsPaths.add(fullPath);
-            if (!dbPaths.has(fullPath)) {
-              newFiles.push(fullPath);
-              foundChanges = true;
-            }
+          if (!AUDIO_EXTENSIONS.has(ext)) continue;
+
+          fsPaths.add(fullPath);
+          if (!dbPaths.has(fullPath)) {
+            foundNewFiles.push(fullPath);
           }
         }
       }
 
-      // Check for deleted files (in DB but not on fs)
+      // Check for deleted files
+      let foundChanges = foundNewFiles.length > 0;
       for (const dbPath of dbPaths) {
         if (!fsPaths.has(dbPath)) {
-          // File was deleted
-          const id = fileIdFromPath(dbPath);
-          await deleteSong(id);
+          await deleteSong(fileIdFromPath(dbPath));
           foundChanges = true;
         }
       }
 
-      if (newFiles.length > 0) {
+      if (foundNewFiles.length > 0) {
         setScanStatus("scanning");
         await updateScanState({ scan_status: "scanning" });
-        await enqueueScan(newFiles.map((p) => ({ type: "file", path: p })));
+        await enqueueScan(foundNewFiles.map((p) => ({ type: "file", path: p })));
         pausedRef.current = false;
         abortRef.current = false;
-        processQueue();
+        runScanner();
+      } else if (foundChanges) {
+        // Refresh stats if files were deleted
+        const count = await getSongCount();
+        const scanned = scannedCounter.current;
+        setScanProgress({ total: count, done: scanned });
       }
     } catch (err) {
       console.warn("[watcher] error:", err);
@@ -368,13 +416,11 @@ export function useLocalScan() {
     scheduleWatch();
   }
 
-  async function yieldToUI() {
-    return new Promise((r) => setTimeout(r, 0));
-  }
-
-  async function loadSongs() {
-    return getAllSongs();
-  }
-
-  return { startScan, pause, resume, abort, rescan, loadSongs };
+  return {
+    startScan,
+    pause,
+    resume,
+    abort,
+    rescan,
+  };
 }

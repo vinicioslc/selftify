@@ -4,7 +4,7 @@ import { usePlayerStore } from "../../stores/player.store";
 import { useLocalLibraryStore } from "../../stores/local-library.store";
 import { useLocalScan } from "../../hooks/use-local-scan";
 import { ServerType } from "../../types/domain-types";
-import { getAllSongs, getScanState, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres, getSongsByGenre, type DbSong } from "../../services/local-database";
+import { getAllSongs, getScanState, updateScanState, getQueueCount, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres, type DbSong } from "../../services/local-database";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Avatar } from "../../components/ui/avatar";
@@ -12,7 +12,7 @@ import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { formatDuration } from "../../lib/utils";
-import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, Trash2, List, Disc, User } from "lucide-react";
+import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc } from "lucide-react";
 import { useState } from "react";
 
 export function LibraryPage() {
@@ -25,17 +25,14 @@ export function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("songs");
   const [genres, setGenres] = useState<string[]>([]);
-  const [selectedGenre, setSelectedGenre] = useState("");
 
   const {
     rootFolder,
-    entries,
     scanStatus,
     scanProgress,
     lastScanned,
     setRootFolder,
     reset: resetStore,
-    scanStatus: storeStatus,
   } = useLocalLibraryStore();
 
   const { startScan, pause, resume, rescan } = useLocalScan();
@@ -66,17 +63,43 @@ export function LibraryPage() {
     }
   }, [setRootFolder]);
 
+  // Load library on mount when in local mode
   useEffect(() => {
     if (isLocalMode) {
       loadLibrary();
+    } else {
+      setLoading(false);
     }
   }, [isLocalMode, loadLibrary]);
 
+  // Reload when scan completes
   useEffect(() => {
     if (scanStatus === "done" && isLocalMode) {
       loadLibrary();
     }
   }, [scanStatus, isLocalMode, loadLibrary]);
+
+  // Auto-resume a pending scan from a previous session
+  useEffect(() => {
+    if (!isLocalMode || loading) return;
+    (async () => {
+      try {
+        const state = await getScanState();
+        if (!state) return;
+        if (state.scan_status === "scanning" || state.scan_status === "paused") {
+          const count = await getQueueCount();
+          if (count > 0) {
+            resume();
+          } else {
+            // Queue drained but status not updated — finish
+            await updateScanState({ scan_status: "done", last_scanned_at: Date.now() });
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [isLocalMode, loading, resume]);
 
   const filteredSongs = useMemo(() => {
     if (!searchQuery) return songs;
@@ -89,20 +112,11 @@ export function LibraryPage() {
     );
   }, [songs, searchQuery]);
 
-  const genreSongs = useMemo(() => {
-    if (!selectedGenre) return [];
-    return songs.filter((s) => s.genre === selectedGenre);
-  }, [songs, selectedGenre]);
-
   function handleStartScan() {
     const folder = folderPath || rootFolder;
     if (!folder) return;
     setRootFolder(folder);
     startScan(folder);
-  }
-
-  function handleRescan() {
-    rescan();
   }
 
   function handlePlayAll() {
@@ -235,7 +249,7 @@ export function LibraryPage() {
         )}
         {scanStatus === "done" && (
           <>
-            <Button variant="outline" size="sm" className="h-8" onClick={handleRescan}>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => rescan()}>
               <RotateCw className="mr-1 h-3 w-3" /> Rescan
             </Button>
             <Badge variant="default" className="gap-1">
@@ -317,7 +331,7 @@ export function LibraryPage() {
 
           <TabsContent value="songs" className="flex-1 p-0">
             <ScrollArea className="h-full">
-              {filteredSongs.length === 0 && (
+              {filteredSongs.length === 0 && songs.length > 0 && (
                 <div className="flex h-full items-center justify-center">
                   <p className="text-sm text-muted-foreground">No results match your filter.</p>
                 </div>
@@ -328,7 +342,6 @@ export function LibraryPage() {
                   className="group flex items-center gap-3 px-4 py-2 transition-colors hover:bg-accent/50"
                 >
                   <Avatar
-                    src={null}
                     alt={song.name}
                     fallback={song.name.charAt(0)}
                     className="h-10 w-10 rounded-md"
