@@ -12,14 +12,14 @@ import { Badge } from "../../components/ui/badge";
 import { Search, Play, Plus, Loader2 } from "lucide-react";
 
 export function SearchPage() {
-  const { currentServer } = useAuthStore();
+  const { currentOrigin } = useAuthStore();
   const { setQueue } = usePlayerStore();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ songs: Song[]; albums: Album[]; albumArtists: AlbumArtist[] } | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleSearch() {
-    if (!query.trim() || !currentServer) return;
+    if (!query.trim() || !currentOrigin) return;
     setLoading(true);
     try {
       const controller = await getController();
@@ -47,27 +47,36 @@ export function SearchPage() {
       <div className="border-b p-4">
         <div className="mx-auto flex max-w-2xl gap-2">
           <Input
-            placeholder={currentServer ? `Search ${currentServer.name}...` : "Add a server first"}
+            placeholder={currentOrigin ? `Search ${currentOrigin.name}...` : "Add an origin first"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           />
-          <Button onClick={handleSearch} disabled={loading}>
+          <Button onClick={handleSearch} disabled={loading || !query.trim()}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
           </Button>
         </div>
       </div>
 
       <ScrollArea className="flex-1">
-        {!results ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-muted-foreground">
-              {currentServer ? "Search for songs, albums, and artists" : "Connect to a server in Settings"}
+        {!currentOrigin && (
+          <div className="flex h-full items-center justify-center p-8">
+            <p className="text-center text-sm text-muted-foreground">
+              Connect to an origin in Settings
             </p>
           </div>
-        ) : (
+        )}
+
+        {currentOrigin && !results && !loading && (
+          <div className="flex h-full items-center justify-center p-8">
+            <p className="text-center text-sm text-muted-foreground">
+              Search for songs, albums, and artists
+            </p>
+          </div>
+        )}
+
+        {results && (
           <div className="mx-auto max-w-4xl space-y-6 p-6">
-            {/* Songs */}
             {results.songs.length > 0 && (
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -104,7 +113,6 @@ export function SearchPage() {
               </section>
             )}
 
-            {/* Albums */}
             {results.albums.length > 0 && (
               <section className="space-y-3">
                 <h2 className="text-lg font-semibold">Albums</h2>
@@ -121,7 +129,7 @@ export function SearchPage() {
                         <div className="p-3">
                           <CardTitle className="truncate text-sm">{album.name}</CardTitle>
                           <CardDescription className="truncate text-xs">
-                            {album.albumArtistName} {album.releaseYear ? `• ${album.releaseYear}` : ""}
+                            {album.albumArtistName} {album.releaseYear ? `\u2022 ${album.releaseYear}` : ""}
                           </CardDescription>
                         </div>
                       </CardContent>
@@ -131,7 +139,6 @@ export function SearchPage() {
               </section>
             )}
 
-            {/* Artists */}
             {results.albumArtists.length > 0 && (
               <section className="space-y-3">
                 <h2 className="text-lg font-semibold">Artists</h2>

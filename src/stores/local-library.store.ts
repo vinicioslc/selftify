@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { ServerType } from "../types/domain-types";
+import { OriginType } from "../types/domain-types";
 
 export type LocalScanStatus = "idle" | "scanning" | "paused" | "done" | "error";
 

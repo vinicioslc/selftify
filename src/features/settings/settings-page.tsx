@@ -1,6 +1,6 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore, VisualizerType } from "../../stores/settings.store";
-import { ServerType } from "../../types/domain-types";
+import { OriginType } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
@@ -13,7 +13,7 @@ import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 export function SettingsPage() {
-  const { serverList, addServer, removeServer, setCurrentServer } = useAuthStore();
+  const { origins, addOrigin, removeOrigin, setCurrentOrigin } = useAuthStore();
   const {
     theme, setTheme,
     visualizerType, setVisualizerType,
@@ -25,19 +25,19 @@ export function SettingsPage() {
 
   const [newServer, setNewServer] = useState({
     name: "",
-    type: ServerType.NAVIDROME,
+    type: OriginType.NAVIDROME,
     url: "",
   });
 
   function handleAddServer() {
     if (!newServer.name) return;
-    addServer({
+    addOrigin({
       id: crypto.randomUUID(),
       name: newServer.name,
       type: newServer.type,
       url: newServer.url || undefined,
     });
-    setNewServer({ name: "", type: ServerType.NAVIDROME, url: "" });
+    setNewServer({ name: "", type: OriginType.NAVIDROME, url: "" });
   }
 
   return (
@@ -61,20 +61,20 @@ export function SettingsPage() {
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">Connected Servers</CardTitle>
-                  <CardDescription>Add and manage your music servers</CardDescription>
+                  <CardDescription>Add and manage your music origins</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {serverList.map((server) => (
-                    <div key={server.id} className="flex items-center justify-between rounded-lg border p-3">
+                  {origins.map((o) => (
+                    <div key={o.id} className="flex items-center justify-between rounded-lg border p-3">
                       <div>
-                        <p className="font-medium">{server.name}</p>
-                        <p className="text-xs text-muted-foreground">{server.type} {server.url ? `• ${server.url}` : ""}</p>
+                        <p className="font-medium">{o.name}</p>
+                        <p className="text-xs text-muted-foreground">{o.type} {o.url ? `• ${o.url}` : ""}</p>
                       </div>
                       <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setCurrentServer(server)}>
+                        <Button variant="outline" size="sm" onClick={() => setCurrentOrigin(o)}>
                           Select
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => removeServer(server.id)}>
+                        <Button variant="ghost" size="icon" onClick={() => removeOrigin(o.id)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -94,7 +94,7 @@ export function SettingsPage() {
                     onChange={(e) => setNewServer({ ...newServer, name: e.target.value })}
                   />
                   <div className="flex gap-2">
-                    {[ServerType.NAVIDROME, ServerType.JELLYFIN, ServerType.YOUTUBE_MUSIC].map((type) => (
+                    {[OriginType.NAVIDROME, OriginType.JELLYFIN, OriginType.YOUTUBE_MUSIC].map((type) => (
                       <Button
                         key={type}
                         variant={newServer.type === type ? "default" : "outline"}

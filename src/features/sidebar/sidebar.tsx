@@ -1,6 +1,6 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore } from "../../stores/settings.store";
-import { ServerType } from "../../types/domain-types";
+import { OriginType } from "../../types/domain-types";
 import type { AppView } from "../../types/types";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
@@ -33,19 +33,24 @@ const navItems: { id: AppView; label: string; icon: any }[] = [
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
-function serverIcon(type: ServerType | string): any {
+function originIcon(type: OriginType | string): any {
   switch (type) {
-    case ServerType.NAVIDROME: return Music;
-    case ServerType.JELLYFIN: return Tv2;
-    case ServerType.YOUTUBE_MUSIC: return Youtube;
-    case "local":
-    case ServerType.LOCAL: return FolderOpen;
-    default: return Music;
+    case OriginType.JELLYFIN:
+      return Tv2;
+    case OriginType.NAVIDROME:
+    case OriginType.SUBISONIC:
+      return Music;
+    case OriginType.YOUTUBE_MUSIC:
+      return Youtube;
+    case OriginType.LOCAL:
+      return FolderOpen;
+    default:
+      return Music;
   }
 }
 
 export function Sidebar({ currentView, onNavigate }: SidebarProps) {
-  const { serverList, currentServer, setCurrentServer } = useAuthStore();
+  const { origins, currentOrigin, setCurrentOrigin } = useAuthStore();
   const { sidebarCollapsed, toggleSidebar } = useSettingsStore();
 
   if (sidebarCollapsed) {
@@ -65,15 +70,15 @@ export function Sidebar({ currentView, onNavigate }: SidebarProps) {
           </Button>
         ))}
         <Separator className="my-2" />
-        {serverList.map((server) => {
-          const Icon = serverIcon(server.type);
+        {origins.map((o) => {
+          const Icon = originIcon(o.type);
           return (
             <Button
-              key={server.id}
+              key={o.id}
               variant="ghost"
               size="icon"
-              className={currentServer?.id === server.id ? "text-primary" : ""}
-              onClick={() => setCurrentServer(server)}
+              className={currentOrigin?.id === o.id ? "text-primary" : ""}
+              onClick={() => setCurrentOrigin(o)}
             >
               <Icon className="h-4 w-4" />
             </Button>
@@ -112,24 +117,24 @@ export function Sidebar({ currentView, onNavigate }: SidebarProps) {
         <Separator className="my-3" />
 
         <div className="space-y-1">
-          <p className="px-3 text-xs font-medium text-sidebar-foreground/60">SERVERS</p>
-          {serverList.map((server) => {
-            const Icon = serverIcon(server.type);
+          <p className="px-3 text-xs font-medium text-sidebar-foreground/60">ORIGINS</p>
+          {origins.map((o) => {
+            const Icon = originIcon(o.type);
             return (
               <Button
-                key={server.id}
+                key={o.id}
                 variant="ghost"
                 className={`w-full justify-start gap-3 px-3 text-sm font-normal ${
-                  currentServer?.id === server.id
+                  currentOrigin?.id === o.id
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground"
                 }`}
-                onClick={() => setCurrentServer(server)}
+                onClick={() => setCurrentOrigin(o)}
               >
                 <Icon className="h-4 w-4" />
-                <span className="flex-1 truncate text-left">{server.name}</span>
+                <span className="flex-1 truncate text-left">{o.name}</span>
                 <Badge variant="outline" className="text-[10px]">
-                  {server.type}
+                  {o.type}
                 </Badge>
               </Button>
             );

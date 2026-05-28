@@ -1,4 +1,4 @@
-export enum ServerType {
+export enum OriginType {
   JELLYFIN = "jellyfin",
   NAVIDROME = "navidrome",
   SUBISONIC = "subsonic",
@@ -37,8 +37,8 @@ export enum LibraryItem {
 
 export type Song = {
   id: string;
-  serverId: string;
-  serverType: ServerType;
+  originId: string;
+  originType: OriginType;
   name: string;
   artistName: string;
   artistId?: string;
@@ -58,8 +58,8 @@ export type Song = {
 
 export type Album = {
   id: string;
-  serverId: string;
-  serverType: ServerType;
+  originId: string;
+  originType: OriginType;
   name: string;
   albumArtistName: string;
   songCount?: number;
@@ -71,8 +71,8 @@ export type Album = {
 
 export type AlbumArtist = {
   id: string;
-  serverId: string;
-  serverType: ServerType;
+  originId: string;
+  originType: OriginType;
   name: string;
   albumCount?: number;
   songCount?: number;
@@ -83,8 +83,8 @@ export type AlbumArtist = {
 
 export type Playlist = {
   id: string;
-  serverId: string;
-  serverType: ServerType;
+  originId: string;
+  originType: OriginType;
   name: string;
   owner?: string;
   songCount?: number;
@@ -98,10 +98,10 @@ export type QueueSong = Song & {
   queueIndex: number;
 };
 
-export type ServerListItem = {
+export type Origin = {
   id: string;
   name: string;
-  type: ServerType;
+  type: OriginType;
   url?: string;
   credential?: string;
   musicBrainzToken?: string;

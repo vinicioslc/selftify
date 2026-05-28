@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuthStore } from "../../stores/auth.store";
-import { ServerType } from "../../types/domain-types";
+import { OriginType } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -20,7 +20,7 @@ type AuthPageProps = {
 };
 
 export function AuthPage({ onConnected }: AuthPageProps) {
-  const { addServer, setCurrentServer } = useAuthStore();
+  const { addOrigin, setCurrentOrigin } = useAuthStore();
   const [form, setForm] = useState<AuthForm>({
     url: "",
     username: "",
@@ -35,16 +35,16 @@ export function AuthPage({ onConnected }: AuthPageProps) {
     setLoading(true);
     setError(null);
     try {
-      const serverId = crypto.randomUUID();
-      const server = {
-        id: serverId,
+      const originId = crypto.randomUUID();
+      const origin = {
+        id: originId,
         name: `Navidrome (${form.url})`,
-        type: ServerType.NAVIDROME,
+        type: OriginType.NAVIDROME,
         url: form.url,
         credential: form.password,
       };
-      addServer(server);
-      setCurrentServer(server);
+      addOrigin(origin);
+      setCurrentOrigin(origin);
       onConnected?.();
     } catch (err: any) {
       setError(err.message);
@@ -71,12 +71,12 @@ export function AuthPage({ onConnected }: AuthPageProps) {
       const jfServer = {
         id: jfServerId,
         name: `Jellyfin (${form.url})`,
-        type: ServerType.JELLYFIN,
+        type: OriginType.JELLYFIN,
         url: form.url,
         credential: data.AccessToken,
       };
-      addServer(jfServer);
-      setCurrentServer(jfServer);
+      addOrigin(jfServer);
+      setCurrentOrigin(jfServer);
       onConnected?.();
     } catch (err: any) {
       setError(err.message);
@@ -95,11 +95,11 @@ export function AuthPage({ onConnected }: AuthPageProps) {
       const ytServer = {
         id: ytServerId,
         name: result.username,
-        type: ServerType.YOUTUBE_MUSIC,
+        type: OriginType.YOUTUBE_MUSIC,
         credential: result.cookie,
       };
-      addServer(ytServer);
-      setCurrentServer(ytServer);
+      addOrigin(ytServer);
+      setCurrentOrigin(ytServer);
       onConnected?.();
     } catch (err: any) {
       setError(err.message);
@@ -113,11 +113,16 @@ export function AuthPage({ onConnected }: AuthPageProps) {
     const localServer = {
       id: localId,
       name: form.folder || "Local Files",
-      type: ServerType.LOCAL,
+      type: OriginType.LOCAL,
       url: form.folder || undefined,
     };
-    addServer(localServer);
-    setCurrentServer(localServer);
+    addOrigin(localServer);
+    setCurrentOrigin(localServer);
+    if (form.folder) {
+      import("../../api/indexer/indexer").then(({ getIndexer }) =>
+        getIndexer(localServer).then((idx) => idx.start(localServer))
+      );
+    }
     onConnected?.();
   }
 

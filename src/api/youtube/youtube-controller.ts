@@ -1,6 +1,6 @@
 import type { ApiContext, SearchResults, ServerController } from "../controller";
 import { getYouTubeClient, authenticateWithCookies } from "./youtube-api";
-import { Song, Album, AlbumArtist, ServerType } from "../../types/domain-types";
+import { Song, Album, AlbumArtist, OriginType } from "../../types/domain-types";
 
 export function createYouTubeController(ctx: ApiContext): ServerController {
   function normalizeVideo(raw: any): Song | null {
@@ -12,8 +12,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
         : null;
     return {
       id: raw.id,
-      serverId: ctx.serverId,
-      serverType: ServerType.YOUTUBE_MUSIC,
+      originId: ctx.originId,
+      originType: OriginType.YOUTUBE_MUSIC,
       name: raw.title?.toString() || "",
       artistName: raw.artists?.[0]?.name || raw.author?.name || "",
       artistId: raw.artists?.[0]?.channelId || raw.author?.channelId,
@@ -46,8 +46,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
       (result?.albums || []).forEach((a: any) => {
         albums.push({
           id: a.id,
-          serverId: ctx.serverId,
-          serverType: ServerType.YOUTUBE_MUSIC,
+          originId: ctx.originId,
+          originType: OriginType.YOUTUBE_MUSIC,
           name: a.name || a.title?.toString() || "",
           albumArtistName: a.artists?.[0]?.name || a.author?.name || "",
           imageUrl: a.thumbnails?.[0]?.url || null,
@@ -57,8 +57,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
       (result?.artists || []).forEach((a: any) => {
         artists.push({
           id: a.channelId || a.id,
-          serverId: ctx.serverId,
-          serverType: ServerType.YOUTUBE_MUSIC,
+          originId: ctx.originId,
+          originType: OriginType.YOUTUBE_MUSIC,
           name: a.name || a.title?.toString() || "",
           imageUrl: a.thumbnails?.[0]?.url || null,
         });
@@ -97,8 +97,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
         const thumbs = header?.thumbnails || [];
         return {
           id,
-          serverId: ctx.serverId,
-          serverType: ServerType.YOUTUBE_MUSIC,
+          originId: ctx.originId,
+          originType: OriginType.YOUTUBE_MUSIC,
           name: title,
           albumArtistName: artistName,
           songCount: data.contents?.length || 0,
@@ -123,8 +123,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
               if (id && item.title) {
                 albums.push({
                   id,
-                  serverId: ctx.serverId,
-                  serverType: ServerType.YOUTUBE_MUSIC,
+                  originId: ctx.originId,
+                  originType: OriginType.YOUTUBE_MUSIC,
                   name: item.title?.toString() || "",
                   albumArtistName: item.subtitle?.toString() || "",
                   imageUrl: item.thumbnail?.[0]?.url || null,
@@ -147,8 +147,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
         const thumbs = header?.thumbnail?.thumbnail || header?.thumbnails || [];
         return {
           id,
-          serverId: ctx.serverId,
-          serverType: ServerType.YOUTUBE_MUSIC,
+          originId: ctx.originId,
+          originType: OriginType.YOUTUBE_MUSIC,
           name: title,
           imageUrl: thumbs[0]?.url || null,
           biography: header?.description?.toString?.() || "",
@@ -166,8 +166,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
         const library = await (yt as any).music.getLibraryPlaylists();
         return (library?.items || []).map((p: any) => ({
           id: p.id,
-          serverId: ctx.serverId,
-          serverType: ServerType.YOUTUBE_MUSIC,
+          originId: ctx.originId,
+          originType: OriginType.YOUTUBE_MUSIC,
           name: p.title?.toString() || "",
           owner: p.author?.name,
           songCount: p.itemCount,
@@ -183,8 +183,8 @@ export function createYouTubeController(ctx: ApiContext): ServerController {
         const data = await (yt as any).music.getPlaylist(id);
         return {
           id,
-          serverId: ctx.serverId,
-          serverType: ServerType.YOUTUBE_MUSIC,
+          originId: ctx.originId,
+          originType: OriginType.YOUTUBE_MUSIC,
           name: data.title?.toString() || "",
           owner: data.author?.name,
           songCount: data.content?.length || 0,

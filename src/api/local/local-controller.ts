@@ -1,13 +1,13 @@
 import type { ApiContext, SearchResults, ServerController } from "../controller";
-import { Song, ServerType } from "../../types/domain-types";
+import { Song, OriginType } from "../../types/domain-types";
 import { getAllSongs, searchSongs, getSongById } from "../../services/local-database";
 
 export function createLocalController(ctx: ApiContext): ServerController {
   function toSong(row: any): Song {
     return {
       id: row.id,
-      serverId: ctx.serverId,
-      serverType: ServerType.LOCAL,
+      originId: ctx.originId,
+      originType: OriginType.LOCAL,
       name: row.name,
       artistName: row.artist_name || "Unknown Artist",
       artistId: undefined,

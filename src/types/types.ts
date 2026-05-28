@@ -1,11 +1,11 @@
-import { ServerType } from "./domain-types";
+import { OriginType } from "./domain-types";
 
 export type ListDisplayType = "grid" | "list" | "table";
 
 export type ServerConfig = {
   id: string;
   name: string;
-  type: ServerType;
+  type: OriginType;
   url?: string;
   credential?: string;
   settings?: Record<string, unknown>;
@@ -16,7 +16,7 @@ export type HomePageCard = {
   title: string;
   description: string;
   icon: string;
-  type: ServerType | "local";
+  type: OriginType | "local";
   route: string;
   enabled: boolean;
 };

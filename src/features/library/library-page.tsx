@@ -3,7 +3,7 @@ import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { useLocalLibraryStore } from "../../stores/local-library.store";
 import { useLocalScan } from "../../hooks/use-local-scan";
-import { ServerType } from "../../types/domain-types";
+import { OriginType } from "../../types/domain-types";
 import { getAllSongs, getScanState, updateScanState, getQueueCount, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres, type DbSong } from "../../services/local-database";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -16,7 +16,7 @@ import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, D
 import { useState } from "react";
 
 export function LibraryPage() {
-  const { currentServer } = useAuthStore();
+  const { currentOrigin } = useAuthStore();
   const { setQueue } = usePlayerStore();
   const [folderPath, setFolderPath] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -37,7 +37,7 @@ export function LibraryPage() {
 
   const { startScan, pause, resume, rescan } = useLocalScan();
 
-  const isLocalMode = currentServer?.type === ServerType.LOCAL;
+  const isLocalMode = currentOrigin?.type === OriginType.LOCAL;
 
   const loadLibrary = useCallback(async () => {
     try {
@@ -123,8 +123,8 @@ export function LibraryPage() {
     if (songs.length === 0) return;
     const list = songs.map((s) => ({
       id: s.id,
-      serverId: currentServer?.id || "local",
-      serverType: ServerType.LOCAL,
+      originId: currentOrigin?.id || "local",
+      originType: OriginType.LOCAL,
       name: s.name,
       artistName: s.artist_name,
       albumName: s.album_name || undefined,
@@ -138,8 +138,8 @@ export function LibraryPage() {
   function handlePlayEntry(song: DbSong) {
     const item = {
       id: song.id,
-      serverId: currentServer?.id || "local",
-      serverType: ServerType.LOCAL,
+      originId: currentOrigin?.id || "local",
+      originType: OriginType.LOCAL,
       name: song.name,
       artistName: song.artist_name,
       albumName: song.album_name || undefined,
@@ -155,8 +155,8 @@ export function LibraryPage() {
       .filter((s) => s.genre === genre)
       .map((s) => ({
         id: s.id,
-        serverId: currentServer?.id || "local",
-        serverType: ServerType.LOCAL,
+        originId: currentOrigin?.id || "local",
+        originType: OriginType.LOCAL,
         name: s.name,
         artistName: s.artist_name,
         albumName: s.album_name || undefined,
@@ -191,7 +191,7 @@ export function LibraryPage() {
         <div className="border-b p-4">
           <h1 className="text-2xl font-bold">Music Library</h1>
           <p className="text-sm text-muted-foreground">
-            Browsing: {currentServer?.name || "N/A"} ({currentServer?.type || "N/A"})
+            Browsing: {currentOrigin?.name || "N/A"} ({currentOrigin?.type || "N/A"})
           </p>
         </div>
         <div className="flex flex-1 items-center justify-center">
@@ -201,7 +201,7 @@ export function LibraryPage() {
               Library browsing is available for local files.
             </p>
             <p className="text-sm text-muted-foreground/70">
-              Switch to a Local Files server to scan and browse your music.
+              Switch to a Local Files origin to scan and browse your music.
             </p>
           </div>
         </div>

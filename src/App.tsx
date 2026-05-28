@@ -16,11 +16,11 @@ import type { AppView } from "./types/types";
 import "./styles/layout.css";
 
 export function App() {
-  const { serverList, currentServer } = useAuthStore();
+  const { origins, currentOrigin } = useAuthStore();
   const { sidebarCollapsed, visualizerEnabled } = useSettingsStore();
   const [currentView, setCurrentView] = useState<AppView>("home");
 
-  const hasServers = serverList.length > 0;
+  const hasServers = origins.length > 0;
 
   if (!hasServers) {
     return (

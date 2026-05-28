@@ -1,6 +1,6 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore } from "../../stores/settings.store";
-import { ServerType } from "../../types/domain-types";
+import { OriginType } from "../../types/domain-types";
 import type { AppView } from "../../types/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
@@ -17,7 +17,7 @@ const platformCards = [
     title: "Navidrome",
     description: "Connect to your Navidrome server via Subsonic API",
     icon: "🎵",
-    type: ServerType.NAVIDROME,
+    type: OriginType.NAVIDROME,
     route: "/setup/navidrome",
     color: "from-emerald-500/20 to-emerald-700/20",
     borderColor: "border-emerald-500/30",
@@ -27,7 +27,7 @@ const platformCards = [
     title: "Jellyfin",
     description: "Stream from your Jellyfin media server",
     icon: "🎬",
-    type: ServerType.JELLYFIN,
+    type: OriginType.JELLYFIN,
     route: "/setup/jellyfin",
     color: "from-blue-500/20 to-blue-700/20",
     borderColor: "border-blue-500/30",
@@ -37,7 +37,7 @@ const platformCards = [
     title: "YouTube Music",
     description: "Play music via YouTube Music API (cookie auth)",
     icon: "▶️",
-    type: ServerType.YOUTUBE_MUSIC,
+    type: OriginType.YOUTUBE_MUSIC,
     route: "/setup/youtube",
     color: "from-red-500/20 to-red-700/20",
     borderColor: "border-red-500/30",
@@ -62,10 +62,10 @@ const quickActions = [
 ];
 
 export function HomePage({ onNavigate }: HomePageProps) {
-  const { serverList, currentServer, setCurrentServer } = useAuthStore();
+  const { origins, currentOrigin, setCurrentOrigin } = useAuthStore();
   const { visualizerEnabled, setVisualizerEnabled, theme, setTheme } = useSettingsStore();
 
-  const activeServers = serverList.filter((s) => s.type !== ServerType.LOCAL);
+  const activeOrigins = origins.filter((o) => o.type !== OriginType.LOCAL);
 
   return (
     <div className="flex h-full flex-col">
@@ -79,25 +79,25 @@ export function HomePage({ onNavigate }: HomePageProps) {
             </p>
           </div>
 
-          {/* Connected Servers */}
-          {activeServers.length > 0 && (
+          {/* Connected Origins */}
+          {activeOrigins.length > 0 && (
             <section className="space-y-3">
-              <h2 className="text-xl font-semibold">Connected Servers</h2>
+              <h2 className="text-xl font-semibold">Connected Origins</h2>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {activeServers.map((server) => (
+                {activeOrigins.map((origin) => (
                   <Card
-                    key={server.id}
-                    className={`cursor-pointer transition-all hover:shadow-md ${currentServer?.id === server.id ? "ring-2 ring-primary" : ""}`}
-                    onClick={() => setCurrentServer(server)}
+                    key={origin.id}
+                    className={`cursor-pointer transition-all hover:shadow-md ${currentOrigin?.id === origin.id ? "ring-2 ring-primary" : ""}`}
+                    onClick={() => setCurrentOrigin(origin)}
                   >
                     <CardHeader className="pb-3">
                       <div className="flex items-center justify-between">
-                        <CardTitle className="text-base">{server.name}</CardTitle>
-                        <Badge variant={currentServer?.id === server.id ? "default" : "secondary"}>
-                          {server.type}
+                        <CardTitle className="text-base">{origin.name}</CardTitle>
+                        <Badge variant={currentOrigin?.id === origin.id ? "default" : "secondary"}>
+                          {origin.type}
                         </Badge>
                       </div>
-                      <CardDescription>{server.url}</CardDescription>
+                      <CardDescription>{origin.url}</CardDescription>
                     </CardHeader>
                   </Card>
                 ))}
@@ -110,7 +110,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
             <h2 className="text-xl font-semibold">Add Music Source</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               {platformCards.map((card) => {
-                const isConnected = serverList.some((s) => s.type === card.type || (card.type === "local" as any));
+                const isConnected = origins.some((s) => s.type === card.type || (card.type === "local" as any));
                 return (
                   <Card
                     key={card.id}

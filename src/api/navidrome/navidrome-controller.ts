@@ -1,6 +1,6 @@
 import type { ApiContext, SearchResults, ServerController } from "../controller";
 import { createNavidromeApi } from "./navidrome-api";
-import { Song, Album, AlbumArtist, ServerType } from "../../types/domain-types";
+import { Song, Album, AlbumArtist, OriginType } from "../../types/domain-types";
 
 export function createNavidromeController(ctx: ApiContext): ServerController {
   const api = createNavidromeApi(ctx);
@@ -8,8 +8,8 @@ export function createNavidromeController(ctx: ApiContext): ServerController {
   function normalizeSong(raw: any): Song {
     return {
       id: raw.id,
-      serverId: ctx.serverId,
-      serverType: ServerType.NAVIDROME,
+      originId: ctx.originId,
+      originType: OriginType.NAVIDROME,
       name: raw.title || "",
       artistName: raw.artist || "",
       artistId: raw.artistId,
@@ -26,8 +26,8 @@ export function createNavidromeController(ctx: ApiContext): ServerController {
   function normalizeAlbum(raw: any): Album {
     return {
       id: raw.id,
-      serverId: ctx.serverId,
-      serverType: ServerType.NAVIDROME,
+      originId: ctx.originId,
+      originType: OriginType.NAVIDROME,
       name: raw.name || raw.title || "",
       albumArtistName: raw.artist || "",
       songCount: raw.songCount,
@@ -41,8 +41,8 @@ export function createNavidromeController(ctx: ApiContext): ServerController {
   function normalizeArtist(raw: any): AlbumArtist {
     return {
       id: raw.id,
-      serverId: ctx.serverId,
-      serverType: ServerType.NAVIDROME,
+      originId: ctx.originId,
+      originType: OriginType.NAVIDROME,
       name: raw.name || "",
       albumCount: raw.albumCount,
       imageUrl: raw.coverArt ? `${ctx.baseUrl?.replace(/\/+$/, "")}/rest/getCoverArt.view?v=1.16.1&c=ytmusicplayer&f=json&id=${raw.coverArt}&u=user&t=${ctx.credential || ""}&s=${ctx.credential || ""}` : null,
@@ -106,8 +106,8 @@ export function createNavidromeController(ctx: ApiContext): ServerController {
       const res = await api.request<any>("getPlaylists", {});
       return (res?.playlists?.playlist || []).map((p: any) => ({
         id: p.id,
-        serverId: ctx.serverId,
-        serverType: ServerType.NAVIDROME,
+        originId: ctx.originId,
+        originType: OriginType.NAVIDROME,
         name: p.name || "",
         owner: p.owner,
         songCount: p.songCount,
@@ -122,8 +122,8 @@ export function createNavidromeController(ctx: ApiContext): ServerController {
       if (!raw) return null;
       return {
         id: raw.id,
-        serverId: ctx.serverId,
-        serverType: ServerType.NAVIDROME,
+        originId: ctx.originId,
+        originType: OriginType.NAVIDROME,
         name: raw.name || "",
         owner: raw.owner,
         songCount: raw.songCount,

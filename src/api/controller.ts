@@ -1,9 +1,9 @@
-import { ServerType, Song, Album, AlbumArtist, Playlist } from "../types/domain-types";
+import { OriginType, Song, Album, AlbumArtist, Playlist } from "../types/domain-types";
 import { useAuthStore } from "../stores/auth.store";
 
 export type ApiContext = {
-  serverId: string;
-  serverType: ServerType;
+  originId: string;
+  originType: OriginType;
   baseUrl?: string;
   credential?: string;
 };
@@ -30,29 +30,29 @@ export interface ServerController {
 }
 
 function getContext(): ApiContext {
-  const { currentServer } = useAuthStore.getState();
-  if (!currentServer) throw new Error("No server selected");
+  const { currentOrigin } = useAuthStore.getState();
+  if (!currentOrigin) throw new Error("No origin selected");
   return {
-    serverId: currentServer.id,
-    serverType: currentServer.type,
-    baseUrl: currentServer.url,
-    credential: currentServer.credential,
+    originId: currentOrigin.id,
+    originType: currentOrigin.type,
+    baseUrl: currentOrigin.url,
+    credential: currentOrigin.credential,
   };
 }
 
 export async function getController(): Promise<ServerController> {
   const ctx = getContext();
-  switch (ctx.serverType) {
-    case ServerType.JELLYFIN:
+  switch (ctx.originType) {
+    case OriginType.JELLYFIN:
       return (await import("./jellyfin/jellyfin-controller")).createJellyfinController(ctx);
-    case ServerType.NAVIDROME:
-    case ServerType.SUBISONIC:
+    case OriginType.NAVIDROME:
+    case OriginType.SUBISONIC:
       return (await import("./navidrome/navidrome-controller")).createNavidromeController(ctx);
-    case ServerType.YOUTUBE_MUSIC:
+    case OriginType.YOUTUBE_MUSIC:
       return (await import("./youtube/youtube-controller")).createYouTubeController(ctx);
-    case ServerType.LOCAL:
+    case OriginType.LOCAL:
       return (await import("./local/local-controller")).createLocalController(ctx);
     default:
-      throw new Error(`Unknown server type: ${ctx.serverType}`);
+      throw new Error(`Unknown origin type: ${ctx.originType}`);
   }
 }

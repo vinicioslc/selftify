@@ -1,6 +1,6 @@
 import type { ApiContext, SearchResults, ServerController } from "../controller";
 import { createJellyfinApi, type JellyfinUser } from "./jellyfin-api";
-import { Song, Album, AlbumArtist, ServerType } from "../../types/domain-types";
+import { Song, Album, AlbumArtist, OriginType } from "../../types/domain-types";
 
 export function createJellyfinController(ctx: ApiContext): ServerController {
   const api = createJellyfinApi(ctx);
@@ -14,8 +14,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
   function normalizeSong(raw: any): Song {
     return {
       id: raw.Id,
-      serverId: ctx.serverId,
-      serverType: ServerType.JELLYFIN,
+      originId: ctx.originId,
+      originType: OriginType.JELLYFIN,
       name: raw.Name || "",
       artistName: raw.Artists?.[0]?.Name || raw.Artist || "",
       artistId: raw.Artists?.[0]?.Id,
@@ -35,8 +35,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
   function normalizeAlbum(raw: any): Album {
     return {
       id: raw.Id,
-      serverId: ctx.serverId,
-      serverType: ServerType.JELLYFIN,
+      originId: ctx.originId,
+      originType: OriginType.JELLYFIN,
       name: raw.Name || "",
       albumArtistName: raw.AlbumArtist || raw.AlbumArtists?.[0]?.Name || "",
       songCount: raw.SongCount || raw.ChildCount,
@@ -50,8 +50,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
   function normalizeArtist(raw: any): AlbumArtist {
     return {
       id: raw.Id,
-      serverId: ctx.serverId,
-      serverType: ServerType.JELLYFIN,
+      originId: ctx.originId,
+      originType: OriginType.JELLYFIN,
       name: raw.Name || "",
       albumCount: raw.AlbumCount || raw.ChildCount,
       imageUrl: imageUrl(raw.Id, raw.ImageTags?.Primary || raw.PrimaryImageTag),
@@ -80,8 +80,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
         if (h.Type === "Audio" || h.MediaType === "Audio") {
           songs.push({
             id: h.ItemId || h.Id,
-            serverId: ctx.serverId,
-            serverType: ServerType.JELLYFIN,
+            originId: ctx.originId,
+            originType: OriginType.JELLYFIN,
             name: h.Name || "",
             artistName: h.Artist || h.Artists?.[0]?.Name || "",
             albumName: h.Album,
@@ -92,8 +92,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
         } else if (h.Type === "MusicAlbum" || h.Type === "Album") {
           albums.push({
             id: h.ItemId || h.Id,
-            serverId: ctx.serverId,
-            serverType: ServerType.JELLYFIN,
+            originId: ctx.originId,
+            originType: OriginType.JELLYFIN,
             name: h.Name || "",
             albumArtistName: h.Artist || h.AlbumArtist || "",
             songCount: h.SongCount,
@@ -103,8 +103,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
         } else if (h.Type === "MusicArtist" || h.Type === "Artist") {
           artists.push({
             id: h.ItemId || h.Id,
-            serverId: ctx.serverId,
-            serverType: ServerType.JELLYFIN,
+            originId: ctx.originId,
+            originType: OriginType.JELLYFIN,
             name: h.Name || "",
             imageUrl: imageUrl(h.ItemId || h.Id, h.PrimaryImageTag),
           });
@@ -144,8 +144,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
       const data = await api.request<any>(`/Users/me/Items?IncludeItemTypes=Playlist&Recursive=true&SortBy=SortName&SortOrder=Ascending`);
       return (data.Items || []).map((p: any) => ({
         id: p.Id,
-        serverId: ctx.serverId,
-        serverType: ServerType.JELLYFIN,
+        originId: ctx.originId,
+        originType: OriginType.JELLYFIN,
         name: p.Name || "",
         owner: p.Owner || p.CreatedById,
         songCount: p.ChildCount || p.SongCount,
@@ -158,8 +158,8 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
       if (!raw) return null;
       return {
         id: raw.Id,
-        serverId: ctx.serverId,
-        serverType: ServerType.JELLYFIN,
+        originId: ctx.originId,
+        originType: OriginType.JELLYFIN,
         name: raw.Name || "",
         owner: raw.Owner,
         songCount: raw.ChildCount || raw.SongCount,

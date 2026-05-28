@@ -1,49 +1,49 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { ServerListItem } from "../types/domain-types";
+import { Origin } from "../types/domain-types";
 
 type AuthState = {
-  currentServer: ServerListItem | null;
-  serverList: ServerListItem[];
-  setCurrentServer: (server: ServerListItem | null) => void;
-  addServer: (server: ServerListItem) => void;
-  removeServer: (id: string) => void;
-  updateServer: (id: string, updates: Partial<ServerListItem>) => void;
+  currentOrigin: Origin | null;
+  origins: Origin[];
+  setCurrentOrigin: (origin: Origin | null) => void;
+  addOrigin: (origin: Origin) => void;
+  removeOrigin: (id: string) => void;
+  updateOrigin: (id: string, updates: Partial<Origin>) => void;
   clearAuth: () => void;
 };
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
-      currentServer: null,
-      serverList: [],
-      setCurrentServer: (server) => set({ currentServer: server }),
-      addServer: (server) =>
+      currentOrigin: null,
+      origins: [],
+      setCurrentOrigin: (origin) => set({ currentOrigin: origin }),
+      addOrigin: (origin) =>
         set((state) => ({
-          serverList: [...state.serverList.filter((s) => s.id !== server.id), server],
+          origins: [...state.origins.filter((s) => s.id !== origin.id), origin],
         })),
-      removeServer: (id) =>
+      removeOrigin: (id) =>
         set((state) => ({
-          serverList: state.serverList.filter((s) => s.id !== id),
-          currentServer: state.currentServer?.id === id ? null : state.currentServer,
+          origins: state.origins.filter((s) => s.id !== id),
+          currentOrigin: state.currentOrigin?.id === id ? null : state.currentOrigin,
         })),
-      updateServer: (id, updates) =>
+      updateOrigin: (id, updates) =>
         set((state) => ({
-          serverList: state.serverList.map((s) =>
+          origins: state.origins.map((s) =>
             s.id === id ? { ...s, ...updates } : s
           ),
-          currentServer:
-            state.currentServer?.id === id
-              ? { ...state.currentServer, ...updates }
-              : state.currentServer,
+          currentOrigin:
+            state.currentOrigin?.id === id
+              ? { ...state.currentOrigin, ...updates }
+              : state.currentOrigin,
         })),
-      clearAuth: () => set({ currentServer: null, serverList: [] }),
+      clearAuth: () => set({ currentOrigin: null, origins: [] }),
     }),
     {
       name: "ytmusic-auth",
       partialize: (state) => ({
-        serverList: state.serverList,
-        currentServer: state.currentServer,
+        origins: state.origins,
+        currentOrigin: state.currentOrigin,
       }),
     }
   )
