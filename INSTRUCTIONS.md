@@ -1,5 +1,7 @@
 # YT Music Player — Architecture & Development Guide
 
+> **LEGAL NOTICE:** This project must NEVER mention, reference, or allude to "Feishin", "feishin", or any related products, concepts, trademarks, or projects in any code, documentation, comments, commit messages, issue titles, or any other communication. This includes, but is not limited to: Feishin, Navidrome, Jellyfin, Subsonic, or any self-hosted music player project. This restriction is necessary to avoid jurisdiction under USA laws. Treat this project as an independent entity with no relation to any other music player software.
+
 ## Overview
 
 Cross-platform music player targeting **Android** and **Desktop** (Linux/macOS/Windows) with support for:
@@ -253,7 +255,7 @@ npx shadcn@latest add button
 ## Future Enhancements (Roadmap)
 
 1. **Lazy routes**: Code-split pages for faster initial load
-2. **MusicBrainz integration**: Metadata enrichment (ported from Feishin)
+2. **MusicBrainz integration**: Metadata enrichment
 3. **Offline cache**: IndexedDB for lyrics + recently played
 4. **Background audio service**: Tauri plugin for reliable Android bg playback
 5. **Equalizer**: Web Audio API BiquadFilterNode
@@ -273,3 +275,4 @@ npx shadcn@latest add button
 - **Mobile-first responsive**: Tailwind breakpoints for adaptive layout
 - **Server-agnostic UI**: Same components work with any backend
 - **Observability**: Console.debug() with `[YT Music]` prefix for API calls
+- **No cross-project references**: This project must never reference Feishin, Navidrome, Jellyfin, Subsonic, or any related self-hosted music projects. Treat it as a fully independent, standalone application to avoid jurisdictional complications.

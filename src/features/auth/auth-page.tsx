@@ -15,7 +15,11 @@ type AuthForm = {
   folder: string;
 };
 
-export function AuthPage() {
+type AuthPageProps = {
+  onConnected?: () => void;
+};
+
+export function AuthPage({ onConnected }: AuthPageProps) {
   const { addServer, setCurrentServer } = useAuthStore();
   const [form, setForm] = useState<AuthForm>({
     url: "",
@@ -31,20 +35,17 @@ export function AuthPage() {
     setLoading(true);
     setError(null);
     try {
-      addServer({
-        id: crypto.randomUUID(),
+      const serverId = crypto.randomUUID();
+      const server = {
+        id: serverId,
         name: `Navidrome (${form.url})`,
         type: ServerType.NAVIDROME,
         url: form.url,
         credential: form.password,
-      });
-      setCurrentServer({
-        id: crypto.randomUUID(),
-        name: `Navidrome (${form.url})`,
-        type: ServerType.NAVIDROME,
-        url: form.url,
-        credential: form.password,
-      });
+      };
+      addServer(server);
+      setCurrentServer(server);
+      onConnected?.();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -66,20 +67,17 @@ export function AuthPage() {
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.Message || "Authentication failed");
-      addServer({
-        id: crypto.randomUUID(),
+      const jfServerId = crypto.randomUUID();
+      const jfServer = {
+        id: jfServerId,
         name: `Jellyfin (${form.url})`,
         type: ServerType.JELLYFIN,
         url: form.url,
         credential: data.AccessToken,
-      });
-      setCurrentServer({
-        id: crypto.randomUUID(),
-        name: `Jellyfin (${form.url})`,
-        type: ServerType.JELLYFIN,
-        url: form.url,
-        credential: data.AccessToken,
-      });
+      };
+      addServer(jfServer);
+      setCurrentServer(jfServer);
+      onConnected?.();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -93,18 +91,16 @@ export function AuthPage() {
     try {
       const { authenticateWithCookies } = await import("../../api/youtube/youtube-api");
       const result = await authenticateWithCookies(form.cookies);
-      addServer({
-        id: crypto.randomUUID(),
+      const ytServerId = crypto.randomUUID();
+      const ytServer = {
+        id: ytServerId,
         name: result.username,
         type: ServerType.YOUTUBE_MUSIC,
         credential: result.cookie,
-      });
-      setCurrentServer({
-        id: crypto.randomUUID(),
-        name: result.username,
-        type: ServerType.YOUTUBE_MUSIC,
-        credential: result.cookie,
-      });
+      };
+      addServer(ytServer);
+      setCurrentServer(ytServer);
+      onConnected?.();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -113,18 +109,16 @@ export function AuthPage() {
   }
 
   function handleLocalAuth() {
-    addServer({
-      id: crypto.randomUUID(),
+    const localId = crypto.randomUUID();
+    const localServer = {
+      id: localId,
       name: form.folder || "Local Files",
       type: ServerType.LOCAL,
       url: form.folder || undefined,
-    });
-    setCurrentServer({
-      id: crypto.randomUUID(),
-      name: form.folder || "Local Files",
-      type: ServerType.LOCAL,
-      url: form.folder || undefined,
-    });
+    };
+    addServer(localServer);
+    setCurrentServer(localServer);
+    onConnected?.();
   }
 
   return (

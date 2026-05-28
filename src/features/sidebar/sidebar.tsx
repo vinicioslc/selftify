@@ -1,6 +1,7 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { ServerType } from "../../types/domain-types";
+import type { AppView } from "../../types/types";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
@@ -20,33 +21,30 @@ import {
   FolderOpen,
 } from "lucide-react";
 
-const navItems = [
-  { id: "home", label: "Home", icon: Home, route: "/" },
-  { id: "search", label: "Search", icon: Search, route: "/search" },
-  { id: "library", label: "Library", icon: Library, route: "/library" },
-  { id: "albums", label: "Albums", icon: Disc3, route: "/library/albums" },
-  { id: "artists", label: "Artists", icon: Music, route: "/library/artists" },
-  { id: "playlists", label: "Playlists", icon: ListMusic, route: "/playlists" },
-  { id: "settings", label: "Settings", icon: Settings, route: "/settings" },
+type SidebarProps = {
+  currentView: AppView;
+  onNavigate: (view: AppView) => void;
+};
+
+const navItems: { id: AppView; label: string; icon: any }[] = [
+  { id: "home", label: "Home", icon: Home },
+  { id: "search", label: "Search", icon: Search },
+  { id: "library-albums", label: "Library", icon: Library },
+  { id: "settings", label: "Settings", icon: Settings },
 ];
 
-function serverIcon(type: ServerType | string) {
+function serverIcon(type: ServerType | string): any {
   switch (type) {
-    case ServerType.NAVIDROME:
-      return Music;
-    case ServerType.JELLYFIN:
-      return Tv2;
-    case ServerType.YOUTUBE_MUSIC:
-      return Youtube;
+    case ServerType.NAVIDROME: return Music;
+    case ServerType.JELLYFIN: return Tv2;
+    case ServerType.YOUTUBE_MUSIC: return Youtube;
     case "local":
-    case ServerType.LOCAL:
-      return FolderOpen;
-    default:
-      return Music;
+    case ServerType.LOCAL: return FolderOpen;
+    default: return Music;
   }
 }
 
-export function Sidebar() {
+export function Sidebar({ currentView, onNavigate }: SidebarProps) {
   const { serverList, currentServer, setCurrentServer } = useAuthStore();
   const { sidebarCollapsed, toggleSidebar } = useSettingsStore();
 
@@ -57,7 +55,12 @@ export function Sidebar() {
           <ChevronRight className="h-4 w-4" />
         </Button>
         {navItems.map((item) => (
-          <Button key={item.id} variant="ghost" size="icon" className="text-sidebar-foreground">
+          <Button
+            key={item.id}
+            variant={currentView === item.id ? "default" : "ghost"}
+            size="icon"
+            onClick={() => onNavigate(item.id)}
+          >
             <item.icon className="h-5 w-5" />
           </Button>
         ))}
@@ -82,7 +85,6 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full flex-col border-r bg-sidebar">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <h1 className="text-sm font-bold tracking-tight">YT Music</h1>
         <Button variant="ghost" size="icon" onClick={toggleSidebar}>
@@ -92,14 +94,14 @@ export function Sidebar() {
 
       <Separator />
 
-      {/* Navigation */}
       <ScrollArea className="flex-1 px-2 py-2">
         <nav className="space-y-1">
           {navItems.map((item) => (
             <Button
               key={item.id}
-              variant="ghost"
-              className="w-full justify-start gap-3 px-3 text-sm font-normal text-sidebar-foreground"
+              variant={currentView === item.id ? "secondary" : "ghost"}
+              className="w-full justify-start gap-3 px-3 text-sm font-normal"
+              onClick={() => onNavigate(item.id)}
             >
               <item.icon className="h-4 w-4" />
               {item.label}
@@ -109,7 +111,6 @@ export function Sidebar() {
 
         <Separator className="my-3" />
 
-        {/* Servers */}
         <div className="space-y-1">
           <p className="px-3 text-xs font-medium text-sidebar-foreground/60">SERVERS</p>
           {serverList.map((server) => {

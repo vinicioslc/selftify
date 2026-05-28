@@ -1,10 +1,15 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { ServerType } from "../../types/domain-types";
+import type { AppView } from "../../types/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
+
+type HomePageProps = {
+  onNavigate?: (view: AppView) => void;
+};
 
 const platformCards = [
   {
@@ -56,7 +61,7 @@ const quickActions = [
   { label: "Random", icon: "🎲", route: "/library/songs?sort=random" },
 ];
 
-export function HomePage() {
+export function HomePage({ onNavigate }: HomePageProps) {
   const { serverList, currentServer, setCurrentServer } = useAuthStore();
   const { visualizerEnabled, setVisualizerEnabled, theme, setTheme } = useSettingsStore();
 
@@ -125,7 +130,7 @@ export function HomePage() {
                       {isConnected ? (
                         <Badge variant="secondary">Connected</Badge>
                       ) : (
-                        <Button size="sm" variant="outline" className="bg-background/80">
+                        <Button size="sm" variant="outline" className="bg-background/80" onClick={() => onNavigate?.("settings")}>
                           Configure
                         </Button>
                       )}
@@ -141,7 +146,7 @@ export function HomePage() {
             <h2 className="text-xl font-semibold">Quick Actions</h2>
             <div className="flex flex-wrap gap-3">
               {quickActions.map((action) => (
-                <Button key={action.label} variant="outline" className="gap-2">
+                <Button key={action.label} variant="outline" className="gap-2" onClick={() => onNavigate?.("search")}>
                   <span>{action.icon}</span>
                   {action.label}
                 </Button>

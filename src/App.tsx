@@ -12,23 +12,19 @@ import { SettingsPage } from "./features/settings/settings-page";
 import { AuthPage } from "./features/auth/auth-page";
 import { LibraryPage } from "./features/library/library-page";
 import { useState } from "react";
-
-type View = "home" | "search" | "settings" | "library" | "auth";
+import type { AppView } from "./types/types";
 
 export function App() {
   const { serverList, currentServer } = useAuthStore();
   const { sidebarCollapsed, visualizerEnabled } = useSettingsStore();
-  const [currentView, setCurrentView] = useState<View>("home");
+  const [currentView, setCurrentView] = useState<AppView>("home");
 
   const hasServers = serverList.length > 0;
-  const needsAuth = !currentServer;
-  const isLocal = currentServer?.type === ServerType.LOCAL;
 
-  // Show auth page if no servers are configured
   if (!hasServers) {
     return (
       <WebAudioProvider>
-        <AuthPage />
+        <AuthPage onConnected={() => setCurrentView("home")} />
       </WebAudioProvider>
     );
   }
@@ -36,17 +32,19 @@ export function App() {
   function renderView() {
     switch (currentView) {
       case "home":
-        return <HomePage />;
+        return <HomePage onNavigate={setCurrentView} />;
       case "search":
         return <SearchPage />;
       case "settings":
         return <SettingsPage />;
-      case "library":
+      case "library-albums":
+      case "library-artists":
+      case "library-songs":
+      case "playlists":
+      case "now-playing":
         return <LibraryPage />;
-      case "auth":
-        return <AuthPage />;
       default:
-        return <HomePage />;
+        return <HomePage onNavigate={setCurrentView} />;
     }
   }
 
@@ -54,12 +52,9 @@ export function App() {
     <WebAudioProvider>
       <div className="flex h-full flex-col">
         <div className="flex flex-1 overflow-hidden">
-          {/* Sidebar */}
           <div className={sidebarCollapsed ? "w-16" : "w-64"}>
-            <Sidebar />
+            <Sidebar currentView={currentView} onNavigate={setCurrentView} />
           </div>
-
-          {/* Main content area with visualizer */}
           <div className="relative flex flex-1 flex-col overflow-hidden">
             {visualizerEnabled && (
               <div className="pointer-events-none absolute inset-0 z-0 opacity-20">
@@ -71,8 +66,6 @@ export function App() {
             </div>
           </div>
         </div>
-
-        {/* Player bar */}
         <div
           className="border-t"
           style={{ height: "var(--player-bar-height)", minHeight: "var(--player-bar-height)" }}
@@ -80,8 +73,6 @@ export function App() {
           <PlayerBar />
         </div>
       </div>
-
-      {/* Full screen player overlay */}
       <FullScreenPlayer />
     </WebAudioProvider>
   );

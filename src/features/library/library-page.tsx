@@ -5,7 +5,11 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
 import { ServerType } from "../../types/domain-types";
 
-export function LibraryPage() {
+type LibraryPageProps = {
+  onNavigate?: (view: any) => void;
+};
+
+export function LibraryPage(_props?: LibraryPageProps) {
   const { currentServer } = useAuthStore();
   const { currentTrack, setQueue, queue } = usePlayerStore();
 
