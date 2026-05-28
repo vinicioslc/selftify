@@ -1,45 +1,36 @@
 import type { ApiContext, SearchResults, ServerController } from "../controller";
 import { Song, ServerType } from "../../types/domain-types";
-import { useLocalLibraryStore } from "../../stores/local-library.store";
+import { getAllSongs, searchSongs, getSongById } from "../../services/local-database";
 
 export function createLocalController(ctx: ApiContext): ServerController {
-  async function getEntry(id: string) {
-    return useLocalLibraryStore
-      .getState()
-      .entries.find((e) => e.id === id);
-  }
-
-  function toSong(entry: any): Song {
+  function toSong(row: any): Song {
     return {
-      id: entry.id,
+      id: row.id,
       serverId: ctx.serverId,
       serverType: ServerType.LOCAL,
-      name: entry.name,
-      artistName: entry.artistName || "Unknown Artist",
+      name: row.name,
+      artistName: row.artist_name || "Unknown Artist",
       artistId: undefined,
-      albumName: entry.albumName || undefined,
+      albumName: row.album_name || undefined,
       albumId: undefined,
-      duration: entry.duration || null,
-      imageUrl: entry.imageUrl || null,
-      path: entry.path,
-      genres: [],
+      albumArtistName: row.album_artist || undefined,
+      trackNumber: row.track_number || undefined,
+      discNumber: row.disc_number || undefined,
+      duration: row.duration || null,
+      imageUrl: null,
+      path: row.path,
+      genres: row.genre ? [row.genre] : [],
+      releaseYear: row.year || undefined,
     };
   }
 
   return {
     authenticate: async () => ({ token: "local", username: "Local Files" }),
 
-    search: async (query, limit = 20) => {
-      const { entries } = useLocalLibraryStore.getState();
-      const q = query.toLowerCase();
-      const results = entries.filter(
-        (e) =>
-          e.name.toLowerCase().includes(q) ||
-          e.artistName.toLowerCase().includes(q) ||
-          (e.albumName && e.albumName.toLowerCase().includes(q))
-      );
+    search: async (query, limit = 50) => {
+      const results = await searchSongs(query, limit);
       return {
-        songs: results.slice(0, limit).map(toSong),
+        songs: results.map(toSong),
         albums: [],
         albumArtists: [],
       } as SearchResults;
@@ -51,25 +42,25 @@ export function createLocalController(ctx: ApiContext): ServerController {
     getAlbumArtistDetail: async () => null,
     getAlbumArtistList: async () => [],
 
-    getSongList: async (offset = 0, limit = 20) => {
-      const { entries } = useLocalLibraryStore.getState();
-      return entries.slice(offset, offset + limit).map(toSong);
+    getSongList: async (offset = 0, limit = 100) => {
+      const all = await getAllSongs();
+      return all.slice(offset, offset + limit).map(toSong);
     },
 
     getSongDetail: async (id) => {
-      const entry = await getEntry(id);
-      return entry ? toSong(entry) : null;
+      const row = await getSongById(id);
+      return row ? toSong(row) : null;
     },
 
     getPlaylistList: async () => [],
     getPlaylistDetail: async () => null,
 
     getStreamUrl: async (songId) => {
-      const entry = await getEntry(songId);
-      if (!entry?.path) return null;
+      const row = await getSongById(songId);
+      if (!row?.path) return null;
       try {
         const fsPlugin = await import("@tauri-apps/plugin-fs");
-        const data = await fsPlugin.readFile(entry.path);
+        const data = await fsPlugin.readFile(row.path);
         const blob = new Blob([data.buffer as ArrayBuffer]);
         return URL.createObjectURL(blob);
       } catch {

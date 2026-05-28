@@ -9,6 +9,7 @@
     "fs:default",
     "process:default",
     "notification:default",
-    "dialog:default"
+    "dialog:default",
+    "sql:default"
   ]
 }
