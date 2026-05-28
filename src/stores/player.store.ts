@@ -1,0 +1,172 @@
+import { create } from "zustand";
+import { PlayerStatus, PlayerRepeat, PlayerShuffle, QueueSong, Song, PlayQueueAddOptions } from "../types/domain-types";
+import { generateId } from "../lib/utils";
+
+type PlayerState = {
+  currentTrack: QueueSong | null;
+  queue: QueueSong[];
+  originalQueue: QueueSong[];
+  status: PlayerStatus;
+  volume: number;
+  seek: number;
+  duration: number;
+  repeat: PlayerRepeat;
+  shuffle: PlayerShuffle;
+  positionMs: number;
+  isFullScreen: boolean;
+
+  setVolume: (volume: number) => void;
+  setSeek: (seek: number) => void;
+  setDuration: (duration: number) => void;
+  setPositionMs: (ms: number) => void;
+  play: () => void;
+  pause: () => void;
+  stop: () => void;
+  togglePlay: () => void;
+  next: () => void;
+  previous: () => void;
+  toggleRepeat: () => void;
+  toggleShuffle: () => void;
+  setQueue: (songs: Song[], options?: PlayQueueAddOptions) => void;
+  addToQueue: (songs: Song[], options?: PlayQueueAddOptions) => void;
+  removeFromQueue: (queueId: string) => void;
+  clearQueue: () => void;
+  setCurrentTrack: (song: Song | null) => void;
+  setIsFullScreen: (value: boolean) => void;
+  toggleFullScreen: () => void;
+};
+
+function buildQueue(songs: Song[]): QueueSong[] {
+  return songs.map((song, index) => ({
+    ...song,
+    queueId: generateId(),
+    queueIndex: index,
+  }));
+}
+
+export const usePlayerStore = create<PlayerState>()((set, get) => ({
+  currentTrack: null,
+  queue: [],
+  originalQueue: [],
+  status: PlayerStatus.STOPPED,
+  volume: 0.8,
+  seek: 0,
+  duration: 0,
+  repeat: PlayerRepeat.NONE,
+  shuffle: PlayerShuffle.NONE,
+  positionMs: 0,
+  isFullScreen: false,
+
+  setVolume: (volume) => set({ volume }),
+  setSeek: (seek) => set({ seek }),
+  setDuration: (duration) => set({ duration }),
+  setPositionMs: (positionMs) => set({ positionMs }),
+
+  play: () => set({ status: PlayerStatus.PLAYING }),
+  pause: () => set({ status: PlayerStatus.PAUSED }),
+  stop: () => set({ status: PlayerStatus.STOPPED, currentTrack: null, seek: 0 }),
+  togglePlay: () => {
+    const { status } = get();
+    set({ status: status === PlayerStatus.PLAYING ? PlayerStatus.PAUSED : PlayerStatus.PLAYING });
+  },
+
+  next: () => {
+    const { queue, currentTrack, repeat } = get();
+    if (!currentTrack || queue.length === 0) return;
+    const currentIndex = queue.findIndex((t) => t.queueId === currentTrack.queueId);
+    if (currentIndex < queue.length - 1) {
+      set({ currentTrack: queue[currentIndex + 1], seek: 0 });
+    } else if (repeat === PlayerRepeat.ALL) {
+      set({ currentTrack: queue[0], seek: 0 });
+    }
+  },
+
+  previous: () => {
+    const { queue, currentTrack, seek } = get();
+    if (!currentTrack || queue.length === 0) return;
+    if (seek > 3000) {
+      set({ seek: 0 });
+      return;
+    }
+    const currentIndex = queue.findIndex((t) => t.queueId === currentTrack.queueId);
+    if (currentIndex > 0) {
+      set({ currentTrack: queue[currentIndex - 1], seek: 0 });
+    }
+  },
+
+  toggleRepeat: () => {
+    const { repeat } = get();
+    const next = repeat === PlayerRepeat.NONE ? PlayerRepeat.ALL : repeat === PlayerRepeat.ALL ? PlayerRepeat.ONE : PlayerRepeat.NONE;
+    set({ repeat: next });
+  },
+
+  toggleShuffle: () => {
+    const { shuffle, queue, originalQueue } = get();
+    if (shuffle === PlayerShuffle.NONE) {
+      const shuffled = [...queue].sort(() => Math.random() - 0.5);
+      set({ queue: shuffled, originalQueue: queue, shuffle: PlayerShuffle.TRACK });
+    } else {
+      set({ queue: originalQueue, originalQueue: [], shuffle: PlayerShuffle.NONE });
+    }
+  },
+
+  setQueue: (songs, options) => {
+    const newQueue = buildQueue(songs);
+    set({ queue: newQueue, originalQueue: [] });
+    if (options?.type === "now" || !options) {
+      const startIndex = options?.startIndex || 0;
+      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, status: PlayerStatus.PLAYING });
+    }
+  },
+
+  addToQueue: (songs, options) => {
+    const { queue, currentTrack } = get();
+    const newSongs = buildQueue(songs);
+    const offset = queue.length;
+
+    if (options?.type === "next") {
+      const currentIndex = currentTrack ? queue.findIndex((t) => t.queueId === currentTrack.queueId) : -1;
+      const insertAt = currentIndex >= 0 ? currentIndex + 1 : 0;
+      const newQueue = [...queue];
+      newSongs.forEach((s, i) => {
+        s.queueIndex = insertAt + i;
+      });
+      newQueue.splice(insertAt, 0, ...newSongs);
+      newQueue.forEach((s, i) => (s.queueIndex = i));
+      set({ queue: newQueue });
+    } else if (options?.type === "now") {
+      const startIndex = options?.startIndex || 0;
+      const newQueue = buildQueue(songs);
+      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, status: PlayerStatus.PLAYING, queue: [...queue, ...newQueue] });
+    } else {
+      newSongs.forEach((s, i) => (s.queueIndex = offset + i));
+      set({ queue: [...queue, ...newSongs] });
+    }
+  },
+
+  removeFromQueue: (queueId) => {
+    const { queue, currentTrack } = get();
+    const newQueue = queue.filter((s) => s.queueId !== queueId);
+    newQueue.forEach((s, i) => (s.queueIndex = i));
+    if (currentTrack?.queueId === queueId) {
+      const nextTrack = newQueue[Math.min(queue.indexOf(currentTrack), newQueue.length - 1)];
+      set({ queue: newQueue, currentTrack: nextTrack || null, seek: 0 });
+    } else {
+      set({ queue: newQueue });
+    }
+  },
+
+  clearQueue: () => set({ queue: [], originalQueue: [], currentTrack: null, status: PlayerStatus.STOPPED, seek: 0 }),
+
+  setCurrentTrack: (song) => {
+    if (!song) {
+      set({ currentTrack: null, status: PlayerStatus.STOPPED });
+      return;
+    }
+    const queueSong: QueueSong = { ...song, queueId: generateId(), queueIndex: 0 };
+    set({ currentTrack: queueSong, seek: 0, status: PlayerStatus.PLAYING });
+  },
+
+  setIsFullScreen: (isFullScreen) => set({ isFullScreen }),
+  toggleFullScreen: () => set((state) => ({ isFullScreen: !state.isFullScreen })),
+}));

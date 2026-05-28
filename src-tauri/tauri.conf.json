@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedayzhu/tauri-docs/refs/heads/dev/src/tauri-conf-v2.schema.json",
+  "productName": "YT Music Player",
+  "version": "1.0.0",
+  "identifier": "com.ytmusic.player",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "YT Music Player",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 480,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "minSdkVersion": 24
+    }
+  }
+}
