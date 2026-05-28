@@ -195,11 +195,32 @@ export function AuthPage({ onConnected }: AuthPageProps) {
 
             {/* Local Files */}
             <TabsContent value="local" className="space-y-4">
-              <Input
-                placeholder="Music folder path (e.g. /storage/music)"
-                value={form.folder}
-                onChange={(e) => setForm({ ...form, folder: e.target.value })}
-              />
+              <div className="flex gap-2">
+                <Input
+                  className="flex-1"
+                  placeholder="Music folder path (e.g. /storage/music)"
+                  value={form.folder}
+                  onChange={(e) => setForm({ ...form, folder: e.target.value })}
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={async () => {
+                    try {
+                      const { open } = await import("@tauri-apps/plugin-dialog");
+                      const selected = await open({ directory: true, title: "Select Music Folder" });
+                      if (selected && typeof selected === "string") {
+                        setForm({ ...form, folder: selected });
+                      }
+                    } catch {
+                      console.debug("[YT Music] Native dialog unavailable in web mode");
+                    }
+                  }}
+                  title="Browse folder"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 On Android, use paths like /storage/emulated/0/Music
               </p>

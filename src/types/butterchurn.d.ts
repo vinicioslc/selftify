@@ -40,3 +40,14 @@ declare module "@tauri-apps/plugin-fs" {
 
   export function readFile(path: string): Promise<Uint8Array>;
 }
+
+declare module "@tauri-apps/plugin-dialog" {
+  export interface OpenDialogOptions {
+    directory?: boolean;
+    multiple?: boolean;
+    title?: string;
+    defaultPath?: string;
+  }
+
+  export function open(options?: OpenDialogOptions): Promise<string | string[] | null>;
+}

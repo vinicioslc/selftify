@@ -1,0 +1,81 @@
+/* CSS Grid layout matching Feishin's 3-row structure */
+.layout {
+  display: grid;
+  grid-template-areas:
+    "main-content"
+    "player";
+  grid-template-rows: 1fr var(--player-bar-height);
+  grid-template-columns: 1fr;
+  gap: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.main-content {
+  display: grid;
+  grid-area: main-content;
+  grid-template-areas: "sidebar content";
+  grid-template-columns: var(--sidebar-width, 260px) 1fr;
+  grid-template-rows: 1fr;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.main-content.sidebar-collapsed {
+  grid-template-columns: 64px 1fr;
+}
+
+.main-content-body {
+  grid-area: content;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.player-area {
+  grid-area: player;
+  z-index: 200;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+/* PlayerBar 3-column grid */
+.playerbar-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 1rem;
+  height: 100%;
+  align-items: center;
+  padding: 0 1rem;
+}
+
+@media (max-width: 768px) {
+  .playerbar-grid {
+    grid-template-columns: minmax(0, 0.5fr) minmax(0, 1fr) minmax(0, 0.5fr);
+  }
+}
+
+.playerbar-section {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  overflow: hidden;
+}
+
+.playerbar-section.left {
+  justify-content: flex-start;
+  gap: 0.75rem;
+}
+
+.playerbar-section.center {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.playerbar-section.right {
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
