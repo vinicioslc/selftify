@@ -1,100 +1,82 @@
 import type { ApiContext, SearchResults, ServerController } from "../controller";
-import { Song, Album, AlbumArtist, ServerType } from "../../types/domain-types";
+import { Song, ServerType } from "../../types/domain-types";
+import { useLocalLibraryStore } from "../../stores/local-library.store";
 
 export function createLocalController(ctx: ApiContext): ServerController {
-  async function scanFolder(): Promise<Song[]> {
-    const songs: Song[] = [];
-    try {
-      const fsPlugin = await import("@tauri-apps/plugin-fs");
-      const musicPath = ctx.baseUrl || "";
-      if (!musicPath) return songs;
-
-      const entries = await fsPlugin.readDir(musicPath);
-      const audioExtensions = new Set([".mp3", ".flac", ".ogg", ".wav", ".m4a", ".aac", ".wma"]);
-
-      function processEntries(entries: any[], parentPath: string) {
-        for (const entry of entries) {
-          if (entry.children) {
-            processEntries(entry.children, `${parentPath}/${entry.name}`);
-          } else if (entry.name) {
-            const ext = entry.name.toLowerCase().slice(entry.name.lastIndexOf("."));
-            if (audioExtensions.has(ext)) {
-              songs.push({
-                id: entry.name,
-                serverId: ctx.serverId,
-                serverType: ServerType.LOCAL,
-                name: entry.name.replace(/\.[^/.]+$/, ""),
-                artistName: "Unknown Artist",
-                duration: null,
-                imageUrl: null,
-                path: `${parentPath}/${entry.name}`,
-              });
-            }
-          }
-        }
-      }
-      processEntries(entries, musicPath);
-    } catch (err) {
-      console.warn("Local scan error (expected on web):", err);
-    }
-    return songs;
+  async function getEntry(id: string) {
+    return useLocalLibraryStore
+      .getState()
+      .entries.find((e) => e.id === id);
   }
 
-  // In-memory cache for scanned songs
-  let cachedSongs: Song[] = [];
-  let scanned = false;
-
-  async function ensureScanned() {
-    if (!scanned) {
-      cachedSongs = await scanFolder();
-      scanned = true;
-    }
+  function toSong(entry: any): Song {
+    return {
+      id: entry.id,
+      serverId: ctx.serverId,
+      serverType: ServerType.LOCAL,
+      name: entry.name,
+      artistName: entry.artistName || "Unknown Artist",
+      artistId: undefined,
+      albumName: entry.albumName || undefined,
+      albumId: undefined,
+      duration: entry.duration || null,
+      imageUrl: entry.imageUrl || null,
+      path: entry.path,
+      genres: [],
+    };
   }
 
   return {
-    authenticate: async () => ({ token: "local", username: "Local User" }),
+    authenticate: async () => ({ token: "local", username: "Local Files" }),
+
     search: async (query, limit = 20) => {
-      await ensureScanned();
+      const { entries } = useLocalLibraryStore.getState();
       const q = query.toLowerCase();
-      const results = cachedSongs.filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) || s.artistName.toLowerCase().includes(q)
+      const results = entries.filter(
+        (e) =>
+          e.name.toLowerCase().includes(q) ||
+          e.artistName.toLowerCase().includes(q) ||
+          (e.albumName && e.albumName.toLowerCase().includes(q))
       );
       return {
-        songs: results.slice(0, limit),
+        songs: results.slice(0, limit).map(toSong),
         albums: [],
         albumArtists: [],
       } as SearchResults;
     },
+
     getAlbumDetail: async () => null,
     getAlbumList: async () => [],
+
     getAlbumArtistDetail: async () => null,
     getAlbumArtistList: async () => [],
+
     getSongList: async (offset = 0, limit = 20) => {
-      await ensureScanned();
-      return cachedSongs.slice(offset, offset + limit);
+      const { entries } = useLocalLibraryStore.getState();
+      return entries.slice(offset, offset + limit).map(toSong);
     },
+
     getSongDetail: async (id) => {
-      await ensureScanned();
-      return cachedSongs.find((s) => s.id === id) || null;
+      const entry = await getEntry(id);
+      return entry ? toSong(entry) : null;
     },
+
     getPlaylistList: async () => [],
     getPlaylistDetail: async () => null,
+
     getStreamUrl: async (songId) => {
-      await ensureScanned();
-      const song = cachedSongs.find((s) => s.id === songId);
-      if (song?.path) {
-        try {
-          const fsPlugin = await import("@tauri-apps/plugin-fs");
-          const data = await fsPlugin.readFile(song.path);
-          const blob = new Blob([data.buffer as ArrayBuffer]);
-          return URL.createObjectURL(blob);
-        } catch {
-          return null;
-        }
+      const entry = await getEntry(songId);
+      if (!entry?.path) return null;
+      try {
+        const fsPlugin = await import("@tauri-apps/plugin-fs");
+        const data = await fsPlugin.readFile(entry.path);
+        const blob = new Blob([data.buffer as ArrayBuffer]);
+        return URL.createObjectURL(blob);
+      } catch {
+        return null;
       }
-      return null;
     },
+
     getImageUrl: async () => null,
   };
 }
