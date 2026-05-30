@@ -29,18 +29,23 @@ export function CenterControls() {
         <Button
           variant="ghost"
           size="icon"
-          className={shuffle !== "none" ? "text-primary" : ""}
+          className={`h-8 w-8 ${shuffle !== "none" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
           onClick={toggleShuffle}
         >
           <Shuffle className="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="icon" onClick={previous}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          onClick={previous}
+        >
           <SkipBack className="h-5 w-5" />
         </Button>
         <Button
           variant="default"
           size="icon"
-          className="h-10 w-10 rounded-full"
+          className="h-9 w-9 rounded-full bg-foreground text-background hover:bg-foreground/90 active:scale-95"
           onClick={togglePlay}
         >
           {status === PlayerStatus.PLAYING ? (
@@ -49,13 +54,18 @@ export function CenterControls() {
             <Play className="h-5 w-5 pl-0.5" />
           )}
         </Button>
-        <Button variant="ghost" size="icon" onClick={next}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          onClick={next}
+        >
           <SkipForward className="h-5 w-5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className={repeat !== "none" ? "text-primary" : ""}
+          className={`h-8 w-8 ${repeat !== "none" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
           onClick={toggleRepeat}
         >
           <Repeat className="h-4 w-4" />

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { usePlayerStore } from "../../stores/player.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { PlayerStatus } from "../../types/domain-types";
@@ -29,6 +29,7 @@ export function FullScreenPlayer() {
     status,
     volume,
     seek,
+    positionMs,
     duration,
     repeat,
     shuffle,
@@ -45,12 +46,30 @@ export function FullScreenPlayer() {
   } = usePlayerStore();
   const { visualizerEnabled } = useSettingsStore();
 
-  if (!isFullScreen || !currentTrack) return null;
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [dragValue, setDragValue] = useState(0);
+  const commitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const progress = duration > 0 ? (seek / duration) * 100 : 0;
+  const currentMs = isSeeking ? dragValue : positionMs;
+  const progress = duration > 0 ? (currentMs / duration) * 100 : 0;
+  if (!isFullScreen || !currentTrack) return null;
+  const blurBg = currentTrack.imageUrl;
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-in flex-col bg-background">
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+      {/* Blurred cover art background */}
+      {blurBg && (
+        <div className="absolute inset-0 z-0">
+          <img
+            src={blurBg}
+            alt=""
+            className="h-full w-full object-cover opacity-20"
+            style={{ filter: "blur(40px)" }}
+          />
+          <div className="absolute inset-0 bg-black/40" />
+        </div>
+      )}
+
       {/* Background visualizer */}
       {visualizerEnabled && (
         <div className="absolute inset-0 z-0 opacity-30">
@@ -59,17 +78,17 @@ export function FullScreenPlayer() {
       )}
 
       {/* Header bar */}
-      <div className="relative z-10 flex items-center justify-between border-b px-4 py-3">
-        <Button variant="ghost" size="sm" onClick={toggleFullScreen}>
+      <div className="relative z-10 flex items-center justify-between border-b border-border px-4 py-3">
+        <Button variant="ghost" size="sm" onClick={toggleFullScreen} className="text-muted-foreground hover:text-foreground">
           <Minimize2 className="mr-2 h-4 w-4" />
           Minimize
         </Button>
-        <h2 className="text-sm font-semibold">Now Playing</h2>
+        <h2 className="text-sm font-semibold text-foreground">Now Playing</h2>
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8">
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
             <Heart className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8">
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
             <ListMusic className="h-4 w-4" />
           </Button>
         </div>
@@ -83,14 +102,14 @@ export function FullScreenPlayer() {
             src={currentTrack.imageUrl}
             alt={currentTrack.name}
             fallback={currentTrack.name.charAt(0)}
-            className="h-56 w-56 rounded-2xl shadow-2xl md:h-72 md:w-72 lg:h-96 lg:w-96"
+            className="h-56 w-56 shadow-2xl md:h-72 md:w-72 lg:h-96 lg:w-96"
           />
 
           <div className="text-center">
-            <h2 className="text-2xl font-bold">{currentTrack.name}</h2>
+            <h2 className="text-2xl font-bold text-foreground">{currentTrack.name}</h2>
             <p className="text-lg text-muted-foreground">{currentTrack.artistName}</p>
             {currentTrack.albumName && (
-              <p className="text-sm text-muted-foreground/70">{currentTrack.albumName}</p>
+              <p className="text-sm text-muted-foreground/60">{currentTrack.albumName}</p>
             )}
           </div>
 
@@ -98,12 +117,22 @@ export function FullScreenPlayer() {
           <div className="flex w-full max-w-md flex-col gap-2">
             <Slider
               value={[progress]}
-              onValueChange={([v]) => setSeek((v / 100) * duration)}
+              onValueChange={([v]) => {
+                const pos = (v / 100) * duration;
+                setDragValue(pos);
+                if (!isSeeking) setIsSeeking(true);
+              }}
+              onValueCommit={([v]) => {
+                const pos = (v / 100) * duration;
+                setSeek(pos);
+                if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+                commitTimeoutRef.current = setTimeout(() => setIsSeeking(false), 1000);
+              }}
               max={100}
               step={0.1}
             />
             <div className="flex justify-between text-xs tabular-nums text-muted-foreground">
-              <span>{formatDuration(seek)}</span>
+              <span>{formatDuration(currentMs)}</span>
               <span>{formatDuration(duration)}</span>
             </div>
           </div>
@@ -113,18 +142,18 @@ export function FullScreenPlayer() {
             <Button
               variant="ghost"
               size="icon"
-              className={shuffle !== "none" ? "text-primary" : ""}
+              className={`${shuffle !== "none" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
               onClick={toggleShuffle}
             >
               <Shuffle className="h-5 w-5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-10 w-10" onClick={previous}>
+            <Button variant="ghost" size="icon" className="h-10 w-10 text-muted-foreground hover:text-foreground" onClick={previous}>
               <SkipBack className="h-6 w-6" />
             </Button>
             <Button
               variant="default"
               size="icon"
-              className="h-14 w-14 rounded-full"
+              className="h-14 w-14 rounded-full bg-foreground text-background hover:bg-foreground/90 active:scale-95"
               onClick={togglePlay}
             >
               {status === PlayerStatus.PLAYING ? (
@@ -133,13 +162,13 @@ export function FullScreenPlayer() {
                 <Play className="h-7 w-7 pl-1" />
               )}
             </Button>
-            <Button variant="ghost" size="icon" className="h-10 w-10" onClick={next}>
+            <Button variant="ghost" size="icon" className="h-10 w-10 text-muted-foreground hover:text-foreground" onClick={next}>
               <SkipForward className="h-6 w-6" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
-              className={repeat !== "none" ? "text-primary" : ""}
+              className={`${repeat !== "none" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
               onClick={toggleRepeat}
             >
               <Repeat className="h-5 w-5" />
@@ -151,7 +180,7 @@ export function FullScreenPlayer() {
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
               onClick={() => setVolume(volume === 0 ? 0.8 : 0)}
             >
               {volume === 0 ? (
@@ -170,9 +199,9 @@ export function FullScreenPlayer() {
         </div>
 
         {/* Right: tabs (queue, lyrics, visualizer info) */}
-        <div className="flex flex-col border-t md:w-1/2 md:border-l md:border-t-0">
+        <div className="flex flex-col border-t border-border md:w-1/2 md:border-l md:border-t-0">
           <Tabs defaultValue="queue" className="flex h-full flex-col">
-            <TabsList className="mx-4 mt-4 grid w-auto grid-cols-2">
+            <TabsList className="mx-4 mt-4 grid w-auto grid-cols-2 border-border">
               <TabsTrigger value="queue">
                 <ListMusic className="mr-2 h-4 w-4" />
                 Queue
@@ -192,8 +221,8 @@ export function FullScreenPlayer() {
                     {queue.map((track, i) => (
                       <div
                         key={track.queueId}
-                        className={`flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-accent ${
-                          track.queueId === currentTrack.queueId ? "bg-accent" : ""
+                        className={`flex items-center gap-3 rounded-none p-2 transition-colors hover:bg-accent/20 ${
+                          track.queueId === currentTrack.queueId ? "bg-accent/10" : ""
                         }`}
                       >
                         <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
@@ -203,10 +232,10 @@ export function FullScreenPlayer() {
                           src={track.imageUrl}
                           alt={track.name}
                           fallback={track.name.charAt(0)}
-                          className="h-10 w-10 rounded-md"
+                          className="h-10 w-10"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{track.name}</p>
+                          <p className="truncate text-sm font-medium text-foreground">{track.name}</p>
                           <p className="truncate text-xs text-muted-foreground">
                             {track.artistName}
                           </p>

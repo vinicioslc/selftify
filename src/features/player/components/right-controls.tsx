@@ -30,7 +30,7 @@ export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8"
+        className="h-8 w-8 text-muted-foreground hover:text-foreground"
         onClick={() => setVisualizerEnabled(!visualizerEnabled)}
       >
         <span className="text-xs">{visualizerEnabled ? "🎨" : "▫"}</span>
@@ -39,7 +39,7 @@ export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8"
+        className="h-8 w-8 text-muted-foreground hover:text-foreground"
       >
         <Heart className="h-4 w-4" />
       </Button>
@@ -47,7 +47,7 @@ export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void
       <Button
         variant="ghost"
         size="icon"
-        className={`h-8 w-8 ${queue.length > 0 ? "text-primary" : ""}`}
+        className={`h-8 w-8 ${queue.length > 0 ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
         onClick={() => onNavigate?.("now-playing")}
       >
         <ListMusic className="h-4 w-4" />
@@ -61,7 +61,7 @@ export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
           onClick={() => setVolume(volume === 0 ? 0.8 : 0)}
         >
           {volume === 0 ? (
@@ -84,7 +84,7 @@ export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8"
+        className="h-8 w-8 text-muted-foreground hover:text-foreground"
         onClick={toggleFullScreen}
       >
         <Maximize2 className="h-4 w-4" />

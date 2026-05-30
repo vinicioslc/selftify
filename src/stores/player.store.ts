@@ -9,16 +9,19 @@ type PlayerState = {
   status: PlayerStatus;
   volume: number;
   seek: number;
+  seekId: number;
   duration: number;
   repeat: PlayerRepeat;
   shuffle: PlayerShuffle;
   positionMs: number;
+  isBuffering: boolean;
   isFullScreen: boolean;
 
   setVolume: (volume: number) => void;
   setSeek: (seek: number) => void;
   setDuration: (duration: number) => void;
   setPositionMs: (ms: number) => void;
+  setBuffering: (buffering: boolean) => void;
   play: () => void;
   pause: () => void;
   stop: () => void;
@@ -51,20 +54,23 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
   status: PlayerStatus.STOPPED,
   volume: 0.8,
   seek: 0,
+  seekId: 0,
   duration: 0,
   repeat: PlayerRepeat.NONE,
   shuffle: PlayerShuffle.NONE,
   positionMs: 0,
+  isBuffering: false,
   isFullScreen: false,
 
   setVolume: (volume) => set({ volume }),
-  setSeek: (seek) => set({ seek }),
+  setSeek: (seek) => set((state) => ({ seek, seekId: state.seekId + 1 })),
   setDuration: (duration) => set({ duration }),
   setPositionMs: (positionMs) => set({ positionMs }),
+  setBuffering: (isBuffering) => set({ isBuffering }),
 
   play: () => set({ status: PlayerStatus.PLAYING }),
   pause: () => set({ status: PlayerStatus.PAUSED }),
-  stop: () => set({ status: PlayerStatus.STOPPED, currentTrack: null, seek: 0 }),
+  stop: () => set({ status: PlayerStatus.STOPPED, currentTrack: null, seek: 0, positionMs: 0 }),
   togglePlay: () => {
     const { status } = get();
     set({ status: status === PlayerStatus.PLAYING ? PlayerStatus.PAUSED : PlayerStatus.PLAYING });
@@ -75,22 +81,22 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     if (!currentTrack || queue.length === 0) return;
     const currentIndex = queue.findIndex((t) => t.queueId === currentTrack.queueId);
     if (currentIndex < queue.length - 1) {
-      set({ currentTrack: queue[currentIndex + 1], seek: 0 });
+      set({ currentTrack: queue[currentIndex + 1], seek: 0, positionMs: 0 });
     } else if (repeat === PlayerRepeat.ALL) {
-      set({ currentTrack: queue[0], seek: 0 });
+      set({ currentTrack: queue[0], seek: 0, positionMs: 0 });
     }
   },
 
   previous: () => {
-    const { queue, currentTrack, seek } = get();
+    const { queue, currentTrack, positionMs } = get();
     if (!currentTrack || queue.length === 0) return;
-    if (seek > 3000) {
-      set({ seek: 0 });
+    if (positionMs > 3000) {
+      set({ seek: 0, positionMs: 0 });
       return;
     }
     const currentIndex = queue.findIndex((t) => t.queueId === currentTrack.queueId);
     if (currentIndex > 0) {
-      set({ currentTrack: queue[currentIndex - 1], seek: 0 });
+      set({ currentTrack: queue[currentIndex - 1], seek: 0, positionMs: 0 });
     }
   },
 
@@ -115,7 +121,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     set({ queue: newQueue, originalQueue: [] });
     if (options?.type === "now" || !options) {
       const startIndex = options?.startIndex || 0;
-      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, status: PlayerStatus.PLAYING });
+      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, positionMs: 0, status: PlayerStatus.PLAYING });
     }
   },
 
@@ -137,7 +143,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     } else if (options?.type === "now") {
       const startIndex = options?.startIndex || 0;
       const newQueue = buildQueue(songs);
-      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, status: PlayerStatus.PLAYING, queue: [...queue, ...newQueue] });
+      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, positionMs: 0, status: PlayerStatus.PLAYING, queue: [...queue, ...newQueue] });
     } else {
       newSongs.forEach((s, i) => (s.queueIndex = offset + i));
       set({ queue: [...queue, ...newSongs] });
@@ -150,13 +156,13 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     newQueue.forEach((s, i) => (s.queueIndex = i));
     if (currentTrack?.queueId === queueId) {
       const nextTrack = newQueue[Math.min(queue.indexOf(currentTrack), newQueue.length - 1)];
-      set({ queue: newQueue, currentTrack: nextTrack || null, seek: 0 });
+      set({ queue: newQueue, currentTrack: nextTrack || null, seek: 0, positionMs: 0 });
     } else {
       set({ queue: newQueue });
     }
   },
 
-  clearQueue: () => set({ queue: [], originalQueue: [], currentTrack: null, status: PlayerStatus.STOPPED, seek: 0 }),
+  clearQueue: () => set({ queue: [], originalQueue: [], currentTrack: null, status: PlayerStatus.STOPPED, seek: 0, positionMs: 0 }),
 
   setCurrentTrack: (song) => {
     if (!song) {
@@ -164,7 +170,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
       return;
     }
     const queueSong: QueueSong = { ...song, queueId: generateId(), queueIndex: 0 };
-    set({ currentTrack: queueSong, seek: 0, status: PlayerStatus.PLAYING });
+    set({ currentTrack: queueSong, seek: 0, positionMs: 0, status: PlayerStatus.PLAYING });
   },
 
   setIsFullScreen: (isFullScreen) => set({ isFullScreen }),
