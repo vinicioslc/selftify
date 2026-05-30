@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { getAudioAnalyser } from "../player/web-audio-provider";
+import { getAudioContext, getAnalyser } from "../../services/audio-engine";
 
 interface Props {
   enabled: boolean;
@@ -17,10 +17,13 @@ export function AudioMotionVisualizer({ enabled, fullScreen }: Props) {
       try {
         const AudioMotionAnalyzer = (await import("audiomotion-analyzer")).default;
         const container = containerRef.current!;
+        const ctx = getAudioContext();
+        const analyser = getAnalyser();
+        if (!ctx || !analyser) return;
 
         const visualizer = new AudioMotionAnalyzer(container, {
-          audioCtx: new AudioContext(),
-          source: getAudioAnalyser() as any,
+          audioCtx: ctx,
+          source: analyser,
           width: container.clientWidth,
           height: container.clientHeight,
           mode: 10,

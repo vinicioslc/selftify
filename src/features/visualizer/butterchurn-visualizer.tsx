@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { getAudioAnalyser } from "../player/web-audio-provider";
+import { subscribe } from "../../services/audio-engine";
 
 interface Props {
   enabled: boolean;
@@ -9,18 +9,19 @@ interface Props {
 export function ButterchurnVisualizer({ enabled, fullScreen }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const visualizerRef = useRef<any>(null);
-  const animFrameRef = useRef<number>(0);
 
   useEffect(() => {
     if (!enabled || !canvasRef.current) return;
 
     async function init() {
       try {
-        const butterchurn = await import("butterchurn");
-        const presets = await import("butterchurn-presets");
+        const butterchurnModule: any = await import("butterchurn");
+        const presetsModule: any = await import("butterchurn-presets");
+        const Butterchurn = butterchurnModule.default.default;
+        const presets = presetsModule.default.default;
 
         const canvas = canvasRef.current!;
-        const visualizer = butterchurn.default.createVisualizer(
+        const visualizer = Butterchurn.createVisualizer(
           null,
           canvas,
           {
@@ -31,9 +32,9 @@ export function ButterchurnVisualizer({ enabled, fullScreen }: Props) {
           }
         );
 
-        const presetKeys = Object.keys(presets.default.getPresets());
+        const presetKeys = Object.keys(presets.getPresets());
         const randomPreset = presetKeys[Math.floor(Math.random() * presetKeys.length)];
-        visualizer.loadPreset(presets.default.getPresets()[randomPreset], 0.5);
+        visualizer.loadPreset(presets.getPresets()[randomPreset], 0.5);
         visualizerRef.current = visualizer;
       } catch (err) {
         console.warn("Butterchurn init error:", err);
@@ -43,32 +44,21 @@ export function ButterchurnVisualizer({ enabled, fullScreen }: Props) {
     init();
 
     return () => {
-      if (visualizerRef.current) {
-        visualizerRef.current = null;
-      }
-      cancelAnimationFrame(animFrameRef.current);
+      visualizerRef.current = null;
     };
   }, [enabled]);
 
   useEffect(() => {
     if (!enabled || !visualizerRef.current) return;
 
-    function render() {
-      const analyser = getAudioAnalyser();
-      if (analyser && visualizerRef.current) {
-        const freqData = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(freqData);
-        visualizerRef.current.render();
-        visualizerRef.current.setAudioData({
-          waveform: new Float32Array(0),
-          frequency: freqData,
-        });
-      }
-      animFrameRef.current = requestAnimationFrame(render);
-    }
+    const unsub = subscribe((freq, time) => {
+      const v = visualizerRef.current;
+      if (!v) return;
+      v.setAudioData({ waveform: time, frequency: freq });
+      v.render();
+    });
 
-    render();
-    return () => cancelAnimationFrame(animFrameRef.current);
+    return unsub;
   }, [enabled]);
 
   if (!enabled) return null;
