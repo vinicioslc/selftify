@@ -11,7 +11,12 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Badge } from "../../components/ui/badge";
 import { Search, Play, Plus, Loader2 } from "lucide-react";
 
-export function SearchPage() {
+interface SearchPageProps {
+  onNavigateAlbum?: (album: Album) => void;
+  onNavigateArtist?: (artist: AlbumArtist) => void;
+}
+
+export function SearchPage({ onNavigateAlbum, onNavigateArtist }: SearchPageProps) {
   const { currentOrigin } = useAuthStore();
   const { setQueue } = usePlayerStore();
   const [query, setQuery] = useState("");
@@ -99,9 +104,40 @@ export function SearchPage() {
                       />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{song.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{song.artistName}</p>
+                        <p
+                          className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const artist: AlbumArtist = {
+                              id: song.artistId || `artist-${song.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+                              originId: song.originId,
+                              originType: song.originType,
+                              name: song.artistName,
+                              imageUrl: song.imageUrl || null,
+                            };
+                            onNavigateArtist?.(artist);
+                          }}
+                        >
+                          {song.artistName}
+                        </p>
                       </div>
-                      <Badge variant="outline" className="hidden text-xs sm:inline">
+                      <Badge
+                        variant="outline"
+                        className="hidden cursor-pointer text-xs hover:bg-accent sm:inline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!song.albumName || !song.artistName) return;
+                          const album: Album = {
+                            id: song.albumId || `album-${song.artistName.toLowerCase().replace(/\s+/g, "-")}-${song.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                            originId: song.originId,
+                            originType: song.originType,
+                            name: song.albumName,
+                            albumArtistName: song.albumArtistName || song.artistName,
+                            imageUrl: song.imageUrl || null,
+                          };
+                          onNavigateAlbum?.(album);
+                        }}
+                      >
                         {song.albumName}
                       </Badge>
                       <Button variant="ghost" size="icon" onClick={() => playSong(song)}>
@@ -118,7 +154,11 @@ export function SearchPage() {
                 <h2 className="text-lg font-semibold">Albums</h2>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                   {results.albums.map((album) => (
-                    <Card key={album.id} className="overflow-hidden transition-colors hover:bg-accent/50">
+                    <Card
+                      key={album.id}
+                      className="cursor-pointer overflow-hidden transition-colors hover:bg-accent/50"
+                      onClick={() => onNavigateAlbum?.(album)}
+                    >
                       <CardContent className="p-0">
                         <Avatar
                           src={album.imageUrl}
@@ -144,7 +184,11 @@ export function SearchPage() {
                 <h2 className="text-lg font-semibold">Artists</h2>
                 <div className="flex flex-wrap gap-4">
                   {results.albumArtists.map((artist) => (
-                    <div key={artist.id} className="flex flex-col items-center gap-2">
+                    <div
+                      key={artist.id}
+                      className="flex cursor-pointer flex-col items-center gap-2 transition-opacity hover:opacity-80"
+                      onClick={() => onNavigateArtist?.(artist)}
+                    >
                       <Avatar
                         src={artist.imageUrl}
                         alt={artist.name}

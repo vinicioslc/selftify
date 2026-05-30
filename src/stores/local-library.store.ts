@@ -29,6 +29,7 @@ type LocalLibraryState = {
   scanStatus: LocalScanStatus;
   scanProgress: ScanProgress;
   lastScanned: number | null;
+  scanningOriginId: string | null;
   dirQueue: string[];
   metadataQueue: string[];
 
@@ -38,6 +39,7 @@ type LocalLibraryState = {
   updateEntry: (id: string, updates: Partial<LocalLibraryEntry>) => void;
   setScanStatus: (status: LocalScanStatus) => void;
   setScanProgress: (progress: Partial<ScanProgress>) => void;
+  setScanningOriginId: (id: string | null) => void;
   setDirQueue: (dirs: string[]) => void;
   appendDirQueue: (dirs: string[]) => void;
   shiftDirQueue: () => string | undefined;
@@ -60,6 +62,7 @@ export const useLocalLibraryStore = create<LocalLibraryState>()(
       scanStatus: "idle",
       scanProgress: { ...initialProgress },
       lastScanned: null,
+      scanningOriginId: null,
       dirQueue: [],
       metadataQueue: [],
 
@@ -85,6 +88,8 @@ export const useLocalLibraryStore = create<LocalLibraryState>()(
         set((state) => ({
           scanProgress: { ...state.scanProgress, ...progress },
         })),
+
+      setScanningOriginId: (scanningOriginId) => set({ scanningOriginId }),
 
       setDirQueue: (dirs) => set({ dirQueue: dirs }),
 
@@ -122,6 +127,7 @@ export const useLocalLibraryStore = create<LocalLibraryState>()(
           scanStatus: "idle",
           scanProgress: { ...initialProgress },
           lastScanned: null,
+          scanningOriginId: null,
           dirQueue: [],
           metadataQueue: [],
         }),

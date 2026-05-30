@@ -12,6 +12,9 @@ type SettingsState = {
   crossfadeDuration: number;
   reconnectionEnabled: boolean;
   sidebarCollapsed: boolean;
+  sidebarWidth: number;
+  activeAudioOutputs: string[];
+  autoSwitchOutput: boolean;
 
   setTheme: (theme: "dark" | "light" | "system") => void;
   setVisualizerType: (type: VisualizerType) => void;
@@ -21,6 +24,9 @@ type SettingsState = {
   setCrossfadeDuration: (duration: number) => void;
   setReconnectionEnabled: (enabled: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  setSidebarWidth: (width: number) => void;
+  setActiveAudioOutputs: (outputs: string[]) => void;
+  setAutoSwitchOutput: (enabled: boolean) => void;
   toggleSidebar: () => void;
 };
 
@@ -35,6 +41,9 @@ export const useSettingsStore = create<SettingsState>()(
       crossfadeDuration: 3,
       reconnectionEnabled: true,
       sidebarCollapsed: false,
+      sidebarWidth: 280,
+      activeAudioOutputs: [],
+      autoSwitchOutput: true,
 
       setTheme: (theme) => set({ theme }),
       setVisualizerType: (visualizerType) => set({ visualizerType }),
@@ -44,6 +53,9 @@ export const useSettingsStore = create<SettingsState>()(
       setCrossfadeDuration: (crossfadeDuration) => set({ crossfadeDuration }),
       setReconnectionEnabled: (reconnectionEnabled) => set({ reconnectionEnabled }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+      setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
+      setActiveAudioOutputs: (activeAudioOutputs) => set({ activeAudioOutputs }),
+      setAutoSwitchOutput: (autoSwitchOutput) => set({ autoSwitchOutput }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
     }),
     {

@@ -27,6 +27,8 @@ export interface ServerController {
   getPlaylistDetail(id: string): Promise<Playlist | null>;
   getStreamUrl(songId: string): Promise<string | null>;
   getImageUrl(songId: string): Promise<string | null>;
+  getAlbumSongs(albumArtist: string, album: string): Promise<Song[]>;
+  getArtistSongs(artist: string): Promise<Song[]>;
 }
 
 function getContext(): ApiContext {

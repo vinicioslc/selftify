@@ -9,7 +9,7 @@ export function useLocalScan() {
   const [status, setStatus] = useState<IndexerStatus>({ status: "idle", progress: { total: 0, done: 0, currentItem: "" } });
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  const { setRootFolder, setScanStatus, setScanProgress, setLastScanned } =
+  const { setRootFolder, setScanStatus, setScanProgress, setLastScanned, setScanningOriginId } =
     useLocalLibraryStore();
 
   useEffect(() => {
@@ -28,7 +28,10 @@ export function useLocalScan() {
         const mappedStatus = s.status === "indexing" ? "scanning" : s.status;
         setScanStatus(mappedStatus as any);
         setScanProgress({ total: s.progress.total, done: s.progress.done, currentDir: s.progress.currentItem });
-        if (s.status === "done") setLastScanned(Date.now());
+        if (s.status === "done") {
+          setLastScanned(Date.now());
+          setScanningOriginId(null);
+        }
       });
     }
     return indexerRef.current!;
@@ -44,9 +47,10 @@ export function useLocalScan() {
       origin = { id: crypto.randomUUID(), name: "Local Files", type: "local" as any, url: folder };
       addOrigin(origin);
     }
+    setScanningOriginId(origin.id);
     const idx = await ensureIndexer();
     await idx.start(origin);
-  }, [setRootFolder, ensureIndexer]);
+  }, [setRootFolder, ensureIndexer, setScanningOriginId]);
 
   const pause = useCallback(async () => {
     const idx = await ensureIndexer();
@@ -62,7 +66,8 @@ export function useLocalScan() {
     if (indexerRef.current) {
       indexerRef.current.abort();
     }
-  }, []);
+    setScanningOriginId(null);
+  }, [setScanningOriginId]);
 
   const rescan = useCallback(async () => {
     const state = await getScanState();

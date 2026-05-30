@@ -15,6 +15,8 @@ import {
   clearQueue,
   type DbSong,
 } from "../../services/local-database";
+import { storeImage, clear as clearImageCache } from "../../services/image-cache";
+import type { PlatformService, DirEntry } from "../../services/platform/types";
 
 const DIR_BATCH = 10;
 const FILE_BATCH = 5;
@@ -24,6 +26,11 @@ const AUDIO_EXTENSIONS = new Set([
   ".mp3", ".flac", ".ogg", ".wav", ".m4a", ".aac", ".wma", ".opus", ".aiff", ".alac",
 ]);
 
+function getAudioExt(path: string): string {
+  const i = path.lastIndexOf(".");
+  return i >= 0 ? path.slice(i).toLowerCase() : "";
+}
+
 export function createLocalIndexer(): Indexer {
   let listeners: Array<(status: IndexerStatus) => void> = [];
   let status: IndexerStatus = { status: "idle", progress: { total: 0, done: 0, currentItem: "" } };
@@ -32,6 +39,15 @@ export function createLocalIndexer(): Indexer {
   let scanning = false;
   let watchTimer: ReturnType<typeof setTimeout> | null = null;
   let scannedCount = 0;
+  let platform: PlatformService | null = null;
+
+  async function getPlatform(): Promise<PlatformService> {
+    if (!platform) {
+      const { getPlatformService } = await import("../../services/platform/factory");
+      platform = await getPlatformService();
+    }
+    return platform!;
+  }
 
   function notify() {
     const s = { ...status, progress: { ...status.progress } };
@@ -56,6 +72,7 @@ export function createLocalIndexer(): Indexer {
     scannedCount = 0;
 
     await deleteAllSongs();
+    await clearImageCache();
     await clearQueue();
     await updateScanState({
       root_folder: folder,
@@ -152,21 +169,20 @@ export function createLocalIndexer(): Indexer {
     setState({ progress: { currentItem: dirPath } });
 
     try {
-      const fsPlugin = await import("@tauri-apps/plugin-fs");
-      const entries = await fsPlugin.readDir(dirPath);
+      const p = await getPlatform();
+      const entries = await p.readDirectory(dirPath);
       const subdirs: string[] = [];
       const audioFiles: string[] = [];
 
       for (const entry of entries) {
         if (aborted) return;
         if (!entry.name) continue;
-        const fullPath = `${dirPath}/${entry.name}`;
-        if (entry.children) {
-          subdirs.push(fullPath);
-        } else {
-          const ext = entry.name.toLowerCase().slice(entry.name.lastIndexOf("."));
+        if (entry.isDirectory) {
+          subdirs.push(entry.path);
+        } else if (entry.isFile) {
+          const ext = getAudioExt(entry.name);
           if (AUDIO_EXTENSIONS.has(ext)) {
-            audioFiles.push(fullPath);
+            audioFiles.push(entry.path);
           }
         }
       }
@@ -178,16 +194,20 @@ export function createLocalIndexer(): Indexer {
 
       scannedCount++;
       await updateScanState({ scanned_files: scannedCount, current_dir: dirPath });
-    } catch (err) {
-      console.warn(`[indexer] error reading dir ${dirPath}:`, err);
+    } catch (err: any) {
+      console.warn(`[indexer] error reading dir ${dirPath}:`, err?.message || err);
     }
   }
 
   async function processFile(filePath: string) {
     if (aborted) return;
     try {
-      const fsPlugin = await import("@tauri-apps/plugin-fs");
-      const data = await fsPlugin.readFile(filePath);
+      const p = await getPlatform();
+      const data = await p.readFile(filePath);
+      if (!data) {
+        console.warn(`[indexer] could not read file ${filePath}`);
+        return;
+      }
 
       let meta: {
         name: string; artist_name: string; album_name: string | null;
@@ -199,7 +219,7 @@ export function createLocalIndexer(): Indexer {
 
       try {
         const mm = await import("music-metadata");
-        const result = await mm.parseBuffer(data, { path: filePath }, { duration: true, skipCovers: true });
+        const result = await mm.parseBuffer(data, { path: filePath }, { duration: true, skipCovers: false });
         const c = result.common;
         const f = result.format;
 
@@ -219,6 +239,27 @@ export function createLocalIndexer(): Indexer {
           file_extension: filePath.split(".").pop()?.toLowerCase() || "",
           last_modified: null,
         };
+
+        const pictures = c.picture || [];
+        if (pictures.length > 0) {
+          const artistNorm = meta.artist_name.toLowerCase().trim();
+          const albumNorm = (meta.album_name || "").toLowerCase().trim();
+          const songId = fileIdFromPath(filePath);
+
+          const tags: string[] = [];
+          tags.push(`song/${songId}`);
+          if (artistNorm) tags.push(`artist/${artistNorm}`);
+          if (albumNorm && artistNorm) tags.push(`album/${artistNorm}/${albumNorm}`);
+
+          for (const picture of pictures) {
+            try {
+              const blob = new Blob([picture.data.slice().buffer], { type: picture.format });
+              await storeImage(blob, picture.format, tags);
+            } catch (picErr) {
+              console.warn(`[indexer] error storing image from ${filePath}:`, picErr);
+            }
+          }
+        }
       } catch {
         const fileName = filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Unknown";
         const scanState = await getScanState();
@@ -288,12 +329,12 @@ export function createLocalIndexer(): Indexer {
     }
 
     try {
+      const p = await getPlatform();
       const dbPaths = new Set(await getAllPaths());
       const fsPaths = new Set<string>();
       const root = state.root_folder;
       if (!root) { scheduleWatch(); return; }
 
-      const fsPlugin = await import("@tauri-apps/plugin-fs");
       const pending = [root];
       const visited = new Set<string>();
       const newFiles: string[] = [];
@@ -304,16 +345,15 @@ export function createLocalIndexer(): Indexer {
         visited.add(dir);
         if (visited.size > 200) break;
 
-        let entries;
-        try { entries = await fsPlugin.readDir(dir); } catch { continue; }
+        let entries: DirEntry[];
+        try { entries = await p.readDirectory(dir); } catch { continue; }
         for (const e of entries) {
           if (!e.name) continue;
-          const fp = `${dir}/${e.name}`;
-          if (e.children) { pending.push(fp); continue; }
-          const ext = e.name.toLowerCase().slice(e.name.lastIndexOf("."));
+          if (e.isDirectory) { pending.push(e.path); continue; }
+          const ext = getAudioExt(e.name);
           if (!AUDIO_EXTENSIONS.has(ext)) continue;
-          fsPaths.add(fp);
-          if (!dbPaths.has(fp)) newFiles.push(fp);
+          fsPaths.add(e.path);
+          if (!dbPaths.has(e.path)) newFiles.push(e.path);
         }
       }
 

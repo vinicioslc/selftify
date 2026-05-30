@@ -178,5 +178,11 @@ export function createJellyfinController(ctx: ApiContext): ServerController {
         return null;
       }
     },
+    getAlbumSongs: async (_albumArtist, _album) => {
+      return [];
+    },
+    getArtistSongs: async (_artist) => {
+      return [];
+    },
   };
 }

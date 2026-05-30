@@ -9,8 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
-import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Plus, Trash2, Volume2, Check } from "lucide-react";
+import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
+import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
 
 export function SettingsPage() {
   const { origins, addOrigin, removeOrigin, setCurrentOrigin } = useAuthStore();
@@ -21,7 +23,26 @@ export function SettingsPage() {
     crossfadeEnabled, setCrossfadeEnabled,
     crossfadeDuration, setCrossfadeDuration,
     sidebarCollapsed,
+    activeAudioOutputs, setActiveAudioOutputs,
+    autoSwitchOutput, setAutoSwitchOutput,
   } = useSettingsStore();
+
+  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const audioManagerRef = useState(() => new AudioOutputManager())[0];
+
+  useEffect(() => {
+    audioManagerRef.init().then(() => {
+      setAudioDevices(audioManagerRef.devices);
+    });
+    const unsub = audioManagerRef.onDeviceChange(() => {
+      audioManagerRef.refreshDevices().then(setAudioDevices);
+    });
+    audioManagerRef.startPolling(3000);
+    return () => {
+      unsub();
+      audioManagerRef.stopPolling();
+    };
+  }, [audioManagerRef]);
 
   const [newServer, setNewServer] = useState({
     name: "",
@@ -53,6 +74,7 @@ export function SettingsPage() {
             <TabsList>
               <TabsTrigger value="servers">Servers</TabsTrigger>
               <TabsTrigger value="playback">Playback</TabsTrigger>
+              <TabsTrigger value="audio">Audio</TabsTrigger>
               <TabsTrigger value="visualizer">Visualizer</TabsTrigger>
               <TabsTrigger value="appearance">Appearance</TabsTrigger>
             </TabsList>
@@ -147,6 +169,86 @@ export function SettingsPage() {
                       />
                     </div>
                   )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="audio" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Audio Output</CardTitle>
+                  <CardDescription>Select audio output devices</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">Auto-switch output</p>
+                      <p className="text-sm text-muted-foreground">
+                        Automatically switch to new default device when system output changes
+                      </p>
+                    </div>
+                    <Switch checked={autoSwitchOutput} onCheckedChange={setAutoSwitchOutput} />
+                  </div>
+
+                  <Separator />
+
+                  <div>
+                    <p className="mb-2 text-sm font-medium">Available devices</p>
+                    {audioDevices.length === 0 && (
+                      <p className="text-sm text-muted-foreground">
+                        No audio output devices detected. Make sure the app has microphone permissions.
+                      </p>
+                    )}
+                    <div className="space-y-2">
+                      {audioDevices.map((device) => {
+                        const isActive = activeAudioOutputs.length === 0
+                          ? device.isDefault
+                          : activeAudioOutputs.includes(device.deviceId);
+                        const isSelected = activeAudioOutputs.includes(device.deviceId);
+
+                        function toggleDevice() {
+                          if (isSelected) {
+                            setActiveAudioOutputs(activeAudioOutputs.filter((id) => id !== device.deviceId));
+                          } else {
+                            setActiveAudioOutputs([...activeAudioOutputs, device.deviceId]);
+                          }
+                        }
+
+                        return (
+                          <div
+                            key={device.deviceId}
+                            className="flex items-center justify-between rounded-lg border p-3"
+                          >
+                            <div className="flex items-center gap-3">
+                              <Volume2 className="h-4 w-4 text-muted-foreground" />
+                              <div>
+                                <p className="text-sm font-medium">
+                                  {device.label}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {device.deviceId === "default" ? "System default" : device.deviceId}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {isActive && (
+                                <span className="flex items-center gap-1 text-xs text-green-500">
+                                  <Check className="h-3 w-3" /> Active
+                                </span>
+                              )}
+                              <Button
+                                variant={isSelected ? "default" : "outline"}
+                                size="sm"
+                                onClick={toggleDevice}
+                              >
+                                {isSelected ? "Selected" : "Select"}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
