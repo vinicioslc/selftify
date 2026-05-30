@@ -1,4 +1,5 @@
 import { usePlayerStore } from "../../stores/player.store";
+import { useState, useRef } from "react";
 import { PlayerStatus } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Avatar } from "../../components/ui/avatar";
@@ -25,6 +26,7 @@ export function NowPlayingPage() {
     status,
     queue,
     seek,
+    positionMs,
     duration,
     repeat,
     shuffle,
@@ -39,7 +41,12 @@ export function NowPlayingPage() {
   } = usePlayerStore();
   const { visualizerEnabled } = useSettingsStore();
 
-  const progress = duration > 0 ? (seek / duration) * 100 : 0;
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [dragValue, setDragValue] = useState(0);
+  const commitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const currentMs = isSeeking ? dragValue : positionMs;
+  const progress = duration > 0 ? (currentMs / duration) * 100 : 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -52,30 +59,35 @@ export function NowPlayingPage() {
 
       {/* Now playing header */}
       {currentTrack ? (
-        <div className="relative z-10 flex flex-col items-center gap-4 border-b p-6 md:flex-row">
+        <div className="relative z-10 flex flex-col items-center gap-4 border-b border-border p-6 md:flex-row">
           <Avatar
             src={currentTrack.imageUrl}
             alt={currentTrack.name}
             fallback={currentTrack.name.charAt(0)}
-            className="h-24 w-24 rounded-xl shadow-lg md:h-32 md:w-32"
+            className="h-24 w-24 shadow-lg md:h-32 md:w-32"
           />
           <div className="flex flex-col items-center text-center md:items-start md:text-left">
-            <h1 className="text-xl font-bold">{currentTrack.name}</h1>
+            <h1 className="text-xl font-bold text-foreground">{currentTrack.name}</h1>
             <p className="text-base text-muted-foreground">{currentTrack.artistName}</p>
             {currentTrack.albumName && (
-              <p className="text-sm text-muted-foreground/70">{currentTrack.albumName}</p>
+              <p className="text-sm text-muted-foreground/60">{currentTrack.albumName}</p>
             )}
 
             {/* Seek + controls */}
             <div className="mt-4 flex w-full max-w-md flex-col gap-2">
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={previous}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  onClick={previous}
+                >
                   <SkipBack className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="default"
                   size="icon"
-                  className="h-10 w-10 rounded-full"
+                  className="h-10 w-10 rounded-full bg-foreground text-background hover:bg-foreground/90 active:scale-95"
                   onClick={togglePlay}
                 >
                   {status === PlayerStatus.PLAYING ? (
@@ -84,13 +96,18 @@ export function NowPlayingPage() {
                     <Play className="h-5 w-5 pl-0.5" />
                   )}
                 </Button>
-                <Button variant="ghost" size="icon" onClick={next}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  onClick={next}
+                >
                   <SkipForward className="h-5 w-5" />
                 </Button>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={shuffle !== "none" ? "text-primary" : ""}
+                  className={`h-8 w-8 ${shuffle !== "none" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
                   onClick={toggleShuffle}
                 >
                   <Shuffle className="h-4 w-4" />
@@ -98,7 +115,7 @@ export function NowPlayingPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={repeat !== "none" ? "text-primary" : ""}
+                  className={`h-8 w-8 ${repeat !== "none" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
                   onClick={toggleRepeat}
                 >
                   <Repeat className="h-4 w-4" />
@@ -106,11 +123,21 @@ export function NowPlayingPage() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">
-                  {formatDuration(seek)}
+                  {formatDuration(currentMs)}
                 </span>
                 <Slider
                   value={[progress]}
-                  onValueChange={([v]) => setSeek((v / 100) * duration)}
+                  onValueChange={([v]) => {
+                    const pos = (v / 100) * duration;
+                    setDragValue(pos);
+                    if (!isSeeking) setIsSeeking(true);
+                  }}
+                  onValueCommit={([v]) => {
+                    const pos = (v / 100) * duration;
+                    setSeek(pos);
+                    if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+                    commitTimeoutRef.current = setTimeout(() => setIsSeeking(false), 1000);
+                  }}
                   max={100}
                   step={0.1}
                   className="flex-1"
@@ -123,7 +150,7 @@ export function NowPlayingPage() {
           </div>
         </div>
       ) : (
-        <div className="flex items-center justify-center border-b p-8">
+        <div className="flex items-center justify-center border-b border-border p-8">
           <div className="text-center">
             <Music className="mx-auto mb-2 h-12 w-12 text-muted-foreground/50" />
             <p className="text-muted-foreground">No track playing</p>
@@ -133,10 +160,10 @@ export function NowPlayingPage() {
 
       {/* Queue */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b px-4 py-2">
-          <h2 className="text-sm font-semibold">Queue ({queue.length})</h2>
+        <div className="flex items-center justify-between border-b border-border px-4 py-2">
+          <h2 className="text-sm font-semibold text-foreground">Queue ({queue.length})</h2>
           {queue.length > 0 && (
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearQueue}>
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-foreground" onClick={clearQueue}>
               <Trash2 className="mr-1 h-3 w-3" /> Clear
             </Button>
           )}
@@ -147,12 +174,12 @@ export function NowPlayingPage() {
               <p className="text-sm text-muted-foreground">Queue is empty</p>
             </div>
           ) : (
-            <div className="divide-y">
+            <div className="divide-y divide-border">
               {queue.map((track, i) => (
                 <div
                   key={track.queueId}
-                  className={`flex items-center gap-3 px-4 py-2 transition-colors hover:bg-accent/50 ${
-                    track.queueId === currentTrack?.queueId ? "bg-accent" : ""
+                  className={`flex items-center gap-3 px-4 py-2 transition-colors hover:bg-accent/20 ${
+                    track.queueId === currentTrack?.queueId ? "bg-accent/10" : ""
                   }`}
                 >
                   <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
@@ -162,10 +189,10 @@ export function NowPlayingPage() {
                     src={track.imageUrl}
                     alt={track.name}
                     fallback={track.name.charAt(0)}
-                    className="h-10 w-10 rounded-md"
+                    className="h-10 w-10"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{track.name}</p>
+                    <p className="truncate text-sm font-medium text-foreground">{track.name}</p>
                     <p className="truncate text-xs text-muted-foreground">{track.artistName}</p>
                   </div>
                   <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
@@ -174,7 +201,7 @@ export function NowPlayingPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 opacity-0 hover:opacity-100"
+                    className="h-7 w-7 text-muted-foreground opacity-0 hover:text-foreground hover:opacity-100"
                     onClick={() => removeFromQueue(track.queueId)}
                   >
                     <Trash2 className="h-3 w-3" />

@@ -15,7 +15,7 @@
   display: grid;
   grid-area: main-content;
   grid-template-areas: "sidebar content";
-  grid-template-columns: var(--sidebar-width, 260px) 1fr;
+  grid-template-columns: var(--sidebar-width, 280px) 1fr;
   grid-template-rows: 1fr;
   gap: 0;
   min-height: 0;
@@ -32,6 +32,7 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  background: hsl(var(--background));
 }
 
 .player-area {

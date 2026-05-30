@@ -29,4 +29,6 @@ export type AppView =
   | "library-songs"
   | "playlists"
   | "settings"
-  | "now-playing";
+  | "now-playing"
+  | "album-detail"
+  | "artist-detail";
