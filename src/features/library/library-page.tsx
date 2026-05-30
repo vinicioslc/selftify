@@ -281,15 +281,16 @@ export function LibraryPage({ onNavigateAlbum, onNavigateArtist }: LibraryPagePr
               className="h-8 gap-1"
               onClick={async () => {
                 try {
-                  const { open } = await import("@tauri-apps/plugin-dialog");
-                  const selected = await open({ directory: true, title: "Select Music Folder" });
-                  if (selected && typeof selected === "string") {
+                  const { getPlatformService } = await import("../../services/platform/factory");
+                  const p = await getPlatformService();
+                  const selected = await p.openFolderPicker();
+                  if (selected) {
                     setFolderPath(selected);
                     setRootFolder(selected);
                     setScanError(null);
                   }
                 } catch {
-                  console.debug("[library] Native dialog unavailable in web mode");
+                  console.debug("[library] Native dialog unavailable");
                 }
               }}
             >

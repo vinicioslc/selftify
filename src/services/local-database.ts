@@ -57,20 +57,10 @@ async function getDb(): Promise<{ db: any; isIpc: boolean }> {
     }
   } catch {}
 
-  try {
-    const mod = await import("@tauri-apps/plugin-sql");
-    const Database = mod.default || mod;
-    const db = await Database.load(`sqlite:${DB_NAME}`);
-    await initSchema(db);
-    dbInstance = db;
-    dbIsIpc = false;
-    return { db, isIpc: false };
-  } catch {
-    const mock = createMockDb();
-    dbInstance = mock;
-    dbIsIpc = false;
-    return { db: mock, isIpc: false };
-  }
+  const mock = createMockDb();
+  dbInstance = mock;
+  dbIsIpc = false;
+  return { db: mock, isIpc: false };
 }
 
 function createMockDb() {
