@@ -1,0 +1,27 @@
+FROM debian:bookworm-slim AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl xz-utils \
+    python3 ninja-build meson pkg-config \
+    libssl-dev libffi-dev \
+    gcc g++ make \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN git clone https://github.com/mpv-player/mpv-build.git .
+
+RUN ./use-mpv-release
+
+RUN echo "--enable-static-build" >> mpv_options
+
+RUN ./build -j$(nproc)
+
+RUN mkdir -p /output && cp build/mpv /output/mpv && \
+    file /output/mpv && ldd /output/mpv 2>&1 | grep -q "statically linked" && echo "STATIC OK"
+
+FROM scratch
+COPY --from=builder /output/mpv /mpv

@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build static mpv (Linux)
+        run: npm run download-mpv:linux
+
+      - name: Package Linux (AppImage + deb)
+        run: npm run package:linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-music-player-linux
+          path: dist/*.{AppImage,deb}
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Download mpv (Windows)
+        run: npm run download-mpv:win32
+
+      - name: Package Windows (NSIS)
+        run: npm run package:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-music-player-windows
+          path: dist/*.{exe,msi}
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Download mpv (macOS)
+        run: npm run download-mpv:darwin
+
+      - name: Package macOS (DMG)
+        run: npm run package:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-music-player-macos
+          path: dist/*.{dmg,zip}
+
+  create-release:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate release notes
+        run: |
+          echo "## YT Music Player ${{ github.ref_name }}" > release-notes.md
+          echo "" >> release-notes.md
+          echo "### Downloads" >> release-notes.md
+          echo "- Linux: AppImage + deb" >> release-notes.md
+          echo "- Windows: NSIS installer" >> release-notes.md
+          echo "- macOS: DMG" >> release-notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: |
+            artifacts/**/*
