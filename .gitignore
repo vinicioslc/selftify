@@ -8,3 +8,6 @@ out/
 src-tauri/gen/
 src-tauri/target/
 *.tsbuildinfo
+
+# mpv binaries downloaded/built for packaging
+resources/mpv/

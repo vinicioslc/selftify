@@ -1,0 +1,8 @@
+{
+  "appId": "com.ytmusicplayer.app",
+  "appName": "YT Music Player",
+  "webDir": "out/web",
+  "server": {
+    "androidScheme": "https"
+  }
+}

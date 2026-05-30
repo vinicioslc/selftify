@@ -1,0 +1,37 @@
+appId: com.ytmusicplayer.app
+productName: YT Music Player
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+directories:
+  buildResources: public
+files:
+  - 'out/**/*'
+  - 'package.json'
+linux:
+  extraResources:
+    - from: resources/mpv/linux
+      to: mpv
+      filter:
+        - "**/*"
+  target:
+    - AppImage
+    - deb
+  category: Audio;Music;Player
+  icon: public/icon.png
+win:
+  extraResources:
+    - from: resources/mpv/win32
+      to: mpv
+      filter:
+        - "**/*"
+  target:
+    - nsis
+  icon: public/icon.ico
+mac:
+  extraResources:
+    - from: resources/mpv/darwin
+      to: mpv
+      filter:
+        - "**/*"
+  target:
+    - dmg
+  icon: public/icon.icns
