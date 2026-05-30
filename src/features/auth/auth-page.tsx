@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuthStore } from "../../stores/auth.store";
 import { OriginType } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
-import { Music, Tv2, Youtube, FolderOpen } from "lucide-react";
+import { Music, Tv2, Youtube, FolderOpen, Loader2 } from "lucide-react";
+import type { PlatformService } from "../../services/platform/types";
 
 type AuthForm = {
   url: string;
@@ -21,6 +22,7 @@ type AuthPageProps = {
 
 export function AuthPage({ onConnected }: AuthPageProps) {
   const { addOrigin, setCurrentOrigin } = useAuthStore();
+  const [platform, setPlatform] = useState<PlatformService | null>(null);
   const [form, setForm] = useState<AuthForm>({
     url: "",
     username: "",
@@ -30,6 +32,13 @@ export function AuthPage({ onConnected }: AuthPageProps) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { getPlatformService } = await import("../../services/platform/factory");
+      setPlatform(await getPlatformService());
+    })();
+  }, []);
 
   async function handleNavidromeAuth() {
     setLoading(true);
@@ -126,6 +135,26 @@ export function AuthPage({ onConnected }: AuthPageProps) {
     onConnected?.();
   }
 
+  async function handleBrowseFolder() {
+    if (!platform) return;
+    const selected = await platform.openFolderPicker();
+    if (selected) {
+      setForm({ ...form, folder: selected });
+    }
+  }
+
+  if (!platform) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background to-muted p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background to-muted p-4">
       <Card className="w-full max-w-md">
@@ -134,7 +163,7 @@ export function AuthPage({ onConnected }: AuthPageProps) {
           <CardDescription>Connect to your music source</CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="navidrome">
+          <Tabs defaultValue={platform.isElectron ? "local" : "navidrome"}>
             <TabsList className="mb-4 grid w-full grid-cols-4">
               <TabsTrigger value="navidrome"><Music className="mr-1 h-3 w-3" /> Nav</TabsTrigger>
               <TabsTrigger value="jellyfin"><Tv2 className="mr-1 h-3 w-3" /> JF</TabsTrigger>
@@ -203,32 +232,24 @@ export function AuthPage({ onConnected }: AuthPageProps) {
               <div className="flex gap-2">
                 <Input
                   className="flex-1"
-                  placeholder="Music folder path (e.g. /storage/music)"
+                  placeholder="Music folder path"
                   value={form.folder}
                   onChange={(e) => setForm({ ...form, folder: e.target.value })}
                 />
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={async () => {
-                    try {
-                      const { open } = await import("@tauri-apps/plugin-dialog");
-                      const selected = await open({ directory: true, title: "Select Music Folder" });
-                      if (selected && typeof selected === "string") {
-                        setForm({ ...form, folder: selected });
-                      }
-                    } catch {
-                      console.debug("[YT Music] Native dialog unavailable in web mode");
-                    }
-                  }}
-                  title="Browse folder"
-                >
+                <Button variant="outline" size="icon" onClick={handleBrowseFolder} title="Browse folder">
                   <FolderOpen className="h-4 w-4" />
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                On Android, use paths like /storage/emulated/0/Music
-              </p>
+              {!platform?.isElectron && (
+                <p className="text-xs text-muted-foreground">
+                  On Android, use paths like /storage/emulated/0/Music
+                </p>
+              )}
+              {platform?.isElectron && (
+                <p className="text-xs text-muted-foreground">
+                  Select a local folder to scan for music files
+                </p>
+              )}
               <Button className="w-full" onClick={handleLocalAuth}>
                 Scan Local Files
               </Button>

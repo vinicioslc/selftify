@@ -1,0 +1,58 @@
+export interface ElectronMpvApi {
+  isAvailable(): Promise<boolean>;
+  load(url: string): Promise<void>;
+  play(): Promise<void>;
+  pause(): Promise<void>;
+  stop(): Promise<void>;
+  seek(secs: number): Promise<void>;
+  volume(vol?: number): Promise<number | void>;
+  next(): Promise<void>;
+  prev(): Promise<void>;
+  clearPlaylist(): Promise<void>;
+  append(url: string, play?: boolean): Promise<void>;
+  getProperty(prop: string): Promise<any>;
+  setProperty(prop: string, val: any): Promise<void>;
+  listDevices(): Promise<{ name: string; description: string }[]>;
+  setDevice(name: string): Promise<void>;
+}
+
+export interface ElectronDbApi {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, expiresAt?: number): Promise<void>;
+  delete(key: string): Promise<void>;
+  queueSave(data: string): Promise<void>;
+  queueLoad(): Promise<string | null>;
+  songCacheGet(id: string): Promise<string | null>;
+  songCacheSet(id: string, data: string): Promise<void>;
+}
+
+export interface ElectronFsApi {
+  readFile(path: string): Promise<Uint8Array | null>;
+  readDirectory(path: string): Promise<{ name: string; isDirectory: boolean; isFile: boolean; path: string }[]>;
+  fileExists(path: string): Promise<boolean>;
+  getFileStats(path: string): Promise<{ size: number; modifiedAt: number } | null>;
+}
+
+export interface ElectronDialogApi {
+  openFolderPicker(): Promise<string | null>;
+  openFilePicker(options?: any): Promise<string | null>;
+}
+
+export interface ElectronSettingsApi {
+  get(key: string): Promise<any>;
+  set(key: string, value: any): void;
+}
+
+export interface ElectronApi {
+  mpv: ElectronMpvApi;
+  db: ElectronDbApi;
+  fs: ElectronFsApi;
+  dialog: ElectronDialogApi;
+  settings: ElectronSettingsApi;
+}
+
+declare global {
+  interface Window {
+    electronApi?: ElectronApi;
+  }
+}
