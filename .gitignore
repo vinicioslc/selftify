@@ -5,9 +5,13 @@ out/
 .DS_Store
 .env
 .env.local
-src-tauri/gen/
-src-tauri/target/
 *.tsbuildinfo
 
 # mpv binaries downloaded/built for packaging
 resources/mpv/
+
+# Personal developer instructions
+USER_INSTRUCTIONS.md
+
+# Legacy codebase
+legacy/*
