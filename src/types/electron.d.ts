@@ -43,12 +43,26 @@ export interface ElectronSettingsApi {
   set(key: string, value: any): void;
 }
 
+export interface ElectronYtApi {
+  fetch(url: string, init?: any): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: number[] }>;
+}
+
+export interface ElectronWindowControlsApi {
+  minimize(): void;
+  maximize(): void;
+  close(): void;
+  isMaximized(): Promise<boolean>;
+  onMaximizeChange(callback: (maximized: boolean) => void): () => void;
+}
+
 export interface ElectronApi {
   mpv: ElectronMpvApi;
   db: ElectronDbApi;
   fs: ElectronFsApi;
   dialog: ElectronDialogApi;
   settings: ElectronSettingsApi;
+  yt: ElectronYtApi;
+  windowControls: ElectronWindowControlsApi;
 }
 
 declare global {
