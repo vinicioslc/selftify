@@ -17,6 +17,11 @@ export type DbSong = {
   last_modified: number | null;
   added_at: number;
   updated_at: number;
+  mbz_recording_id: string | null;
+  mbz_track_id: string | null;
+  mbz_album_id: string | null;
+  mbz_release_group_id: string | null;
+  mbz_artist_id: string | null;
 };
 
 export type ScanState = {
@@ -27,4 +32,29 @@ export type ScanState = {
   current_dir: string;
   last_scanned_at: number | null;
   watcher_enabled: number;
+};
+
+export type DbArtist = {
+  id: string;
+  name: string;
+  mbz_artist_id: string | null;
+  biography: string | null;
+  image_url: string | null;
+  genres: string | null; // JSON array stored as string
+  country: string | null;
+  type: string | null;
+  disambiguation: string | null;
+  updated_at: number;
+};
+
+export type MbzMetadataCache = {
+  key: string;
+  data: string;
+  cached_at: number;
+};
+
+export type MbzSearchCache = {
+  key: string;
+  data: string;
+  expires_at: number;
 };

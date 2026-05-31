@@ -1,317 +1,377 @@
-import type { DbSong, ScanState } from "./local-database-types";
+import Dexie, { type EntityTable } from "dexie";
+import type { DbSong, DbArtist, ScanState, MbzMetadataCache, MbzSearchCache } from "./local-database-types";
 
-const DB_NAME = "ytmusic.db";
+interface ScanStateRow extends ScanState {
+  id: number;
+}
 
-let dbInstance: any = null;
-let dbIsIpc = false;
+interface ScanQueueItem {
+  id: number;
+  type: string;
+  path: string;
+  created_at: number;
+}
 
-async function initSchema(db: any) {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS songs (
-      id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-      artist_name TEXT NOT NULL DEFAULT 'Unknown Artist', album_name TEXT,
-      album_artist TEXT, track_number INTEGER, disc_number INTEGER,
-      duration REAL, bitrate INTEGER, sample_rate INTEGER, genre TEXT,
-      year INTEGER, file_size INTEGER, file_extension TEXT,
-      last_modified INTEGER, added_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    )
-  `);
-  await db.exec("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist_name)");
-  await db.exec("CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album_name)");
-  await db.exec("CREATE INDEX IF NOT EXISTS idx_songs_path ON songs(path)");
-  await db.exec("CREATE INDEX IF NOT EXISTS idx_songs_genre ON songs(genre)");
+class SelftifyDb extends Dexie {
+  songs!: EntityTable<DbSong, "id">;
+  artists!: EntityTable<DbArtist, "id">;
+  scan_state!: EntityTable<ScanStateRow, "id">;
+  scan_queue!: EntityTable<ScanQueueItem, "id">;
+  mbz_metadata_cache!: EntityTable<MbzMetadataCache, "key">;
+  mbz_search_cache!: EntityTable<MbzSearchCache, "key">;
 
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS scan_state (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      root_folder TEXT NOT NULL DEFAULT '',
-      scan_status TEXT NOT NULL DEFAULT 'idle',
-      total_files INTEGER DEFAULT 0, scanned_files INTEGER DEFAULT 0,
-      current_dir TEXT DEFAULT '', last_scanned_at INTEGER,
-      watcher_enabled INTEGER DEFAULT 0
-    )
-  `);
-
-  const rows = db.prepare("SELECT id FROM scan_state WHERE id = 1").all();
-  if (rows.length === 0) {
-    db.prepare("INSERT INTO scan_state (id, root_folder, scan_status) VALUES (1, '', 'idle')").run();
+  constructor() {
+    super("selftify");
+    this.version(1).stores({
+      songs: "id, &path, name, artist_name, album_name, genre",
+      scan_state: "id",
+      scan_queue: "++id",
+    });
+    this.version(2).stores({
+      songs: "id, &path, name, artist_name, album_name, genre, mbz_album_id, mbz_artist_id, mbz_recording_id",
+      scan_state: "id",
+      scan_queue: "++id",
+    });
+    this.version(3).stores({
+      songs: "id, &path, name, artist_name, album_name, genre, mbz_album_id, mbz_artist_id, mbz_recording_id",
+      scan_state: "id",
+      scan_queue: "++id",
+      mbz_metadata_cache: "key",
+      mbz_search_cache: "key, expires_at",
+    });
+    this.version(4).stores({
+      songs: "id, &path, name, artist_name, album_name, genre, mbz_album_id, mbz_artist_id, mbz_recording_id",
+      artists: "id, name, mbz_artist_id",
+      scan_state: "id",
+      scan_queue: "++id",
+      mbz_metadata_cache: "key",
+      mbz_search_cache: "key, expires_at",
+    });
   }
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS scan_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL, path TEXT NOT NULL, created_at INTEGER NOT NULL
-    )
-  `);
 }
 
-async function getDb(): Promise<{ db: any; isIpc: boolean }> {
-  if (dbInstance) return { db: dbInstance, isIpc: dbIsIpc };
-
-  try {
-    const api = (window as any).electronApi;
-    if (api?.db) {
-      dbInstance = { api: api.db, isIpc: true };
-      dbIsIpc = true;
-      return { db: dbInstance, isIpc: true };
-    }
-  } catch {}
-
-  const mock = createMockDb();
-  dbInstance = mock;
-  dbIsIpc = false;
-  return { db: mock, isIpc: false };
-}
-
-function createMockDb() {
-  const store = new Map<string, any[]>();
-  const scanQueueStore: any[] = [];
-  return {
-    prepare: (sql: string) => ({
-      run: (...params: any[]) => {},
-      all: (...params: any[]) => (store.get(sql) || []),
-      get: (...params: any[]) => null,
-    }),
-    exec: async () => {},
-    select: async (sql: string, params?: any[]) => {
-      if (sql.startsWith("SELECT COUNT")) return [{ count: 0 }];
-      if (sql.startsWith("SELECT DISTINCT genre")) return [];
-      if (sql.includes("FROM scan_queue") && sql.startsWith("SELECT")) {
-        if (sql.includes("COUNT")) return [{ count: scanQueueStore.length }];
-        return scanQueueStore.splice(0, 1);
-      }
-      if (sql.startsWith("SELECT * FROM scan_queue")) return scanQueueStore.splice(0, 1);
-      if (sql.startsWith("SELECT path FROM songs")) return [];
-      if (sql.startsWith("SELECT album_name")) return [];
-      if (sql.startsWith("SELECT artist_name")) return [];
-      return [];
-    },
-    execute: async () => {},
-    close: () => {},
-  };
-}
+export const db = new SelftifyDb();
 
 // ── Song CRUD ──
 
 export async function insertSong(song: Omit<DbSong, "updated_at">) {
-  const { db, isIpc } = await getDb();
-  if (isIpc) {
-    return (db as any).api.songCacheSet(`song:${song.id}`, JSON.stringify(song));
-  }
-  await db.execute(
-    `INSERT OR REPLACE INTO songs (id, path, name, artist_name, album_name, album_artist, track_number, disc_number, duration, bitrate, sample_rate, genre, year, file_size, file_extension, last_modified, added_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-    [song.id, song.path, song.name, song.artist_name, song.album_name, song.album_artist, song.track_number, song.disc_number, song.duration, song.bitrate, song.sample_rate, song.genre, song.year, song.file_size, song.file_extension, song.last_modified, song.added_at, Date.now()]
-  );
+  const full: DbSong = { ...song, updated_at: Date.now() };
+  await db.songs.put(full);
 }
 
 export async function batchInsertSongs(songs: Omit<DbSong, "updated_at">[]) {
-  const { db, isIpc } = await getDb();
-  if (isIpc) {
-    for (const s of songs) {
-      await (db as any).api.songCacheSet(`song:${s.id}`, JSON.stringify(s));
-    }
-    return;
-  }
-  for (const song of songs) {
-    await db.execute(
-      `INSERT OR REPLACE INTO songs (id, path, name, artist_name, album_name, album_artist, track_number, disc_number, duration, bitrate, sample_rate, genre, year, file_size, file_extension, last_modified, added_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-      [song.id, song.path, song.name, song.artist_name, song.album_name, song.album_artist, song.track_number, song.disc_number, song.duration, song.bitrate, song.sample_rate, song.genre, song.year, song.file_size, song.file_extension, song.last_modified, song.added_at, Date.now()]
-    );
-  }
+  const now = Date.now();
+  const full: DbSong[] = songs.map((s) => ({ ...s, updated_at: now }));
+  await db.songs.bulkPut(full);
 }
 
 export async function deleteAllSongs() {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return;
-  try { await db.execute("DELETE FROM songs"); } catch {}
+  await db.songs.clear();
 }
 
 export async function deleteSong(id: string) {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return;
-  try { await db.execute("DELETE FROM songs WHERE id = $1", [id]); } catch {}
+  await db.songs.delete(id);
 }
 
 export async function getAllSongs(): Promise<DbSong[]> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
-  try { return (await db.select("SELECT * FROM songs")) as any; }
-  catch { return []; }
+  try {
+    return await db.songs.toArray();
+  } catch {
+    return [];
+  }
 }
 
 export async function getSongById(id: string): Promise<DbSong | null> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return null;
   try {
-    const rows = await db.select("SELECT * FROM songs WHERE id = $1", [id]);
-    return (rows[0] as any) || null;
-  } catch { return null; }
+    return (await db.songs.get(id)) || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function searchSongs(query: string, limit = 50): Promise<DbSong[]> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
   try {
-    return (await db.select(
-      "SELECT * FROM songs WHERE name LIKE $1 OR artist_name LIKE $1 OR album_name LIKE $1 LIMIT $2",
-      [`%${query}%`, limit]
-    )) as any;
-  } catch { return []; }
+    const q = query.toLowerCase();
+    const results: DbSong[] = [];
+    await db.songs
+      .filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          s.artist_name.toLowerCase().includes(q) ||
+          (s.album_name || "").toLowerCase().includes(q),
+      )
+      .limit(limit)
+      .each((s) => results.push(s));
+    return results;
+  } catch {
+    return [];
+  }
 }
 
 export async function getAllPaths(): Promise<string[]> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
   try {
-    const rows = await db.select("SELECT path FROM songs");
-    return rows.map((r: any) => r.path);
-  } catch { return []; }
+    const paths: string[] = [];
+    await db.songs.each((s) => paths.push(s.path));
+    return paths;
+  } catch {
+    return [];
+  }
 }
 
 // ── Aggregations ──
 
 export async function getSongCount(): Promise<number> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return 0;
   try {
-    const rows = await db.select("SELECT COUNT(*) as count FROM songs");
-    return rows[0]?.count || 0;
-  } catch { return 0; }
+    return await db.songs.count();
+  } catch {
+    return 0;
+  }
 }
 
 export async function getArtistCount(): Promise<number> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return 0;
   try {
-    const rows = await db.select("SELECT COUNT(DISTINCT artist_name) as count FROM songs");
-    return rows[0]?.count || 0;
-  } catch { return 0; }
+    const keys = await db.songs.orderBy("artist_name").uniqueKeys();
+    return keys.length;
+  } catch {
+    return 0;
+  }
 }
 
 export async function getAlbumCount(): Promise<number> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return 0;
   try {
-    const rows = await db.select("SELECT COUNT(DISTINCT album_name) as count FROM songs WHERE album_name IS NOT NULL");
-    return rows[0]?.count || 0;
-  } catch { return 0; }
+    const albums = new Set<string>();
+    await db.songs
+      .filter((s) => s.album_name != null)
+      .each((s) => albums.add(s.album_name as string));
+    return albums.size;
+  } catch {
+    return 0;
+  }
 }
 
 export async function getDistinctGenres(): Promise<string[]> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
   try {
-    const rows = await db.select("SELECT DISTINCT genre FROM songs WHERE genre IS NOT NULL");
-    return rows.map((r: any) => r.genre);
-  } catch { return []; }
+    const keys = await db.songs.orderBy("genre").uniqueKeys();
+    return keys.filter((g): g is string => g != null);
+  } catch {
+    return [];
+  }
 }
 
 // ── Albums / Artists ──
 
-export async function getAlbumsFromSongs(): Promise<Array<{ name: string; artist_name: string; song_count: number; duration: number }>> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
+export async function getAlbumsFromSongs(): Promise<
+  Array<{ name: string; artist_name: string; song_count: number; duration: number }>
+> {
   try {
-    return (await db.select(
-      `SELECT album_name as name, artist_name, COUNT(*) as song_count, COALESCE(SUM(duration), 0) as duration FROM songs WHERE album_name IS NOT NULL GROUP BY album_name, artist_name ORDER BY artist_name, album_name`
-    )) as any;
-  } catch { return []; }
+    const all = await db.songs.toArray();
+    const groups = new Map<
+      string,
+      { name: string; artist_name: string; song_count: number; duration: number }
+    >();
+    for (const s of all) {
+      if (!s.album_name) continue;
+      const key = `${s.artist_name}|${s.album_name}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.song_count++;
+        existing.duration += s.duration || 0;
+      } else {
+        groups.set(key, {
+          name: s.album_name,
+          artist_name: s.artist_name,
+          song_count: 1,
+          duration: s.duration || 0,
+        });
+      }
+    }
+    return Array.from(groups.values()).sort(
+      (a, b) =>
+        a.artist_name.localeCompare(b.artist_name) ||
+        a.name.localeCompare(b.name),
+    );
+  } catch {
+    return [];
+  }
 }
 
-export async function getArtistsFromSongs(): Promise<Array<{ name: string; song_count: number; album_count: number }>> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
+export async function getArtistsFromSongs(): Promise<
+  Array<{ name: string; song_count: number; album_count: number }>
+> {
   try {
-    return (await db.select(
-      `SELECT artist_name as name, COUNT(*) as song_count, COUNT(DISTINCT album_name) as album_count FROM songs GROUP BY artist_name ORDER BY artist_name`
-    )) as any;
-  } catch { return []; }
+    const all = await db.songs.toArray();
+    const groups = new Map<
+      string,
+      { song_count: number }
+    >();
+    const artistAlbums = new Map<string, Set<string>>();
+    for (const s of all) {
+      if (!s.artist_name) continue;
+      const g = groups.get(s.artist_name);
+      if (g) {
+        g.song_count++;
+      } else {
+        groups.set(s.artist_name, { song_count: 1 });
+      }
+      if (!artistAlbums.has(s.artist_name))
+        artistAlbums.set(s.artist_name, new Set());
+      if (s.album_name) artistAlbums.get(s.artist_name)!.add(s.album_name);
+    }
+    return Array.from(groups.entries())
+      .map(([name, g]) => ({
+        name,
+        song_count: g.song_count,
+        album_count: artistAlbums.get(name)?.size || 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
 }
 
-export async function getSongsByAlbum(albumArtist: string, album: string): Promise<DbSong[]> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
+export async function getSongsByAlbum(
+  albumArtist: string,
+  album: string,
+): Promise<DbSong[]> {
   try {
-    return (await db.select(
-      `SELECT * FROM songs WHERE (album_artist = $1 OR artist_name = $1) AND album_name = $2 ORDER BY track_number, name`,
-      [albumArtist, album]
-    )) as any;
-  } catch { return []; }
+    const byAlbum = await db.songs
+      .where("album_name")
+      .equals(album)
+      .toArray();
+    return byAlbum
+      .filter(
+        (s) =>
+          s.artist_name === albumArtist || s.album_artist === albumArtist,
+      )
+      .sort((a, b) => (a.track_number || 0) - (b.track_number || 0) || a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
 }
 
 export async function getSongsByArtist(artist: string): Promise<DbSong[]> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return [];
   try {
-    return (await db.select(
-      `SELECT * FROM songs WHERE artist_name = $1 ORDER BY album_name, track_number, name`,
-      [artist]
-    )) as any;
-  } catch { return []; }
+    return await db.songs
+      .where("artist_name")
+      .equals(artist)
+      .sortBy("album_name");
+  } catch {
+    return [];
+  }
 }
 
 // ── Scan Queue ──
 
-export async function enqueueScan(items: Array<{ type: string; path: string }>) {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return;
+export async function enqueueScan(
+  items: Array<{ type: string; path: string }>,
+) {
   const now = Date.now();
-  for (const item of items) {
-    await db.execute(
-      "INSERT INTO scan_queue (type, path, created_at) VALUES ($1, $2, $3)",
-      [item.type, item.path, now]
-    );
+  const rows = items.map((item) => ({ type: item.type, path: item.path, created_at: now } as Omit<ScanQueueItem, "id">));
+  await db.scan_queue.bulkAdd(rows as any);
+}
+
+export async function dequeueScan(): Promise<{
+  type: string;
+  path: string;
+} | null> {
+  try {
+    const item = await db.scan_queue.orderBy("id").first();
+    if (!item) return null;
+    await db.scan_queue.delete(item.id);
+    return { type: item.type, path: item.path };
+  } catch {
+    return null;
   }
 }
 
-export async function dequeueScan(): Promise<{ type: string; path: string } | null> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return null;
-  try {
-    const rows = await db.select("SELECT * FROM scan_queue ORDER BY id ASC LIMIT 1");
-    if (!rows || rows.length === 0) return null;
-    const item = rows[0] as any;
-    await db.execute("DELETE FROM scan_queue WHERE id = $1", [item.id]);
-    return { type: item.type, path: item.path };
-  } catch { return null; }
-}
-
 export async function getQueueCount(): Promise<number> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return 0;
   try {
-    const rows = await db.select("SELECT COUNT(*) as count FROM scan_queue");
-    return rows[0]?.count || 0;
-  } catch { return 0; }
+    return await db.scan_queue.count();
+  } catch {
+    return 0;
+  }
 }
 
 export async function clearQueue() {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return;
-  try { await db.execute("DELETE FROM scan_queue"); } catch {}
+  try {
+    await db.scan_queue.clear();
+  } catch {}
 }
 
 // ── Scan State ──
 
 export async function getScanState(): Promise<ScanState | null> {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return null;
   try {
-    const rows = await db.select("SELECT * FROM scan_state WHERE id = 1");
-    return (rows[0] as any) || null;
-  } catch { return null; }
+    const row = await db.scan_state.get(1);
+    if (!row) return null;
+    const { id: _, ...state } = row;
+    return state;
+  } catch {
+    return null;
+  }
 }
 
 export async function updateScanState(state: Partial<ScanState>) {
-  const { db, isIpc } = await getDb();
-  if (isIpc) return;
   try {
-    const keys = Object.keys(state);
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const values = Object.values(state);
-    await db.execute(`UPDATE scan_state SET ${setClause} WHERE id = 1`, values);
+    const existing =
+      (await db.scan_state.get(1)) || {
+        id: 1,
+        root_folder: "",
+        scan_status: "idle",
+        total_files: 0,
+        scanned_files: 0,
+        current_dir: "",
+        last_scanned_at: null,
+        watcher_enabled: 0,
+      };
+    await db.scan_state.put({ ...existing, ...state });
+  } catch {}
+}
+
+// ── Artist CRUD ──
+
+export async function upsertArtist(artist: Omit<DbArtist, "updated_at">) {
+  const full: DbArtist = { ...artist, updated_at: Date.now() };
+  await db.artists.put(full);
+}
+
+export async function getArtistByName(name: string): Promise<DbArtist | null> {
+  try {
+    return (await db.artists.where("name").equals(name).first()) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getArtistByMbid(mbid: string): Promise<DbArtist | null> {
+  try {
+    return (await db.artists.where("mbz_artist_id").equals(mbid).first()) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getAllArtists(): Promise<DbArtist[]> {
+  try {
+    return await db.artists.toArray();
+  } catch {
+    return [];
+  }
+}
+
+export async function getIndexedArtistCount(): Promise<number> {
+  try {
+    return await db.artists.count();
+  } catch {
+    return 0;
+  }
+}
+
+export async function deleteArtist(id: string) {
+  try {
+    await db.artists.delete(id);
   } catch {}
 }
 
 // Re-export types
-export type { DbSong, ScanState };
+export type { DbSong, DbArtist, ScanState, MbzMetadataCache, MbzSearchCache };
