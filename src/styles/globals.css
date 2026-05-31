@@ -88,6 +88,7 @@ body,
 :root {
   --player-bar-height: 90px;
   --sidebar-width: 280px;
+  --topbar-height: 38px;
 }
 
 @media (max-width: 768px) {

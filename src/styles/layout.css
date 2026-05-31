@@ -1,14 +1,29 @@
-/* CSS Grid layout matching Feishin's 3-row structure */
+/* CSS Grid layout */
 .layout {
   display: grid;
   grid-template-areas:
+    "topbar"
     "main-content"
     "player";
-  grid-template-rows: 1fr var(--player-bar-height);
+  grid-template-rows: var(--topbar-height) 1fr var(--player-bar-height);
   grid-template-columns: 1fr;
   gap: 0;
   height: 100%;
   overflow: hidden;
+  padding-bottom: 6px;
+  box-sizing: border-box;
+}
+
+/* TopBar drag region */
+.topbar {
+  grid-area: topbar;
+  -webkit-app-region: drag;
+  z-index: 300;
+}
+
+.topbar button,
+.topbar [data-no-drag] {
+  -webkit-app-region: no-drag;
 }
 
 .main-content {
