@@ -10,9 +10,5 @@ export const SCAN_STATUS_LABEL: Record<LocalScanStatus, string> = {
 };
 
 export const ORIGIN_TYPE_LABEL: Record<string, string> = {
-  [OriginType.JELLYFIN]: "Jellyfin",
-  [OriginType.NAVIDROME]: "Navidrome",
-  [OriginType.SUBISONIC]: "Subsonic",
-  [OriginType.YOUTUBE_MUSIC]: "YouTube Music",
   [OriginType.LOCAL]: "Local",
 };

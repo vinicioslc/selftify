@@ -24,11 +24,12 @@ export type HomePageCard = {
 export type AppView =
   | "home"
   | "search"
-  | "library-albums"
-  | "library-artists"
-  | "library-songs"
+  | "local-albums"
+  | "local-artists"
+  | "local-songs"
   | "playlists"
   | "settings"
+  | "settings-visualizer"
   | "now-playing"
   | "album-detail"
   | "artist-detail";

@@ -1,8 +1,4 @@
 export enum OriginType {
-  JELLYFIN = "jellyfin",
-  NAVIDROME = "navidrome",
-  SUBISONIC = "subsonic",
-  YOUTUBE_MUSIC = "youtubemusic",
   LOCAL = "local",
 }
 
@@ -54,6 +50,9 @@ export type Song = {
   genres?: string[];
   releaseYear?: number;
   isVideo?: boolean;
+  mbzRecordingId?: string;
+  mbzTrackId?: string;
+  mbzArtistId?: string;
 };
 
 export type Album = {
@@ -67,6 +66,8 @@ export type Album = {
   imageUrl: string | null;
   releaseYear?: number;
   genres?: string[];
+  mbzId?: string;
+  mbzReleaseGroupId?: string;
 };
 
 export type AlbumArtist = {
@@ -79,6 +80,7 @@ export type AlbumArtist = {
   imageUrl: string | null;
   biography?: string;
   genres?: string[];
+  mbz?: string;
 };
 
 export type Playlist = {
@@ -102,11 +104,11 @@ export type Origin = {
   id: string;
   name: string;
   type: OriginType;
-  url?: string;
-  credential?: string;
+  folderPath?: string;
+  downloadFolder?: string;
+  enableOnlineSearch?: boolean;
   musicBrainzToken?: string;
-  musicBrainzSearchMode?: "mixed" | "musicbrainz" | "youtube";
-  useMusicBrainz?: boolean;
+  youtubeMusicHeaders?: string;
 };
 
 export type PlayQueueAddOptions = {

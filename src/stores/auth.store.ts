@@ -1,6 +1,20 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { Origin } from "../types/domain-types";
+import { Origin, OriginType } from "../types/domain-types";
+
+function migrateOrigin(old: any): Origin {
+  if (!old) return old;
+  return {
+    id: old.id,
+    name: old.name,
+    type: OriginType.LOCAL,
+    folderPath: old.folderPath || old.url || old.baseUrl || undefined,
+    downloadFolder: old.downloadFolder || old.folderPath || old.url || undefined,
+    enableOnlineSearch: old.enableOnlineSearch ?? old.useMusicBrainz ?? false,
+    musicBrainzToken: old.musicBrainzToken,
+    youtubeMusicHeaders: old.youtubeMusicHeaders || undefined,
+  };
+}
 
 type AuthState = {
   currentOrigin: Origin | null;
@@ -45,6 +59,15 @@ export const useAuthStore = create<AuthState>()(
         origins: state.origins,
         currentOrigin: state.currentOrigin,
       }),
+      merge: (persisted: any, current: AuthState) => {
+        if (persisted?.origins) {
+          persisted.origins = persisted.origins.map(migrateOrigin);
+        }
+        if (persisted?.currentOrigin) {
+          persisted.currentOrigin = migrateOrigin(persisted.currentOrigin);
+        }
+        return { ...current, ...persisted };
+      },
     }
   )
 );

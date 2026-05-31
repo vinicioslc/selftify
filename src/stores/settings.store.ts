@@ -15,6 +15,12 @@ type SettingsState = {
   sidebarWidth: number;
   activeAudioOutputs: string[];
   autoSwitchOutput: boolean;
+  sidebarAlbumCollapsed: boolean;
+  sidebarShowVisualizer: boolean;
+  animationsEnabled: boolean;
+  imageFetchRateLimitMs: number;
+  imageFetchMaxConcurrent: number;
+  imageFetchTimeoutMs: number;
 
   setTheme: (theme: "dark" | "light" | "system") => void;
   setVisualizerType: (type: VisualizerType) => void;
@@ -27,6 +33,12 @@ type SettingsState = {
   setSidebarWidth: (width: number) => void;
   setActiveAudioOutputs: (outputs: string[]) => void;
   setAutoSwitchOutput: (enabled: boolean) => void;
+  setSidebarAlbumCollapsed: (collapsed: boolean) => void;
+  setSidebarShowVisualizer: (show: boolean) => void;
+  setAnimationsEnabled: (enabled: boolean) => void;
+  setImageFetchRateLimitMs: (ms: number) => void;
+  setImageFetchMaxConcurrent: (n: number) => void;
+  setImageFetchTimeoutMs: (ms: number) => void;
   toggleSidebar: () => void;
 };
 
@@ -44,6 +56,12 @@ export const useSettingsStore = create<SettingsState>()(
       sidebarWidth: 280,
       activeAudioOutputs: [],
       autoSwitchOutput: true,
+      sidebarAlbumCollapsed: false,
+      sidebarShowVisualizer: false,
+      animationsEnabled: true,
+      imageFetchRateLimitMs: 200,
+      imageFetchMaxConcurrent: 8,
+      imageFetchTimeoutMs: 10000,
 
       setTheme: (theme) => set({ theme }),
       setVisualizerType: (visualizerType) => set({ visualizerType }),
@@ -56,6 +74,12 @@ export const useSettingsStore = create<SettingsState>()(
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
       setActiveAudioOutputs: (activeAudioOutputs) => set({ activeAudioOutputs }),
       setAutoSwitchOutput: (autoSwitchOutput) => set({ autoSwitchOutput }),
+      setSidebarAlbumCollapsed: (sidebarAlbumCollapsed) => set({ sidebarAlbumCollapsed }),
+      setSidebarShowVisualizer: (sidebarShowVisualizer) => set({ sidebarShowVisualizer }),
+      setAnimationsEnabled: (animationsEnabled) => set({ animationsEnabled }),
+      setImageFetchRateLimitMs: (imageFetchRateLimitMs) => set({ imageFetchRateLimitMs }),
+      setImageFetchMaxConcurrent: (imageFetchMaxConcurrent) => set({ imageFetchMaxConcurrent }),
+      setImageFetchTimeoutMs: (imageFetchTimeoutMs) => set({ imageFetchTimeoutMs }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
     }),
     {
