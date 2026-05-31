@@ -3,6 +3,18 @@
   "appName": "YT Music Player",
   "webDir": "out/web",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "allowNavigation": [
+      "*.youtube.com",
+      "*.ytimg.com",
+      "*.ggpht.com",
+      "*.google.com",
+      "*.googlevideo.com"
+    ]
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
   }
 }

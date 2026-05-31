@@ -28,7 +28,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: yt-music-player-linux
+          name: selftify-linux
           path: dist/*.{AppImage,deb}
 
   windows:
@@ -50,7 +50,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: yt-music-player-windows
+          name: selftify-windows
           path: dist/*.{exe,msi}
 
   macos:
@@ -72,7 +72,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: yt-music-player-macos
+          name: selftify-macos
           path: dist/*.{dmg,zip}
 
   create-release:
@@ -85,7 +85,7 @@ jobs:
 
       - name: Generate release notes
         run: |
-          echo "## YT Music Player ${{ github.ref_name }}" > release-notes.md
+          echo "## Selftify ${{ github.ref_name }}" > release-notes.md
           echo "" >> release-notes.md
           echo "### Downloads" >> release-notes.md
           echo "- Linux: AppImage + deb" >> release-notes.md

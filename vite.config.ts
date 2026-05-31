@@ -13,6 +13,12 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    proxy: {
+      "/youtubei": {
+        target: "https://www.youtube.com",
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     target: "chrome120",
