@@ -2,7 +2,7 @@
 
 > **Status**: pending  
 > **Created**: 2026-05-28  
-> **Target**: `yt-music-player` — local music cover art support
+> **Target**: `selftify` — local music cover art support
 
 ---
 

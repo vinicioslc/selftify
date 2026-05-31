@@ -2,7 +2,7 @@
 
 > **Status**: implemented  
 > **Created**: 2026-05-28  
-> **Target**: `yt-music-player` — drill-down navigation for albums and artists
+> **Target**: `selftify` — drill-down navigation for albums and artists
 
 ---
 
