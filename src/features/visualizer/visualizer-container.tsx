@@ -4,12 +4,13 @@ import { AudioMotionVisualizer } from "./audiomotion-visualizer";
 
 interface Props {
   fullScreen?: boolean;
+  force?: boolean;
 }
 
-export function VisualizerContainer({ fullScreen }: Props) {
+export function VisualizerContainer({ fullScreen, force }: Props) {
   const { visualizerEnabled, visualizerType } = useSettingsStore();
 
-  if (!visualizerEnabled) return null;
+  if (!visualizerEnabled && !force) return null;
 
   if (visualizerType === "butterchurn") {
     return <ButterchurnVisualizer enabled fullScreen={fullScreen} />;

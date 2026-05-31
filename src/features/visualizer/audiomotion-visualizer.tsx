@@ -13,19 +13,28 @@ export function AudioMotionVisualizer({ enabled, fullScreen }: Props) {
   useEffect(() => {
     if (!enabled || !containerRef.current) return;
 
+    let isMounted = true;
+    let resizeObserver: ResizeObserver | null = null;
+
     async function init() {
       try {
-        const AudioMotionAnalyzer = (await import("audiomotion-analyzer")).default;
-        const container = containerRef.current!;
         const ctx = getAudioContext();
         const analyser = getAnalyser();
         if (!ctx || !analyser) return;
 
+        const AudioMotionAnalyzer = (await import("audiomotion-analyzer")).default;
+        if (!isMounted) return;
+
+        const container = containerRef.current!;
+        const rect = container.getBoundingClientRect();
+        const width = rect.width || 600;
+        const height = rect.height || 600;
+
         const visualizer = new AudioMotionAnalyzer(container, {
           audioCtx: ctx,
           source: analyser,
-          width: container.clientWidth,
-          height: container.clientHeight,
+          width,
+          height,
           mode: 10,
           barSpace: 0.3,
           radial: false,
@@ -36,6 +45,14 @@ export function AudioMotionVisualizer({ enabled, fullScreen }: Props) {
         });
 
         visualizerRef.current = visualizer;
+
+        resizeObserver = new ResizeObserver(() => {
+          const r = container.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            visualizer.setOptions({ width: r.width, height: r.height });
+          }
+        });
+        resizeObserver.observe(container);
       } catch (err) {
         console.warn("AudioMotion init error:", err);
       }
@@ -44,6 +61,8 @@ export function AudioMotionVisualizer({ enabled, fullScreen }: Props) {
     init();
 
     return () => {
+      isMounted = false;
+      resizeObserver?.disconnect();
       if (visualizerRef.current) {
         visualizerRef.current.destroy();
         visualizerRef.current = null;
@@ -56,7 +75,7 @@ export function AudioMotionVisualizer({ enabled, fullScreen }: Props) {
   return (
     <div
       ref={containerRef}
-      className={`pointer-events-none ${fullScreen ? "absolute inset-0 z-0" : "h-full w-full"}`}
+      className={`pointer-events-none ${fullScreen ? "absolute inset-0 z-0" : "h-full w-full overflow-hidden"}`}
     />
   );
 }
