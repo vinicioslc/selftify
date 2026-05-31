@@ -1,8 +1,9 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore, VisualizerType } from "../../stores/settings.store";
-import { OriginType } from "../../types/domain-types";
+import { Origin, OriginType } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { Textarea } from "../../components/ui/textarea";
 import { Switch } from "../../components/ui/switch";
 import { Slider } from "../../components/ui/slider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -10,12 +11,17 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
 import { useState, useEffect } from "react";
-import { Plus, Trash2, Volume2, Check } from "lucide-react";
+import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe } from "lucide-react";
 import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
 import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
+import { OriginEditDialog } from "./origin-edit-dialog";
 
-export function SettingsPage() {
-  const { origins, addOrigin, removeOrigin, setCurrentOrigin } = useAuthStore();
+type SettingsPageProps = {
+  initialTab?: string;
+};
+
+export function SettingsPage({ initialTab }: SettingsPageProps) {
+  const { origins, addOrigin, setCurrentOrigin } = useAuthStore();
   const {
     theme, setTheme,
     visualizerType, setVisualizerType,
@@ -23,8 +29,12 @@ export function SettingsPage() {
     crossfadeEnabled, setCrossfadeEnabled,
     crossfadeDuration, setCrossfadeDuration,
     sidebarCollapsed,
+    animationsEnabled, setAnimationsEnabled,
     activeAudioOutputs, setActiveAudioOutputs,
     autoSwitchOutput, setAutoSwitchOutput,
+    imageFetchRateLimitMs, setImageFetchRateLimitMs,
+    imageFetchMaxConcurrent, setImageFetchMaxConcurrent,
+    imageFetchTimeoutMs, setImageFetchTimeoutMs,
   } = useSettingsStore();
 
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
@@ -44,21 +54,66 @@ export function SettingsPage() {
     };
   }, [audioManagerRef]);
 
-  const [newServer, setNewServer] = useState({
-    name: "",
-    type: OriginType.NAVIDROME,
-    url: "",
-  });
+  const [editingOrigin, setEditingOrigin] = useState<Origin | null>(null);
 
-  function handleAddServer() {
-    if (!newServer.name) return;
-    addOrigin({
-      id: crypto.randomUUID(),
-      name: newServer.name,
-      type: newServer.type,
-      url: newServer.url || undefined,
-    });
-    setNewServer({ name: "", type: OriginType.NAVIDROME, url: "" });
+  const [form, setForm] = useState({
+    folderPath: "",
+    downloadFolder: "",
+    enableOnlineSearch: false,
+    musicBrainzToken: "",
+    youtubeMusicHeaders: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  function handleAddLocal() {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      if (!form.folderPath) {
+        setAuthError("Please select a music folder");
+        return;
+      }
+      const origin = {
+        id: crypto.randomUUID(),
+        name: form.folderPath.split("/").filter(Boolean).pop() || "Local Files",
+        type: OriginType.LOCAL,
+        folderPath: form.folderPath,
+        downloadFolder: form.downloadFolder || form.folderPath,
+        enableOnlineSearch: form.enableOnlineSearch,
+        musicBrainzToken: form.musicBrainzToken || undefined,
+        youtubeMusicHeaders: form.youtubeMusicHeaders || undefined,
+      };
+      addOrigin(origin);
+      setCurrentOrigin(origin);
+
+      if (form.folderPath) {
+        import("../../api/indexer/indexer").then(({ getIndexer }) =>
+          getIndexer(origin).then((idx) => idx.start(origin))
+        );
+      }
+      setForm({ folderPath: "", downloadFolder: "", enableOnlineSearch: false, musicBrainzToken: "", youtubeMusicHeaders: "" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleBrowseFolder() {
+    const { getPlatformService } = await import("../../services/platform/factory");
+    const platform = await getPlatformService();
+    const selected = await platform.openFolderPicker();
+    if (selected) {
+      setForm({ ...form, folderPath: selected, downloadFolder: selected });
+    }
+  }
+
+  async function handleBrowseDownload() {
+    const { getPlatformService } = await import("../../services/platform/factory");
+    const platform = await getPlatformService();
+    const selected = await platform.openFolderPicker();
+    if (selected) {
+      setForm({ ...form, downloadFolder: selected });
+    }
   }
 
   return (
@@ -70,73 +125,141 @@ export function SettingsPage() {
             <p className="text-muted-foreground">Configure your music sources and preferences</p>
           </div>
 
-          <Tabs defaultValue="servers">
+          <Tabs defaultValue={initialTab || "servers"}>
             <TabsList>
               <TabsTrigger value="servers">Servers</TabsTrigger>
               <TabsTrigger value="playback">Playback</TabsTrigger>
               <TabsTrigger value="audio">Audio</TabsTrigger>
               <TabsTrigger value="visualizer">Visualizer</TabsTrigger>
+              <TabsTrigger value="network">Network</TabsTrigger>
               <TabsTrigger value="appearance">Appearance</TabsTrigger>
             </TabsList>
 
             <TabsContent value="servers" className="space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-lg">Connected Servers</CardTitle>
-                  <CardDescription>Add and manage your music origins</CardDescription>
+                  <CardTitle className="text-lg">Connected Sources</CardTitle>
+                  <CardDescription>Manage your local music sources</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {origins.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No sources configured yet. Add one below.</p>
+                  )}
                   {origins.map((o) => (
                     <div key={o.id} className="flex items-center justify-between rounded-lg border p-3">
                       <div>
                         <p className="font-medium">{o.name}</p>
-                        <p className="text-xs text-muted-foreground">{o.type} {o.url ? `• ${o.url}` : ""}</p>
+                        <p className="text-xs text-muted-foreground">
+                          LOCAL {o.folderPath ? `\u2022 ${o.folderPath}` : ""}
+                          {o.enableOnlineSearch ? " \u2022 Online Search" : ""}
+                        </p>
                       </div>
                       <div className="flex gap-2">
                         <Button variant="outline" size="sm" onClick={() => setCurrentOrigin(o)}>
                           Select
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => removeOrigin(o.id)}>
+                        <Button variant="ghost" size="icon" onClick={() => setEditingOrigin(o)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => useAuthStore.getState().removeOrigin(o.id)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
                     </div>
                   ))}
+                  {editingOrigin && (
+                    <OriginEditDialog
+                      origin={editingOrigin}
+                      open={!!editingOrigin}
+                      onOpenChange={(open) => { if (!open) setEditingOrigin(null); }}
+                    />
+                  )}
                 </CardContent>
               </Card>
 
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-lg">Add Server</CardTitle>
+                  <CardTitle className="text-lg">Add Source</CardTitle>
+                  <CardDescription>Add a local music folder</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <Input
-                    placeholder="Server name"
-                    value={newServer.name}
-                    onChange={(e) => setNewServer({ ...newServer, name: e.target.value })}
-                  />
-                  <div className="flex gap-2">
-                    {[OriginType.NAVIDROME, OriginType.JELLYFIN, OriginType.YOUTUBE_MUSIC].map((type) => (
-                      <Button
-                        key={type}
-                        variant={newServer.type === type ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setNewServer({ ...newServer, type })}
-                      >
-                        {type}
+                  <div>
+                    <label className="text-sm font-medium">Music Folder</label>
+                    <div className="mt-1 flex gap-2">
+                      <Input
+                        className="flex-1"
+                        placeholder="/home/user/Music"
+                        value={form.folderPath}
+                        onChange={(e) => setForm({ ...form, folderPath: e.target.value })}
+                      />
+                      <Button variant="outline" size="icon" onClick={handleBrowseFolder} title="Browse folder">
+                        <FolderOpen className="h-4 w-4" />
                       </Button>
-                    ))}
+                    </div>
                   </div>
-                  <Input
-                    placeholder="Server URL (for Navidrome/Jellyfin)"
-                    value={newServer.url}
-                    onChange={(e) => setNewServer({ ...newServer, url: e.target.value })}
-                  />
-                  <div className="flex gap-2">
-                    <Button onClick={handleAddServer}>
-                      <Plus className="mr-2 h-4 w-4" /> Add
-                    </Button>
+
+                  <div>
+                    <label className="text-sm font-medium">Download Folder (default = Music Folder)</label>
+                    <div className="mt-1 flex gap-2">
+                      <Input
+                        className="flex-1"
+                        placeholder="Same as music folder"
+                        value={form.downloadFolder}
+                        onChange={(e) => setForm({ ...form, downloadFolder: e.target.value })}
+                      />
+                      <Button variant="outline" size="icon" onClick={handleBrowseDownload} title="Browse download folder">
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
+
+                  <div className="flex items-center gap-2 rounded-lg border p-3">
+                    <Switch
+                      id="enable-online"
+                      checked={form.enableOnlineSearch}
+                      onCheckedChange={(v) => setForm({ ...form, enableOnlineSearch: v })}
+                    />
+                    <label htmlFor="enable-online" className="text-sm font-medium leading-none">
+                      <Globe className="mr-1 inline h-3 w-3" /> Enable Online Search
+                    </label>
+                  </div>
+
+                  {form.enableOnlineSearch && (
+                    <div className="space-y-4 rounded-lg border p-3">
+                      <p className="text-xs font-medium text-muted-foreground">Online Search Config</p>
+
+                      <div>
+                        <label className="text-sm font-medium">MusicBrainz Token</label>
+                        <Input
+                          className="mt-1"
+                          placeholder="abc-123-def-456 (optional)"
+                          value={form.musicBrainzToken}
+                          onChange={(e) => setForm({ ...form, musicBrainzToken: e.target.value })}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium">YouTube Headers</label>
+                        <Textarea
+                          className="mt-1 min-h-[100px] font-mono text-xs"
+                          placeholder={"cookie: abc123\nauthorization: SAPISIDHASH...\nuser-agent: Mozilla/5.0..."}
+                          value={form.youtubeMusicHeaders}
+                          onChange={(e) => setForm({ ...form, youtubeMusicHeaders: e.target.value })}
+                        />
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Paste HTTP headers from a browser session on music.youtube.com. One per line (key: value).
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {authError && (
+                    <p className="text-sm text-destructive">{authError}</p>
+                  )}
+
+                  <Button className="w-full" onClick={handleAddLocal} disabled={loading}>
+                    {loading ? "Scanning..." : form.enableOnlineSearch ? "Add Local Source + Online Search" : "Add Local Source"}
+                  </Button>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -290,6 +413,71 @@ export function SettingsPage() {
               </Card>
             </TabsContent>
 
+            <TabsContent value="network" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Network Settings</CardTitle>
+                  <CardDescription>Control how the app fetches cover art and other images</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Rate Limit (ms)</span>
+                      <span>{imageFetchRateLimitMs}ms</span>
+                    </div>
+                    <Slider
+                      value={[imageFetchRateLimitMs]}
+                      onValueChange={([v]) => setImageFetchRateLimitMs(v)}
+                      min={0}
+                      max={5000}
+                      step={100}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Minimum interval between image requests (0 = no limit)
+                    </p>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Max Concurrent Fetches</span>
+                      <span>{imageFetchMaxConcurrent}</span>
+                    </div>
+                    <Slider
+                      value={[imageFetchMaxConcurrent]}
+                      onValueChange={([v]) => setImageFetchMaxConcurrent(v)}
+                      min={1}
+                      max={20}
+                      step={1}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Maximum parallel image downloads
+                    </p>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Fetch Timeout (ms)</span>
+                      <span>{imageFetchTimeoutMs}ms</span>
+                    </div>
+                    <Slider
+                      value={[imageFetchTimeoutMs]}
+                      onValueChange={([v]) => setImageFetchTimeoutMs(v)}
+                      min={1000}
+                      max={60000}
+                      step={1000}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Time before an image request is aborted
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             <TabsContent value="appearance" className="space-y-4">
               <Card>
                 <CardHeader>
@@ -320,6 +508,14 @@ export function SettingsPage() {
                       <p className="font-medium">Sidebar</p>
                       <p className="text-sm text-muted-foreground">Currently {sidebarCollapsed ? "collapsed" : "expanded"}</p>
                     </div>
+                  </div>
+                  <Separator />
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">Animations</p>
+                      <p className="text-sm text-muted-foreground">Rotating artist backgrounds and effects</p>
+                    </div>
+                    <Switch checked={animationsEnabled} onCheckedChange={setAnimationsEnabled} />
                   </div>
                 </CardContent>
               </Card>

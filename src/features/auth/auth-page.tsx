@@ -3,17 +3,18 @@ import { useAuthStore } from "../../stores/auth.store";
 import { OriginType } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { Textarea } from "../../components/ui/textarea";
+import { Switch } from "../../components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
-import { Music, Tv2, Youtube, FolderOpen, Loader2 } from "lucide-react";
+import { FolderOpen, Loader2 } from "lucide-react";
 import type { PlatformService } from "../../services/platform/types";
 
 type AuthForm = {
-  url: string;
-  username: string;
-  password: string;
-  cookies: string;
-  folder: string;
+  folderPath: string;
+  downloadFolder: string;
+  enableOnlineSearch: boolean;
+  musicBrainzToken: string;
+  youtubeMusicHeaders: string;
 };
 
 type AuthPageProps = {
@@ -23,12 +24,13 @@ type AuthPageProps = {
 export function AuthPage({ onConnected }: AuthPageProps) {
   const { addOrigin, setCurrentOrigin } = useAuthStore();
   const [platform, setPlatform] = useState<PlatformService | null>(null);
+
   const [form, setForm] = useState<AuthForm>({
-    url: "",
-    username: "",
-    password: "",
-    cookies: "",
-    folder: "",
+    folderPath: "",
+    downloadFolder: "",
+    enableOnlineSearch: false,
+    musicBrainzToken: "",
+    youtubeMusicHeaders: "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,106 +42,51 @@ export function AuthPage({ onConnected }: AuthPageProps) {
     })();
   }, []);
 
-  async function handleNavidromeAuth() {
+  function handleSubmit() {
     setLoading(true);
     setError(null);
     try {
-      const originId = crypto.randomUUID();
+      if (!form.folderPath) {
+        setError("Please select a music folder");
+        setLoading(false);
+        return;
+      }
+
       const origin = {
-        id: originId,
-        name: `Navidrome (${form.url})`,
-        type: OriginType.NAVIDROME,
-        url: form.url,
-        credential: form.password,
+        id: crypto.randomUUID(),
+        name: form.folderPath.split("/").filter(Boolean).pop() || "Local Files",
+        type: OriginType.LOCAL,
+        folderPath: form.folderPath,
+        downloadFolder: form.downloadFolder || form.folderPath,
+        enableOnlineSearch: form.enableOnlineSearch,
+        musicBrainzToken: form.musicBrainzToken || undefined,
+        youtubeMusicHeaders: form.youtubeMusicHeaders || undefined,
       };
       addOrigin(origin);
       setCurrentOrigin(origin);
-      onConnected?.();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
 
-  async function handleJellyfinAuth() {
-    setLoading(true);
-    setError(null);
-    try {
-      const resp = await fetch(`${form.url.replace(/\/+$/, "")}/Users/AuthenticateByName`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `MediaBrowser Client="YTMusicPlayer", Device="Web", DeviceId="web", Version="1.0.0"`,
-        },
-        body: JSON.stringify({ Username: form.username, Pw: form.password }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.Message || "Authentication failed");
-      const jfServerId = crypto.randomUUID();
-      const jfServer = {
-        id: jfServerId,
-        name: `Jellyfin (${form.url})`,
-        type: OriginType.JELLYFIN,
-        url: form.url,
-        credential: data.AccessToken,
-      };
-      addOrigin(jfServer);
-      setCurrentOrigin(jfServer);
-      onConnected?.();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleYouTubeAuth() {
-    setLoading(true);
-    setError(null);
-    try {
-      const { authenticateWithCookies } = await import("../../api/youtube/youtube-api");
-      const result = await authenticateWithCookies(form.cookies);
-      const ytServerId = crypto.randomUUID();
-      const ytServer = {
-        id: ytServerId,
-        name: result.username,
-        type: OriginType.YOUTUBE_MUSIC,
-        credential: result.cookie,
-      };
-      addOrigin(ytServer);
-      setCurrentOrigin(ytServer);
-      onConnected?.();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function handleLocalAuth() {
-    const localId = crypto.randomUUID();
-    const localServer = {
-      id: localId,
-      name: form.folder || "Local Files",
-      type: OriginType.LOCAL,
-      url: form.folder || undefined,
-    };
-    addOrigin(localServer);
-    setCurrentOrigin(localServer);
-    if (form.folder) {
       import("../../api/indexer/indexer").then(({ getIndexer }) =>
-        getIndexer(localServer).then((idx) => idx.start(localServer))
+        getIndexer(origin).then((idx) => idx.start(origin))
       );
+      onConnected?.();
+    } finally {
+      setLoading(false);
     }
-    onConnected?.();
   }
 
   async function handleBrowseFolder() {
     if (!platform) return;
     const selected = await platform.openFolderPicker();
     if (selected) {
-      setForm({ ...form, folder: selected });
+      setForm({ ...form, folderPath: selected, downloadFolder: selected });
+    }
+  }
+
+  async function handleBrowseDownload() {
+    if (!platform) return;
+    const selected = await platform.openFolderPicker();
+    if (selected) {
+      setForm({ ...form, downloadFolder: selected });
     }
   }
 
@@ -157,108 +104,92 @@ export function AuthPage({ onConnected }: AuthPageProps) {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background to-muted p-4">
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-lg">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">YT Music Player</CardTitle>
-          <CardDescription>Connect to your music source</CardDescription>
+          <CardTitle className="text-2xl">Selftify</CardTitle>
+          <CardDescription>Connect your music source</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Tabs defaultValue={platform.isElectron ? "local" : "navidrome"}>
-            <TabsList className="mb-4 grid w-full grid-cols-4">
-              <TabsTrigger value="navidrome"><Music className="mr-1 h-3 w-3" /> Nav</TabsTrigger>
-              <TabsTrigger value="jellyfin"><Tv2 className="mr-1 h-3 w-3" /> JF</TabsTrigger>
-              <TabsTrigger value="youtube"><Youtube className="mr-1 h-3 w-3" /> YT</TabsTrigger>
-              <TabsTrigger value="local"><FolderOpen className="mr-1 h-3 w-3" /> Local</TabsTrigger>
-            </TabsList>
-
-            {/* Navidrome */}
-            <TabsContent value="navidrome" className="space-y-4">
+        <CardContent className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Music Folder</label>
+            <div className="mt-1 flex gap-2">
               <Input
-                placeholder="Server URL (e.g. http://192.168.1.100:4533)"
-                value={form.url}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                className="flex-1"
+                placeholder="/home/user/Music"
+                value={form.folderPath}
+                onChange={(e) => setForm({ ...form, folderPath: e.target.value })}
               />
-              <Input
-                placeholder="Password / Token"
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-              />
-              <Button className="w-full" onClick={handleNavidromeAuth} disabled={loading}>
-                {loading ? "Connecting..." : "Connect to Navidrome"}
+              <Button variant="outline" size="icon" onClick={handleBrowseFolder} title="Browse folder">
+                <FolderOpen className="h-4 w-4" />
               </Button>
-            </TabsContent>
+            </div>
+          </div>
 
-            {/* Jellyfin */}
-            <TabsContent value="jellyfin" className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Download Folder (default = Music Folder)</label>
+            <div className="mt-1 flex gap-2">
               <Input
-                placeholder="Server URL (e.g. http://192.168.1.100:8096)"
-                value={form.url}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                className="flex-1"
+                placeholder="Same as music folder"
+                value={form.downloadFolder}
+                onChange={(e) => setForm({ ...form, downloadFolder: e.target.value })}
               />
-              <Input
-                placeholder="Username"
-                value={form.username}
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
-              />
-              <Input
-                placeholder="Password"
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-              />
-              <Button className="w-full" onClick={handleJellyfinAuth} disabled={loading}>
-                {loading ? "Connecting..." : "Connect to Jellyfin"}
+              <Button variant="outline" size="icon" onClick={handleBrowseDownload} title="Browse download folder">
+                <FolderOpen className="h-4 w-4" />
               </Button>
-            </TabsContent>
+            </div>
+          </div>
 
-            {/* YouTube Music */}
-            <TabsContent value="youtube" className="space-y-4">
-              <Input
-                placeholder="YouTube Music cookies (Netscape format)"
-                value={form.cookies}
-                onChange={(e) => setForm({ ...form, cookies: e.target.value })}
-              />
-              <p className="text-xs text-muted-foreground">
-                Export cookies from your browser while logged into YouTube Music.
-              </p>
-              <Button className="w-full" onClick={handleYouTubeAuth} disabled={loading}>
-                {loading ? "Authenticating..." : "Connect YouTube Music"}
-              </Button>
-            </TabsContent>
+          <div className="flex items-center gap-2 rounded-lg border p-3">
+            <Switch
+              id="enable-online"
+              checked={form.enableOnlineSearch}
+              onCheckedChange={(v) => setForm({ ...form, enableOnlineSearch: v })}
+            />
+            <label htmlFor="enable-online" className="text-sm font-medium leading-none">
+              Enable Online Search
+            </label>
+          </div>
 
-            {/* Local Files */}
-            <TabsContent value="local" className="space-y-4">
-              <div className="flex gap-2">
+          {form.enableOnlineSearch && (
+            <div className="space-y-4 rounded-lg border p-3">
+              <p className="text-xs font-medium text-muted-foreground">Online Search Config</p>
+
+              <div>
+                <label className="text-sm font-medium">MusicBrainz Token</label>
                 <Input
-                  className="flex-1"
-                  placeholder="Music folder path"
-                  value={form.folder}
-                  onChange={(e) => setForm({ ...form, folder: e.target.value })}
+                  className="mt-1"
+                  placeholder="abc-123-def-456 (optional, increases rate limit)"
+                  value={form.musicBrainzToken}
+                  onChange={(e) => setForm({ ...form, musicBrainzToken: e.target.value })}
                 />
-                <Button variant="outline" size="icon" onClick={handleBrowseFolder} title="Browse folder">
-                  <FolderOpen className="h-4 w-4" />
-                </Button>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Without a token, rate limit is 1 request/second. With a token, ~50 req/s.
+                </p>
               </div>
-              {!platform?.isElectron && (
-                <p className="text-xs text-muted-foreground">
-                  On Android, use paths like /storage/emulated/0/Music
+
+              <div>
+                <label className="text-sm font-medium">YouTube Headers</label>
+                <Textarea
+                  className="mt-1 min-h-[100px] font-mono text-xs"
+                  placeholder={"cookie: abc123\nauthorization: SAPISIDHASH...\nuser-agent: Mozilla/5.0..."}
+                  value={form.youtubeMusicHeaders}
+                  onChange={(e) => setForm({ ...form, youtubeMusicHeaders: e.target.value })}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Paste HTTP headers copied from a browser session on music.youtube.com. One header per line (key: value). Cookie is required for yt-dlp downloads.
                 </p>
-              )}
-              {platform?.isElectron && (
-                <p className="text-xs text-muted-foreground">
-                  Select a local folder to scan for music files
-                </p>
-              )}
-              <Button className="w-full" onClick={handleLocalAuth}>
-                Scan Local Files
-              </Button>
-            </TabsContent>
-          </Tabs>
+              </div>
+            </div>
+          )}
 
           {error && (
-            <p className="mt-4 text-center text-sm text-destructive">{error}</p>
+            <p className="text-center text-sm text-destructive">{error}</p>
           )}
+
+          <Button className="w-full" onClick={handleSubmit} disabled={loading}>
+            {loading ? "Scanning..." : form.enableOnlineSearch ? "Scan Local Files + Enable Online Search" : "Scan Local Files"}
+          </Button>
         </CardContent>
       </Card>
     </div>

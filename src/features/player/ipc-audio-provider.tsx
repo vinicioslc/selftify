@@ -1,19 +1,9 @@
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "../../stores/player.store";
 import { useAuthStore } from "../../stores/auth.store";
-import { PlayerStatus, OriginType as OriginTypeEnum } from "../../types/domain-types";
+import { PlayerStatus } from "../../types/domain-types";
 import { getController } from "../../api/controller";
 import * as electronAudio from "../../services/electron-audio";
-
-function mapOriginType(t: OriginTypeEnum | undefined): string {
-  switch (t) {
-    case OriginTypeEnum.YOUTUBE_MUSIC: return "ytmusic";
-    case OriginTypeEnum.NAVIDROME:     return "navidrome";
-    case OriginTypeEnum.SUBISONIC:     return "subsonic";
-    case OriginTypeEnum.JELLYFIN:      return "jellyfin";
-    default:                           return "ytmusic";
-  }
-}
 
 export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
   const statusRef = useRef(PlayerStatus.STOPPED);
@@ -57,15 +47,39 @@ export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
   // Load track via Electron IPC mpv
   useEffect(() => {
     if (!currentTrack?.id) return;
-    const track = currentTrack;
-    const sourceType = mapOriginType(currentOrigin?.type);
+    const trackId = currentTrack.id;
+    const trackPath = currentTrack.path;
 
     let cancelled = false;
 
     async function loadTrack() {
       try {
-        const controller = await getController();
-        const url = await controller.getStreamUrl(track.id);
+        let url: string | null = null;
+
+        // If the track has a direct file path (e.g. freshly downloaded from YouTube),
+        // read it directly instead of going through the controller (which looks up Dexie)
+        if (trackPath) {
+          if (trackPath.startsWith("http")) {
+            url = trackPath;
+          } else {
+            try {
+              const { getPlatformService } = await import("../../services/platform/factory");
+              const p = await getPlatformService();
+              const data = await p.readFile(trackPath);
+              if (data) {
+                url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer]));
+              }
+            } catch {
+              // fall through to controller
+            }
+          }
+        }
+
+        if (!url) {
+          const controller = await getController();
+          url = await controller.getStreamUrl(trackId);
+        }
+
         if (!url || cancelled) return;
 
         setPositionMs(0);

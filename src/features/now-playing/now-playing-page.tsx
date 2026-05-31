@@ -1,13 +1,12 @@
 import { usePlayerStore } from "../../stores/player.store";
 import { useState, useRef } from "react";
 import { PlayerStatus } from "../../types/domain-types";
+import type { Album, AlbumArtist } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Avatar } from "../../components/ui/avatar";
 import { Slider } from "../../components/ui/slider";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
-import { VisualizerContainer } from "../visualizer/visualizer-container";
-import { useSettingsStore } from "../../stores/settings.store";
 import { formatDuration } from "../../lib/utils";
 import {
   Play,
@@ -20,7 +19,7 @@ import {
   Music,
 } from "lucide-react";
 
-export function NowPlayingPage() {
+export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist }: { onNavigateAlbum?: (album: Album) => void; onNavigateArtist?: (artist: AlbumArtist) => void }) {
   const {
     currentTrack,
     status,
@@ -39,7 +38,6 @@ export function NowPlayingPage() {
     removeFromQueue,
     clearQueue,
   } = usePlayerStore();
-  const { visualizerEnabled } = useSettingsStore();
 
   const [isSeeking, setIsSeeking] = useState(false);
   const [dragValue, setDragValue] = useState(0);
@@ -50,13 +48,6 @@ export function NowPlayingPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Visualizer backdrop */}
-      {visualizerEnabled && currentTrack && (
-        <div className="pointer-events-none absolute inset-0 z-0 opacity-10">
-          <VisualizerContainer />
-        </div>
-      )}
-
       {/* Now playing header */}
       {currentTrack ? (
         <div className="relative z-10 flex flex-col items-center gap-4 border-b border-border p-6 md:flex-row">
@@ -67,10 +58,56 @@ export function NowPlayingPage() {
             className="h-24 w-24 shadow-lg md:h-32 md:w-32"
           />
           <div className="flex flex-col items-center text-center md:items-start md:text-left">
-            <h1 className="text-xl font-bold text-foreground">{currentTrack.name}</h1>
-            <p className="text-base text-muted-foreground">{currentTrack.artistName}</p>
+            <h1
+              className="cursor-pointer text-xl font-bold text-foreground hover:underline"
+              onClick={() => {
+                if (currentTrack.albumName) {
+                  onNavigateAlbum?.({
+                    id: currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                    originId: currentTrack.originId,
+                    originType: currentTrack.originType,
+                    name: currentTrack.albumName,
+                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
+                    imageUrl: currentTrack.imageUrl || null,
+                  });
+                }
+              }}
+            >
+              {currentTrack.name}
+            </h1>
+            <span
+              className="cursor-pointer text-base text-muted-foreground hover:text-foreground hover:underline"
+              onClick={() => {
+                onNavigateArtist?.({
+                  id: `artist-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+                  originId: currentTrack.originId,
+                  originType: currentTrack.originType,
+                  name: currentTrack.artistName,
+                  imageUrl: currentTrack.imageUrl || null,
+                  mbz: currentTrack.mbzArtistId,
+                });
+              }}
+            >
+              {currentTrack.artistName}
+            </span>
             {currentTrack.albumName && (
-              <p className="text-sm text-muted-foreground/60">{currentTrack.albumName}</p>
+              <span
+                className="cursor-pointer text-sm text-muted-foreground/60 hover:text-foreground hover:underline"
+                onClick={() => {
+                  const albumName = currentTrack.albumName;
+                  if (!albumName) return;
+                  onNavigateAlbum?.({
+                    id: currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                    originId: currentTrack.originId,
+                    originType: currentTrack.originType,
+                    name: albumName,
+                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
+                    imageUrl: currentTrack.imageUrl || null,
+                  });
+                }}
+              >
+                {currentTrack.albumName}
+              </span>
             )}
 
             {/* Seek + controls */}
@@ -192,8 +229,38 @@ export function NowPlayingPage() {
                     className="h-10 w-10"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-foreground">{track.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{track.artistName}</p>
+                    <span
+                      className="cursor-pointer truncate text-sm font-medium text-foreground hover:underline"
+                      onClick={() => {
+                        if (track.albumName) {
+                          onNavigateAlbum?.({
+                            id: track.albumId || `album-${(track.albumArtistName || track.artistName).toLowerCase().replace(/\s+/g, "-")}-${track.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                            originId: track.originId,
+                            originType: track.originType,
+                            name: track.albumName,
+                            albumArtistName: track.albumArtistName || track.artistName,
+                            imageUrl: track.imageUrl || null,
+                          });
+                        }
+                      }}
+                    >
+                      {track.name}
+                    </span>
+                    <span
+                      className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      onClick={() => {
+                        onNavigateArtist?.({
+                          id: `artist-${track.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+                          originId: track.originId,
+                          originType: track.originType,
+                          name: track.artistName,
+                          imageUrl: track.imageUrl || null,
+                          mbz: track.mbzArtistId,
+                        });
+                      }}
+                    >
+                      {track.artistName}
+                    </span>
                   </div>
                   <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
                     {formatDuration(track.duration)}

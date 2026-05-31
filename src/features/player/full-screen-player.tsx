@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { usePlayerStore } from "../../stores/player.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { PlayerStatus } from "../../types/domain-types";
+import type { Album, AlbumArtist } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Slider } from "../../components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
@@ -21,9 +22,10 @@ import {
   Minimize2,
   ListMusic,
   Heart,
+  AudioLines,
 } from "lucide-react";
 
-export function FullScreenPlayer() {
+export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavigateAlbum?: (album: Album) => void; onNavigateArtist?: (artist: AlbumArtist) => void }) {
   const {
     currentTrack,
     status,
@@ -44,7 +46,7 @@ export function FullScreenPlayer() {
     toggleFullScreen,
     queue,
   } = usePlayerStore();
-  const { visualizerEnabled } = useSettingsStore();
+  const { visualizerEnabled, visualizerType } = useSettingsStore();
 
   const [isSeeking, setIsSeeking] = useState(false);
   const [dragValue, setDragValue] = useState(0);
@@ -70,13 +72,6 @@ export function FullScreenPlayer() {
         </div>
       )}
 
-      {/* Background visualizer */}
-      {visualizerEnabled && (
-        <div className="absolute inset-0 z-0 opacity-30">
-          <VisualizerContainer fullScreen />
-        </div>
-      )}
-
       {/* Header bar */}
       <div className="relative z-10 flex items-center justify-between border-b border-border px-4 py-3">
         <Button variant="ghost" size="sm" onClick={toggleFullScreen} className="text-muted-foreground hover:text-foreground">
@@ -96,20 +91,74 @@ export function FullScreenPlayer() {
 
       {/* Content: 2-column on desktop, 1-column on mobile */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden md:flex-row">
-        {/* Left: album art + basic controls */}
+        {/* Left: album art or visualizer + basic controls */}
         <div className="flex flex-col items-center justify-center gap-6 p-8 md:w-1/2">
-          <Avatar
+          {visualizerEnabled && visualizerType !== "none" ? (
+            <div className="flex h-56 w-56 items-center justify-center overflow-hidden md:h-72 md:w-72 lg:h-96 lg:w-96">
+              <VisualizerContainer fullScreen />
+            </div>
+          ) : (
+            <Avatar
             src={currentTrack.imageUrl}
             alt={currentTrack.name}
             fallback={currentTrack.name.charAt(0)}
             className="h-56 w-56 shadow-2xl md:h-72 md:w-72 lg:h-96 lg:w-96"
           />
+          )}
 
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-foreground">{currentTrack.name}</h2>
-            <p className="text-lg text-muted-foreground">{currentTrack.artistName}</p>
+            <h2
+              className="cursor-pointer text-2xl font-bold text-foreground hover:underline"
+              onClick={() => {
+                const albumId = currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName?.toLowerCase().replace(/\s+/g, "-")}`;
+                const albumName = currentTrack.albumName;
+                if (albumName) {
+                  onNavigateAlbum?.({
+                    id: albumId,
+                    originId: currentTrack.originId,
+                    originType: currentTrack.originType,
+                    name: albumName,
+                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
+                    imageUrl: currentTrack.imageUrl || null,
+                  });
+                }
+              }}
+            >
+              {currentTrack.name}
+            </h2>
+            <span
+              className="cursor-pointer text-lg text-muted-foreground hover:text-foreground hover:underline"
+              onClick={() => {
+                onNavigateArtist?.({
+                  id: `artist-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+                  originId: currentTrack.originId,
+                  originType: currentTrack.originType,
+                  name: currentTrack.artistName,
+                  imageUrl: currentTrack.imageUrl || null,
+                  mbz: currentTrack.mbzArtistId,
+                });
+              }}
+            >
+              {currentTrack.artistName}
+            </span>
             {currentTrack.albumName && (
-              <p className="text-sm text-muted-foreground/60">{currentTrack.albumName}</p>
+              <span
+                className="cursor-pointer text-sm text-muted-foreground/60 hover:text-foreground hover:underline"
+                onClick={() => {
+                  const albumId = currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName?.toLowerCase().replace(/\s+/g, "-")}`;
+                  const albumName = currentTrack.albumName!;
+                  onNavigateAlbum?.({
+                    id: albumId,
+                    originId: currentTrack.originId,
+                    originType: currentTrack.originType,
+                    name: albumName,
+                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
+                    imageUrl: currentTrack.imageUrl || null,
+                  });
+                }}
+              >
+                {currentTrack.albumName}
+              </span>
             )}
           </div>
 
@@ -207,7 +256,7 @@ export function FullScreenPlayer() {
                 Queue
               </TabsTrigger>
               <TabsTrigger value="visualizer">
-                <span className="mr-2">🎨</span>
+                <AudioLines className="mr-2 h-4 w-4" />
                 Visualizer
               </TabsTrigger>
             </TabsList>
@@ -235,10 +284,38 @@ export function FullScreenPlayer() {
                           className="h-10 w-10"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-foreground">{track.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">
+                          <span
+                            className="cursor-pointer truncate text-sm font-medium text-foreground hover:underline"
+                            onClick={() => {
+                              if (track.albumName) {
+                                onNavigateAlbum?.({
+                                  id: track.albumId || `album-${(track.albumArtistName || track.artistName).toLowerCase().replace(/\s+/g, "-")}-${track.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                                  originId: track.originId,
+                                  originType: track.originType,
+                                  name: track.albumName,
+                                  albumArtistName: track.albumArtistName || track.artistName,
+                                  imageUrl: track.imageUrl || null,
+                                });
+                              }
+                            }}
+                          >
+                            {track.name}
+                          </span>
+                          <span
+                            className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+                            onClick={() => {
+                              onNavigateArtist?.({
+                                id: `artist-${track.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+                                originId: track.originId,
+                                originType: track.originType,
+                                name: track.artistName,
+                                imageUrl: track.imageUrl || null,
+                                mbz: track.mbzArtistId,
+                              });
+                            }}
+                          >
                             {track.artistName}
-                          </p>
+                          </span>
                         </div>
                         <span className="text-xs tabular-nums text-muted-foreground">
                           {formatDuration(track.duration)}
@@ -251,10 +328,16 @@ export function FullScreenPlayer() {
             </TabsContent>
 
             <TabsContent value="visualizer" className="flex-1 p-4">
-              <p className="text-sm text-muted-foreground">
-                Visualizer is {visualizerEnabled ? "active" : "disabled"}. Enable it in Settings or
-                click the visualizer toggle in the player bar.
-              </p>
+              {visualizerEnabled && visualizerType !== "none" ? (
+                <div className="flex h-full w-full items-center justify-center">
+                  <VisualizerContainer fullScreen />
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Visualizer is disabled. Enable it with the{" "}
+                  <AudioLines className="inline h-4 w-4" /> button in the player bar.
+                </p>
+              )}
             </TabsContent>
           </Tabs>
         </div>

@@ -1,6 +1,5 @@
 import { useState, useCallback } from "react";
 import { usePlayerStore } from "../../../stores/player.store";
-import { useSettingsStore } from "../../../stores/settings.store";
 import { Button } from "../../../components/ui/button";
 import { Slider } from "../../../components/ui/slider";
 import {
@@ -13,7 +12,6 @@ import {
 
 export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void }) {
   const { volume, setVolume, toggleFullScreen, queue } = usePlayerStore();
-  const { visualizerEnabled, setVisualizerEnabled } = useSettingsStore();
   const [showVolume, setShowVolume] = useState(false);
 
   const handleVolumeWheel = useCallback(
@@ -27,15 +25,6 @@ export function RightControls({ onNavigate }: { onNavigate?: (view: any) => void
 
   return (
     <div className="flex h-full items-center gap-1 px-2" onWheel={handleVolumeWheel}>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8 text-muted-foreground hover:text-foreground"
-        onClick={() => setVisualizerEnabled(!visualizerEnabled)}
-      >
-        <span className="text-xs">{visualizerEnabled ? "🎨" : "▫"}</span>
-      </Button>
-
       <Button
         variant="ghost"
         size="icon"
