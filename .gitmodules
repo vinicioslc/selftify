@@ -1,0 +1,3 @@
+[submodule ".opencode/skills/teamwork"]
+	path = .opencode/skills/teamwork
+	url = https://github.com/pitss-pm/open-code-team.git
