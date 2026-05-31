@@ -52,6 +52,8 @@ export function createLocalController(ctx: ApiContext): ServerController {
       path: row.path,
       genres: row.genre ? [row.genre] : [],
       releaseYear: row.year || undefined,
+      mbzRecordingId: row.mbz_recording_id || undefined,
+      mbzTrackId: row.mbz_track_id || undefined,
     };
   }
 

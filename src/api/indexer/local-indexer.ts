@@ -5,7 +5,6 @@ import {
   getScanState,
   updateScanState,
   batchInsertSongs,
-  deleteAllSongs,
   getAllPaths,
   getSongCount,
   deleteSong,
@@ -13,10 +12,24 @@ import {
   dequeueScan,
   getQueueCount,
   clearQueue,
+  upsertArtist,
+  getArtistByName,
+  getArtistByMbid,
   type DbSong,
 } from "../../services/local-database";
 import { storeImage, clear as clearImageCache } from "../../services/image-cache";
+import { useStatusStore } from "../../stores/status.store";
 import type { PlatformService, DirEntry } from "../../services/platform/types";
+
+/** Publish a status message to the global TopBar status store.
+ *  Safe to call outside React (uses Zustand getState()). */
+function publishStatus(text: string, level: "info" | "success" | "warn" | "danger" = "info", source = "Local Scan") {
+  try {
+    useStatusStore.getState().addMessage(text, level, source);
+  } catch {
+    // silently ignore if store isn't available
+  }
+}
 
 const DIR_BATCH = 10;
 const FILE_BATCH = 5;
@@ -41,6 +54,9 @@ export function createLocalIndexer(): Indexer {
   let scannedCount = 0;
   let platform: PlatformService | null = null;
 
+  /** Tracks unique artists seen during this scan, keyed by normalized name → { name, mbid } */
+  const uniqueArtists = new Map<string, { name: string; mbid: string | null }>();
+
   async function getPlatform(): Promise<PlatformService> {
     if (!platform) {
       const { getPlatformService } = await import("../../services/platform/factory");
@@ -63,17 +79,15 @@ export function createLocalIndexer(): Indexer {
   // ── Public API ──
 
   async function start(origin: Origin) {
-    const folder = origin.url || "";
+    const folder = origin.folderPath || "";
     if (!folder) return;
 
     paused = false;
     aborted = false;
     scanning = false;
     scannedCount = 0;
+    uniqueArtists.clear();
 
-    await deleteAllSongs();
-    await clearImageCache();
-    await clearQueue();
     await updateScanState({
       root_folder: folder,
       scan_status: "scanning",
@@ -85,8 +99,62 @@ export function createLocalIndexer(): Indexer {
     });
 
     setState({ status: "indexing", progress: { total: 0, done: 0, currentItem: folder } });
-    await enqueueScan([{ type: "dir", path: folder }]);
-    run();
+    publishStatus("Starting local library scan…", "info");
+
+    const existingCount = await getSongCount();
+
+    if (existingCount > 0) {
+      await incrementalScan(folder);
+    } else {
+      await clearImageCache();
+      await clearQueue();
+      await enqueueScan([{ type: "dir", path: folder }]);
+      run();
+    }
+  }
+
+  async function incrementalScan(root: string) {
+    const p = await getPlatform();
+    const dbPaths = new Set(await getAllPaths());
+    const fsPaths = new Set<string>();
+    const pending = [root];
+    const visited = new Set<string>();
+    const newFiles: string[] = [];
+
+    while (pending.length > 0) {
+      if (aborted || paused) return;
+      const dir = pending.shift()!;
+      if (visited.has(dir)) continue;
+      visited.add(dir);
+      setState({ progress: { currentItem: dir } });
+
+      let entries: DirEntry[];
+      try { entries = await p.readDirectory(dir); } catch { continue; }
+
+      for (const e of entries) {
+        if (!e.name) continue;
+        if (e.isDirectory) { pending.push(e.path); continue; }
+        const ext = getAudioExt(e.name);
+        if (!AUDIO_EXTENSIONS.has(ext)) continue;
+        fsPaths.add(e.path);
+        if (!dbPaths.has(e.path)) newFiles.push(e.path);
+      }
+    }
+
+    for (const dbPath of dbPaths) {
+      if (!fsPaths.has(dbPath)) {
+        await deleteSong(fileIdFromPath(dbPath));
+      }
+    }
+
+    if (newFiles.length > 0) {
+      await enqueueScan(newFiles.map((p) => ({ type: "file", path: p })));
+      setState({ status: "indexing", progress: { total: newFiles.length, done: 0, currentItem: "" } });
+      await updateScanState({ scan_status: "indexing", total_files: newFiles.length, scanned_files: 0 });
+      run();
+    } else {
+      await finish();
+    }
   }
 
   function pause() {
@@ -113,6 +181,14 @@ export function createLocalIndexer(): Indexer {
 
   function getStatus() {
     return status;
+  }
+
+  async function startWatcher() {
+    const state = await getScanState();
+    if (state && state.scan_status === "done") {
+      await updateScanState({ watcher_enabled: 1 });
+      scheduleWatch();
+    }
   }
 
   function onProgress(callback: (s: IndexerStatus) => void) {
@@ -187,6 +263,20 @@ export function createLocalIndexer(): Indexer {
         }
       }
 
+      // If this dir has audio files directly, it's likely an album folder
+      if (audioFiles.length > 0) {
+        const scanState = await getScanState();
+        const rootFolder = scanState?.root_folder || "";
+        const relPath = rootFolder ? dirPath.replace(rootFolder, "").replace(/^\/+/, "") : "";
+        const pathParts = relPath.split("/").filter(Boolean);
+        // Common layout: …/Artist/Album/ or just …/Album/
+        if (pathParts.length >= 2) {
+          const artistGuess = pathParts[pathParts.length - 2];
+          const albumGuess = pathParts[pathParts.length - 1];
+          publishStatus(`Indexing ${artistGuess} album list…`, "info");
+        }
+      }
+
       const batch: { type: string; path: string }[] = [];
       for (const d of subdirs) batch.push({ type: "dir", path: d });
       for (const f of audioFiles) batch.push({ type: "file", path: f });
@@ -215,6 +305,9 @@ export function createLocalIndexer(): Indexer {
         duration: number | null; bitrate: number | null; sample_rate: number | null;
         genre: string | null; year: number | null; file_size: number;
         file_extension: string; last_modified: number | null;
+        mbz_recording_id: string | null; mbz_track_id: string | null;
+        mbz_album_id: string | null; mbz_release_group_id: string | null;
+        mbz_artist_id: string | null;
       };
 
       try {
@@ -238,6 +331,11 @@ export function createLocalIndexer(): Indexer {
           file_size: data.byteLength || data.length,
           file_extension: filePath.split(".").pop()?.toLowerCase() || "",
           last_modified: null,
+          mbz_recording_id: c.musicbrainz_recordingid || null,
+          mbz_track_id: c.musicbrainz_trackid || null,
+          mbz_album_id: c.musicbrainz_albumid || null,
+          mbz_release_group_id: c.musicbrainz_releasegroupid || null,
+          mbz_artist_id: c.musicbrainz_artistid?.[0] || null,
         };
 
         const pictures = c.picture || [];
@@ -258,6 +356,26 @@ export function createLocalIndexer(): Indexer {
             } catch (picErr) {
               console.warn(`[indexer] error storing image from ${filePath}:`, picErr);
             }
+          }
+
+          // Publish status about cover art indexing
+          if (meta.album_name) {
+            publishStatus(`Indexing ${meta.artist_name} – ${meta.album_name} image…`, "info");
+          }
+        }
+
+        // Track artist for later MusicBrainz enrichment
+        if (meta.artist_name && meta.artist_name !== "Unknown Artist") {
+          const key = meta.artist_name.toLowerCase().trim();
+          if (!uniqueArtists.has(key)) {
+            uniqueArtists.set(key, {
+              name: meta.artist_name,
+              mbid: meta.mbz_artist_id || null,
+            });
+          } else if (meta.mbz_artist_id) {
+            // Prefer the first MBID we find for an artist (most complete)
+            const existing = uniqueArtists.get(key)!;
+            if (!existing.mbid) existing.mbid = meta.mbz_artist_id;
           }
         }
       } catch {
@@ -281,7 +399,17 @@ export function createLocalIndexer(): Indexer {
           file_size: data.byteLength || data.length,
           file_extension: filePath.split(".").pop()?.toLowerCase() || "",
           last_modified: null,
+          mbz_recording_id: null, mbz_track_id: null,
+          mbz_album_id: null, mbz_release_group_id: null, mbz_artist_id: null,
         };
+
+        // Track artist from fallback path
+        if (artist && artist !== "Unknown Artist") {
+          const key = artist.toLowerCase().trim();
+          if (!uniqueArtists.has(key)) {
+            uniqueArtists.set(key, { name: artist, mbid: null });
+          }
+        }
       }
 
       const song: Omit<DbSong, "updated_at"> = {
@@ -293,6 +421,11 @@ export function createLocalIndexer(): Indexer {
         genre: meta.genre, year: meta.year, file_size: meta.file_size,
         file_extension: meta.file_extension, last_modified: meta.last_modified,
         added_at: Date.now(),
+        mbz_recording_id: meta.mbz_recording_id,
+        mbz_track_id: meta.mbz_track_id,
+        mbz_album_id: meta.mbz_album_id,
+        mbz_release_group_id: meta.mbz_release_group_id,
+        mbz_artist_id: meta.mbz_artist_id,
       };
 
       await batchInsertSongs([song]);
@@ -304,7 +437,78 @@ export function createLocalIndexer(): Indexer {
     }
   }
 
+  async function enrichArtistsFromMusicBrainz() {
+    if (uniqueArtists.size === 0) return;
+
+    // Dynamically import MusicBrainz client only when needed
+    const { getArtistDetail, searchArtists } = await import(
+      "../../services/musicbrainz-client"
+    );
+
+    let enriched = 0;
+    for (const [, entry] of uniqueArtists) {
+      if (aborted) break;
+
+      // Skip if already in DB and up-to-date
+      const existing = entry.mbid
+        ? await getArtistByMbid(entry.mbid)
+        : await getArtistByName(entry.name);
+      if (existing) continue;
+
+      let mbid = entry.mbid;
+      let artistData = null;
+
+      if (mbid) {
+        publishStatus(`Fetching artist info for ${entry.name}…`, "info", "MusicBrainz");
+        artistData = await getArtistDetail(mbid);
+      }
+
+      // If no MBID or lookup failed, fall back to searching by name
+      if (!artistData) {
+        publishStatus(`Searching MusicBrainz for ${entry.name}…`, "info", "MusicBrainz");
+        try {
+          const searchRes = await searchArtists(entry.name, { limit: 1 });
+          if (searchRes.artists && searchRes.artists.length > 0) {
+            artistData = searchRes.artists[0];
+            mbid = artistData.id;
+            // Also fetch full detail to get extra fields
+            const full = await getArtistDetail(mbid);
+            if (full) artistData = full;
+          }
+        } catch {
+          // Search failed – skip enrichment for this artist
+        }
+      }
+
+      if (artistData) {
+        const genres = artistData.tags
+          ? JSON.stringify(artistData.tags.map((t: any) => t.name))
+          : null;
+
+        await upsertArtist({
+          id: mbid || `local-artist-${entry.name.toLowerCase().replace(/\s+/g, "-")}`,
+          name: entry.name,
+          mbz_artist_id: mbid || null,
+          biography: null,
+          image_url: null,
+          genres,
+          country: artistData.country || null,
+          type: artistData.type || null,
+          disambiguation: artistData.disambiguation || null,
+        });
+        enriched++;
+      }
+    }
+
+    if (enriched > 0) {
+      publishStatus(`Artist metadata updated for ${enriched} artist${enriched > 1 ? "s" : ""}`, "success", "MusicBrainz");
+    }
+  }
+
   async function finish() {
+    // Enrich artist info from MusicBrainz before finishing
+    await enrichArtistsFromMusicBrainz();
+
     const count = await getSongCount();
     scannedCount = count;
     await updateScanState({
@@ -312,6 +516,7 @@ export function createLocalIndexer(): Indexer {
       current_dir: "", last_scanned_at: Date.now(), watcher_enabled: 1,
     });
     setState({ status: "done", progress: { total: count, done: count, currentItem: "" } });
+    publishStatus(`Local library indexed: ${count} song${count !== 1 ? "s" : ""}`, "success");
     scheduleWatch();
   }
 
@@ -378,5 +583,5 @@ export function createLocalIndexer(): Indexer {
     scheduleWatch();
   }
 
-  return { start, pause, resume, abort, getStatus, onProgress };
+  return { start, pause, resume, abort, getStatus, onProgress, startWatcher };
 }

@@ -13,16 +13,13 @@ export interface Indexer {
   abort(): void;
   getStatus(): IndexerStatus;
   onProgress(callback: (status: IndexerStatus) => void): () => void;
+  startWatcher(): Promise<void>;
 }
 
 export async function getIndexer(origin: Origin): Promise<Indexer> {
   switch (origin.type) {
     case OriginType.LOCAL:
       return (await import("./local-indexer")).createLocalIndexer();
-    case OriginType.JELLYFIN:
-    case OriginType.NAVIDROME:
-    case OriginType.SUBISONIC:
-    case OriginType.YOUTUBE_MUSIC:
     default:
       return (await import("./noop-indexer")).createNoopIndexer();
   }

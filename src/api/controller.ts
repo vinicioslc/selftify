@@ -4,8 +4,12 @@ import { useAuthStore } from "../stores/auth.store";
 export type ApiContext = {
   originId: string;
   originType: OriginType;
-  baseUrl?: string;
   credential?: string;
+  enableOnlineSearch?: boolean;
+  musicBrainzToken?: string;
+  youtubeMusicHeaders?: string;
+  downloadFolder?: string;
+  folderPath?: string;
 };
 
 export type SearchResults = {
@@ -37,24 +41,16 @@ function getContext(): ApiContext {
   return {
     originId: currentOrigin.id,
     originType: currentOrigin.type,
-    baseUrl: currentOrigin.url,
-    credential: currentOrigin.credential,
+    credential: currentOrigin.folderPath,
+    enableOnlineSearch: currentOrigin.enableOnlineSearch,
+    musicBrainzToken: currentOrigin.musicBrainzToken,
+    youtubeMusicHeaders: currentOrigin.youtubeMusicHeaders,
+    downloadFolder: currentOrigin.downloadFolder,
+    folderPath: currentOrigin.folderPath,
   };
 }
 
 export async function getController(): Promise<ServerController> {
   const ctx = getContext();
-  switch (ctx.originType) {
-    case OriginType.JELLYFIN:
-      return (await import("./jellyfin/jellyfin-controller")).createJellyfinController(ctx);
-    case OriginType.NAVIDROME:
-    case OriginType.SUBISONIC:
-      return (await import("./navidrome/navidrome-controller")).createNavidromeController(ctx);
-    case OriginType.YOUTUBE_MUSIC:
-      return (await import("./youtube/youtube-controller")).createYouTubeController(ctx);
-    case OriginType.LOCAL:
-      return (await import("./local/local-controller")).createLocalController(ctx);
-    default:
-      throw new Error(`Unknown origin type: ${ctx.originType}`);
-  }
+  return (await import("./local/local-controller")).createLocalController(ctx);
 }

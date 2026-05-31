@@ -25,5 +25,6 @@ export function createNoopIndexer(): Indexer {
         listeners = listeners.filter((l) => l !== callback);
       };
     },
+    async startWatcher() {},
   };
 }
