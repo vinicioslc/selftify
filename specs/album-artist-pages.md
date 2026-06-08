@@ -182,7 +182,27 @@ interface LibraryPageProps {
 
 Images: `dbSongToSong` now resolves `imageUrl` from the IndexedDB image cache using the same tag resolution as the local controller (`song/<id>` → `album/<artist>/<album>` → `artist/<artist>`).
 
+### Artist Page Album Image Fix (2026-06-08)
+
+**Problem**: Albums without their own cover image showed the artist's image or another album's cover, making it appear as if all albums shared the same image.
+
+**Root cause**: `resolveCover()` no Step 2 fazia queries por `{ artistName }` e `{ mbzArtistId }` — sem álbum — retornando QUALQUER imagem daquele artista.
+
+**Solution**: Criada `resolveAlbumCover()` em `cover-resolver.ts` que só faz match estrito:
+1. `loadFromAlbumDotImg(artist, album)` — `.img/` folder do álbum
+2. IndexedDB por `mbzArtistId+mbzReleaseGroupId`, `mbzArtistId+mbzReleaseId`, ou `artistName+albumName`
+3. Deezer/iTunes (remoto, requer artist+album)
+
+Nunca faz fallback para artista. Álbuns sem capa retornam `null`.
+
+**Usado por**:
+- `populateSongImages()` via `resolveImageUrl()` em `local-controller.ts`
+- `useCover()` hook no `AlbumPage`
+- `resolveCoverBytes()` no `download-queue.ts`
+
 ---
+
+
 
 ## Controller Changes
 

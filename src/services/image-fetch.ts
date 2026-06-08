@@ -1,208 +1,134 @@
-import { md5Hash } from "./image-store";
-import {
-  electronStoreImage,
-  electronGetImageBySourceUrl,
-  electronRecordToBlobUrl,
-  electronUpdateImageMeta,
-  isElectronImageStore,
-} from "./electron-image-store";
-import { getImageBySourceUrl as indexDbGetByUrl, storeImage as indexDbStore } from "./image-store";
+import { fetchImageAsBlobUrl, clearImageCaches as clearCache } from "./image-cache";
+import { resolveAlbumCover } from "./artwork/resolve-cover";
+import { storeImage, md5Hash, findImages, recordToBlobUrl } from "./image-store";
+import { electronStoreImage, isElectronImageStore, electronFindImages, electronRecordToBlobUrl } from "./electron-image-store";
+import { loadFromAlbumDotImg } from "./dot-img-loader";
 import { useSettingsStore } from "../stores/settings.store";
-
-let lastFetchTime = 0;
-let active = 0;
-let processing = false;
-
-const requestQueue: Array<{
-  resolve: (url: string) => void;
-  reject: (err: unknown) => void;
-  url: string;
-  init: RequestInit;
-}> = [];
-
-const inMemoryCache = new Map<string, string>();
-const inflightFetches = new Map<string, Promise<string | null>>();
-const pendingMeta = new Map<string, ImageFetchMeta>();
-
-let isElectron: boolean | null = null;
-
-async function getIsElectron(): Promise<boolean> {
-  if (isElectron === null) {
-    isElectron = await isElectronImageStore();
-  }
-  return isElectron;
-}
-
-async function processQueue() {
-  if (processing) return;
-  processing = true;
-  const { imageFetchRateLimitMs, imageFetchMaxConcurrent } = useSettingsStore.getState();
-  while (requestQueue.length > 0 && active < imageFetchMaxConcurrent) {
-    const elapsed = Date.now() - lastFetchTime;
-    if (imageFetchRateLimitMs > 0 && elapsed < imageFetchRateLimitMs) {
-      await new Promise((r) => setTimeout(r, imageFetchRateLimitMs - elapsed));
-    }
-    const item = requestQueue.shift()!;
-    active++;
-    lastFetchTime = Date.now();
-    fetchItem(item);
-  }
-  processing = false;
-}
-
-async function fetchItem(item: {
-  resolve: (url: string) => void;
-  reject: (err: unknown) => void;
-  url: string;
-  init: RequestInit;
-}) {
-  try {
-    const timeoutMs = useSettingsStore.getState().imageFetchTimeoutMs;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const initWithSignal = { ...item.init, signal: controller.signal };
-    const response = await fetch(item.url, initWithSignal);
-    clearTimeout(timeout);
-    if (!response.ok) {
-      item.reject(new Error(`HTTP ${response.status}`));
-      return;
-    }
-    const blob = await response.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    inMemoryCache.set(item.url, blobUrl);
-
-    try {
-      const buf = await blob.arrayBuffer();
-      const hash = await md5Hash(buf);
-      const meta = pendingMeta.get(item.url);
-      const record = {
-        md5: hash,
-        blob: buf,
-        format: blob.type || "image/jpeg",
-        size: buf.byteLength,
-        createdAt: Date.now(),
-        sourceUrl: item.url,
-        artistName: meta?.artistName,
-        albumName: meta?.albumName,
-        mbzArtistId: meta?.mbzArtistId,
-        mbzReleaseGroupId: meta?.mbzReleaseGroupId,
-        mbzReleaseId: meta?.mbzReleaseId,
-      };
-
-      if (await getIsElectron()) {
-        await electronStoreImage(record);
-      } else {
-        await indexDbStore(record);
-      }
-      if (meta) pendingMeta.delete(item.url);
-    } catch {
-      // non-critical
-    }
-
-    item.resolve(blobUrl);
-  } catch (err) {
-    item.reject(err);
-  } finally {
-    active--;
-    processQueue();
-  }
-}
-
-function enqueueFetch(url: string, init: RequestInit = {}): Promise<string> {
-  return new Promise((resolve, reject) => {
-    requestQueue.push({ resolve, reject, url, init });
-    processQueue();
-  });
-}
-
-export interface ImageFetchMeta {
-  artistName?: string;
-  albumName?: string;
-  mbzArtistId?: string;
-  mbzReleaseGroupId?: string;
-  mbzReleaseId?: string;
-}
-
-export async function tagImageSource(sourceUrl: string, meta: ImageFetchMeta): Promise<void> {
-  // Try to tag existing record
-  try {
-    let record;
-    if (await getIsElectron()) {
-      record = await electronGetImageBySourceUrl(sourceUrl);
-    } else {
-      record = await indexDbGetByUrl(sourceUrl);
-    }
-    if (record) {
-      if (await getIsElectron()) {
-        await electronUpdateImageMeta(record.md5, meta);
-      } else {
-        const { updateImageMeta } = await import("./image-store");
-        await updateImageMeta(record.md5, meta);
-      }
-      return;
-    }
-  } catch {
-    // non-critical
-  }
-  // Not stored yet — queue it; fetchItem will apply when blob is saved
-  pendingMeta.set(sourceUrl, meta);
+export async function clearImageCaches(): Promise<void> {
+  await clearCache();
 }
 
 export function clearImageQueue(): void {
-  for (const item of requestQueue.splice(0)) {
-    item.reject(new Error("Queue cleared"));
-  }
-  inMemoryCache.clear();
-  inflightFetches.clear();
-  pendingMeta.clear();
-  active = 0;
-  processing = false;
+  // No-op: rate limiter is global, not per-queue
 }
 
-export async function fetchImageAsBlobUrl(
-  url: string,
-  init: RequestInit = {},
-): Promise<string | null> {
-  const cached = inMemoryCache.get(url);
-  if (cached) return cached;
-
+async function storeRemoteImage(
+  blobUrl: string,
+  meta: { artistName?: string; albumName?: string; mbzArtistId?: string; mbzReleaseGroupId?: string; mbzReleaseId?: string },
+): Promise<string> {
   try {
-    let existing;
-    if (await getIsElectron()) {
-      existing = await electronGetImageBySourceUrl(url);
+    const resp = await fetch(blobUrl);
+    const blob = await resp.blob();
+    const arrayBuffer = await blob.arrayBuffer();
+    const hash = await md5Hash(arrayBuffer);
+    const record = {
+      md5: hash,
+      blob: arrayBuffer,
+      format: blob.type || "image/jpeg",
+      size: arrayBuffer.byteLength,
+      createdAt: Date.now(),
+      artistName: meta.artistName?.toLowerCase().trim(),
+      albumName: meta.albumName?.toLowerCase().trim(),
+      mbzArtistId: meta.mbzArtistId,
+      mbzReleaseGroupId: meta.mbzReleaseGroupId,
+      mbzReleaseId: meta.mbzReleaseId,
+      sourceUrl: blobUrl,
+    };
+    if (await isElectronImageStore()) {
+      await electronStoreImage(record);
     } else {
-      existing = await indexDbGetByUrl(url);
+      await storeImage(record);
     }
-    if (existing) {
-      const blobUrl = await electronRecordToBlobUrl(existing);
-      inMemoryCache.set(url, blobUrl);
-      return blobUrl;
-    }
-  } catch {
-    // store unavailable
+  } catch (err) {
+    console.warn("[image-fetch] storeRemoteImage failed:", err);
   }
+  return blobUrl;
+}
 
-  const inflight = inflightFetches.get(url);
-  if (inflight) return inflight;
+async function findInStore(
+  artist?: string,
+  album?: string,
+  mbzReleaseGroupId?: string | null,
+  mbzReleaseId?: string | null,
+): Promise<string | null> {
+  try {
+    const isElectron = await isElectronImageStore();
+    const queries: Array<Record<string, string>> = [];
 
-  const promise = (async () => {
-    try {
-      return await enqueueFetch(url, init);
-    } catch {
-      return null;
+    if (mbzReleaseGroupId) {
+      queries.push({ mbzReleaseGroupId });
     }
-  })();
+    if (mbzReleaseId) {
+      queries.push({ mbzReleaseId });
+    }
+    if (artist && album) {
+      queries.push({ artistName: artist.toLowerCase().trim(), albumName: album.toLowerCase().trim() });
+    }
+    if (artist) {
+      queries.push({ artistName: artist.toLowerCase().trim() });
+    }
 
-  inflightFetches.set(url, promise);
-  promise.finally(() => inflightFetches.delete(url));
+    for (const q of queries) {
+      const results = await (isElectron ? electronFindImages(q as any) : findImages(q as any));
+      if (results.length > 0) {
+        return isElectron ? electronRecordToBlobUrl(results[0]) : recordToBlobUrl(results[0]);
+      }
+    }
 
-  return promise;
+    // Fallback: check .img folder on filesystem for local albums
+    if (artist && album) {
+      const dotImgUrl = await loadFromAlbumDotImg(artist, album);
+      if (dotImgUrl) return dotImgUrl;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn("[image-fetch] findInStore error:", err);
+    return null;
+  }
 }
 
 export async function fetchCoverArt(
   mbzId: string,
   type: "release" | "release-group" = "release-group",
 ): Promise<string | null> {
-  const url = `https://coverartarchive.org/${type}/${mbzId}/front-250.jpg`;
+  const url = `https://coverartarchive.org/${type}/${mbzId}/front`;
   return fetchImageAsBlobUrl(url);
+}
+
+export async function fetchAlbumCover(
+  releaseGroupId: string | null | undefined,
+  releaseId?: string | null,
+  artist?: string,
+  album?: string,
+): Promise<string | null> {
+  const cached = await findInStore(artist, album, releaseGroupId, releaseId);
+  if (cached) return cached;
+
+  const isEnabled = (name: string) => useSettingsStore.getState().isArtworkProviderEnabled(name);
+
+  if (releaseId && isEnabled("cover_art_archive")) {
+    const url = await fetchCoverArt(releaseId, "release");
+    if (url) {
+      return storeRemoteImage(url, { artistName: artist, albumName: album, mbzReleaseId: releaseId });
+    }
+  }
+  if (releaseGroupId && isEnabled("cover_art_archive")) {
+    const url = await fetchCoverArt(releaseGroupId, "release-group");
+    if (url) {
+      return storeRemoteImage(url, { artistName: artist, albumName: album, mbzReleaseGroupId: releaseGroupId });
+    }
+  }
+  if (artist && album) {
+    const result = await resolveAlbumCover({
+      releaseMbid: releaseId,
+      releaseGroupMbid: releaseGroupId,
+      artist,
+      album,
+    });
+    if (result.url) {
+      return storeRemoteImage(result.url, { artistName: artist, albumName: album, mbzReleaseGroupId: releaseGroupId || undefined, mbzReleaseId: releaseId || undefined });
+    }
+  }
+  return null;
 }
