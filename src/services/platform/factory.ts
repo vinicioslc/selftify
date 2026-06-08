@@ -11,8 +11,21 @@ export async function getPlatformService(): Promise<PlatformService> {
     const { createElectronPlatformService } = await import('./electron');
     instance = createElectronPlatformService();
   } else {
-    const { createWebPlatformService } = await import('./web');
-    instance = createWebPlatformService();
+    let isCapacitorNative = false;
+    try {
+      const { Capacitor } = await import('@capacitor/core');
+      isCapacitorNative = Capacitor.isNativePlatform();
+    } catch {
+      // @capacitor/core not available — web or test environment
+    }
+
+    if (isCapacitorNative) {
+      const { createCapacitorPlatformService } = await import('./capacitor');
+      instance = createCapacitorPlatformService();
+    } else {
+      const { createWebPlatformService } = await import('./web');
+      instance = createWebPlatformService();
+    }
   }
 
   return instance!;

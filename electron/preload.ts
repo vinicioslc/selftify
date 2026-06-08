@@ -6,6 +6,10 @@ const api = {
     readDirectory: (path: string) => ipcRenderer.invoke('fs:read-directory', path),
     fileExists: (path: string) => ipcRenderer.invoke('fs:file-exists', path),
     getFileStats: (path: string) => ipcRenderer.invoke('fs:file-stats', path),
+    writeFile: (path: string, data: number[]) => ipcRenderer.invoke('fs:write-file', path, data),
+    deleteFile: (path: string) => ipcRenderer.invoke('fs:delete-file', path),
+    createDirectory: (path: string) => ipcRenderer.invoke('fs:create-directory', path),
+    renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename-file', oldPath, newPath),
   },
   dialog: {
     openFolderPicker: () => ipcRenderer.invoke('dialog:open-folder'),
@@ -17,10 +21,29 @@ const api = {
   },
   yt: {
     fetch: (url: string, init?: any) => ipcRenderer.invoke('yt:fetch', { url, init }),
-    search: (query: string) => ipcRenderer.invoke('yt:search', query),
+    search: (query: string, cookies?: string) => ipcRenderer.invoke('yt:search', cookies ? { query, cookies } : query),
     download: (request: any) => ipcRenderer.invoke('yt:download', request),
-    getStreamUrl: (videoId: string) => ipcRenderer.invoke('yt:stream-url', videoId),
+    getStreamUrl: (videoId: string, cookies?: string) => ipcRenderer.invoke('yt:stream-url', cookies ? { videoId, cookies } : videoId),
+    getVideoInfo: (videoId: string) => ipcRenderer.invoke('yt:get-video-info', videoId),
+    downloadMp3: (request: any) => ipcRenderer.invoke('yt:download-mp3', request),
+    processCover: (request: any) => ipcRenderer.invoke('yt:process-cover', request),
+    embedArtwork: (request: any) => ipcRenderer.invoke('yt:embed-artwork', request),
   },
+  onCookiesInvalid: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('yt:cookies-invalid', handler);
+    return () => { ipcRenderer.removeListener('yt:cookies-invalid', handler); };
+  },
+  onDownloadProgress: (callback: (event: { taskId: string; percent: number; step: string }) => void) => {
+    const handler = (_event: any, data: { taskId: string; percent: number; step: string }) => callback(data);
+    ipcRenderer.on('download:progress', handler);
+    return () => { ipcRenderer.removeListener('download:progress', handler); };
+  },
+  local: {
+    parseFile: (filePath: string) => ipcRenderer.invoke('local:parse-file', filePath),
+  },
+  imageFetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) =>
+    ipcRenderer.invoke('image:fetch', url, options),
   imageCache: {
     store: (hash: string, buffer: number[], format: string, meta?: Record<string, unknown>) =>
       ipcRenderer.invoke('image-cache:store', hash, buffer, format, meta),

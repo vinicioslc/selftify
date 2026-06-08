@@ -47,6 +47,14 @@ class SelftifyDb extends Dexie {
       mbz_metadata_cache: "key",
       mbz_search_cache: "key, expires_at",
     });
+    this.version(5).stores({
+      songs: "id, &path, name, artist_name, album_name, genre, mbz_album_id, mbz_artist_id, mbz_recording_id",
+      artists: "id, name, mbz_artist_id",
+      scan_state: "id",
+      scan_queue: "++id",
+      mbz_metadata_cache: "key",
+      mbz_search_cache: "key, expires_at",
+    });
   }
 }
 
@@ -76,7 +84,8 @@ export async function deleteSong(id: string) {
 export async function getAllSongs(): Promise<DbSong[]> {
   try {
     return await db.songs.toArray();
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getAllSongs error:", err);
     return [];
   }
 }
@@ -84,7 +93,21 @@ export async function getAllSongs(): Promise<DbSong[]> {
 export async function getSongById(id: string): Promise<DbSong | null> {
   try {
     return (await db.songs.get(id)) || null;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getSongById error:", err);
+    return null;
+  }
+}
+
+export async function getSongByMbid(
+  mbid: string,
+): Promise<DbSong | null> {
+  try {
+    return (
+      (await db.songs.where("mbz_recording_id").equals(mbid).first()) || null
+    );
+  } catch (err) {
+    console.warn("[local-db] getSongByMbid error:", err);
     return null;
   }
 }
@@ -94,16 +117,17 @@ export async function searchSongs(query: string, limit = 50): Promise<DbSong[]> 
     const q = query.toLowerCase();
     const results: DbSong[] = [];
     await db.songs
-      .filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          s.artist_name.toLowerCase().includes(q) ||
-          (s.album_name || "").toLowerCase().includes(q),
-      )
+      .filter((s) => {
+        const name = (s.name || "").toLowerCase();
+        const artist = (s.artist_name || "").toLowerCase();
+        const album = (s.album_name || "").toLowerCase();
+        return name.includes(q) || artist.includes(q) || album.includes(q);
+      })
       .limit(limit)
       .each((s) => results.push(s));
     return results;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] searchSongs error:", err);
     return [];
   }
 }
@@ -113,7 +137,8 @@ export async function getAllPaths(): Promise<string[]> {
     const paths: string[] = [];
     await db.songs.each((s) => paths.push(s.path));
     return paths;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getAllPaths error:", err);
     return [];
   }
 }
@@ -123,7 +148,8 @@ export async function getAllPaths(): Promise<string[]> {
 export async function getSongCount(): Promise<number> {
   try {
     return await db.songs.count();
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getSongCount error:", err);
     return 0;
   }
 }
@@ -132,7 +158,8 @@ export async function getArtistCount(): Promise<number> {
   try {
     const keys = await db.songs.orderBy("artist_name").uniqueKeys();
     return keys.length;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getArtistCount error:", err);
     return 0;
   }
 }
@@ -144,7 +171,8 @@ export async function getAlbumCount(): Promise<number> {
       .filter((s) => s.album_name != null)
       .each((s) => albums.add(s.album_name as string));
     return albums.size;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getAlbumCount error:", err);
     return 0;
   }
 }
@@ -153,7 +181,8 @@ export async function getDistinctGenres(): Promise<string[]> {
   try {
     const keys = await db.songs.orderBy("genre").uniqueKeys();
     return keys.filter((g): g is string => g != null);
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getDistinctGenres error:", err);
     return [];
   }
 }
@@ -190,7 +219,8 @@ export async function getAlbumsFromSongs(): Promise<
         a.artist_name.localeCompare(b.artist_name) ||
         a.name.localeCompare(b.name),
     );
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getAlbumsFromSongs error:", err);
     return [];
   }
 }
@@ -224,7 +254,8 @@ export async function getArtistsFromSongs(): Promise<
         album_count: artistAlbums.get(name)?.size || 0,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getArtistsFromSongs error:", err);
     return [];
   }
 }
@@ -244,7 +275,8 @@ export async function getSongsByAlbum(
           s.artist_name === albumArtist || s.album_artist === albumArtist,
       )
       .sort((a, b) => (a.track_number || 0) - (b.track_number || 0) || a.name.localeCompare(b.name));
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getSongsByAlbum error:", err);
     return [];
   }
 }
@@ -255,8 +287,26 @@ export async function getSongsByArtist(artist: string): Promise<DbSong[]> {
       .where("artist_name")
       .equals(artist)
       .sortBy("album_name");
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getSongsByAlbum error:", err);
     return [];
+  }
+}
+
+/**
+ * Find the filesystem directory for a given artist+album combination.
+ * Returns the parent directory of the first matched song's path, or null.
+ */
+export async function getAlbumDir(artist: string, album: string): Promise<string | null> {
+  try {
+    const songs = await getSongsByAlbum(artist, album);
+    if (songs.length === 0 || !songs[0].path) return null;
+    const path = songs[0].path;
+    const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    return idx >= 0 ? path.slice(0, idx) : null;
+  } catch (err) {
+    console.warn("[local-db] getAlbumDir error:", err);
+    return null;
   }
 }
 
@@ -279,7 +329,8 @@ export async function dequeueScan(): Promise<{
     if (!item) return null;
     await db.scan_queue.delete(item.id);
     return { type: item.type, path: item.path };
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] dequeueScan error:", err);
     return null;
   }
 }
@@ -287,7 +338,8 @@ export async function dequeueScan(): Promise<{
 export async function getQueueCount(): Promise<number> {
   try {
     return await db.scan_queue.count();
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getQueueCount error:", err);
     return 0;
   }
 }
@@ -295,7 +347,9 @@ export async function getQueueCount(): Promise<number> {
 export async function clearQueue() {
   try {
     await db.scan_queue.clear();
-  } catch {}
+  } catch (err) {
+    console.warn("[local-db] clearQueue error:", err);
+  }
 }
 
 // ── Scan State ──
@@ -306,7 +360,8 @@ export async function getScanState(): Promise<ScanState | null> {
     if (!row) return null;
     const { id: _, ...state } = row;
     return state;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getScanState error:", err);
     return null;
   }
 }
@@ -325,7 +380,9 @@ export async function updateScanState(state: Partial<ScanState>) {
         watcher_enabled: 0,
       };
     await db.scan_state.put({ ...existing, ...state });
-  } catch {}
+  } catch (err) {
+    console.warn("[local-db] updateScanState error:", err);
+  }
 }
 
 // ── Artist CRUD ──
@@ -338,7 +395,8 @@ export async function upsertArtist(artist: Omit<DbArtist, "updated_at">) {
 export async function getArtistByName(name: string): Promise<DbArtist | null> {
   try {
     return (await db.artists.where("name").equals(name).first()) || null;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getArtistByName error:", err);
     return null;
   }
 }
@@ -346,7 +404,8 @@ export async function getArtistByName(name: string): Promise<DbArtist | null> {
 export async function getArtistByMbid(mbid: string): Promise<DbArtist | null> {
   try {
     return (await db.artists.where("mbz_artist_id").equals(mbid).first()) || null;
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getArtistByMbid error:", err);
     return null;
   }
 }
@@ -354,7 +413,8 @@ export async function getArtistByMbid(mbid: string): Promise<DbArtist | null> {
 export async function getAllArtists(): Promise<DbArtist[]> {
   try {
     return await db.artists.toArray();
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getAllArtists error:", err);
     return [];
   }
 }
@@ -362,7 +422,8 @@ export async function getAllArtists(): Promise<DbArtist[]> {
 export async function getIndexedArtistCount(): Promise<number> {
   try {
     return await db.artists.count();
-  } catch {
+  } catch (err) {
+    console.warn("[local-db] getIndexedArtistCount error:", err);
     return 0;
   }
 }
@@ -370,7 +431,9 @@ export async function getIndexedArtistCount(): Promise<number> {
 export async function deleteArtist(id: string) {
   try {
     await db.artists.delete(id);
-  } catch {}
+  } catch (err) {
+    console.warn("[local-db] deleteArtist error:", err);
+  }
 }
 
 // Re-export types

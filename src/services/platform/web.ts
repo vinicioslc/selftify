@@ -4,7 +4,8 @@ export function createWebPlatformService(): PlatformService {
   function getLocal(key: string): string | null {
     try {
       return localStorage.getItem(`ytmusic:${key}`);
-    } catch {
+    } catch (err) {
+      console.warn("[platform-web] getLocal error:", err);
       return null;
     }
   }
@@ -12,7 +13,9 @@ export function createWebPlatformService(): PlatformService {
   function setLocal(key: string, value: string): void {
     try {
       localStorage.setItem(`ytmusic:${key}`, value);
-    } catch {}
+    } catch (err) {
+      console.warn("[platform-web] setLocal error:", err);
+    }
   }
 
   return {
@@ -32,7 +35,8 @@ export function createWebPlatformService(): PlatformService {
         });
         if (files.length === 0) return null;
         return files[0].webkitRelativePath.split('/')[0] || files[0].name;
-      } catch {
+      } catch (err) {
+        console.warn("[platform-web] openFolderPicker error:", err);
         return null;
       }
     },
@@ -53,7 +57,8 @@ export function createWebPlatformService(): PlatformService {
         });
         if (!files || files.length === 0) return null;
         return files[0].name;
-      } catch {
+      } catch (err) {
+        console.warn("[platform-web] openFilePicker error:", err);
         return null;
       }
     },
@@ -63,7 +68,8 @@ export function createWebPlatformService(): PlatformService {
         const resp = await fetch(path);
         const buf = await resp.arrayBuffer();
         return new Uint8Array(buf);
-      } catch {
+      } catch (err) {
+        console.warn("[platform-web] readFile error:", err);
         return null;
       }
     },
@@ -80,18 +86,39 @@ export function createWebPlatformService(): PlatformService {
       return null;
     },
 
+    async writeFile(_path, _data) {
+      return false;
+    },
+
+    async deleteFile(_path) {
+      return false;
+    },
+
+    async createDirectory(_path) {
+      return false;
+    },
+
+    async renameFile(_oldPath, _newPath) {
+      return false;
+    },
+
     async getSetting(key) {
       const raw = getLocal(key);
       if (raw === null) return null;
       try {
         return JSON.parse(raw);
-      } catch {
+      } catch (err) {
+        console.warn("[platform-web] getSetting parse error:", err);
         return raw;
       }
     },
 
     async setSetting(key, value) {
       setLocal(key, typeof value === 'string' ? value : JSON.stringify(value));
+    },
+
+    onCookiesInvalid(_callback) {
+      return () => {};
     },
   };
 }

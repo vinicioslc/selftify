@@ -33,6 +33,8 @@ export interface ServerController {
   getImageUrl(songId: string): Promise<string | null>;
   getAlbumSongs(albumArtist: string, album: string): Promise<Song[]>;
   getArtistSongs(artist: string): Promise<Song[]>;
+  populateSongImages(songs: Song[]): Promise<Song[]>;
+  populateArtistImages(artists: AlbumArtist[]): Promise<AlbumArtist[]>;
 }
 
 function getContext(): ApiContext {

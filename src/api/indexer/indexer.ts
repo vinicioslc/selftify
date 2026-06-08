@@ -2,7 +2,7 @@ import type { Origin } from "../../types/domain-types";
 import { OriginType } from "../../types/domain-types";
 
 export type IndexerStatus = {
-  status: "idle" | "indexing" | "paused" | "done" | "error";
+  status: "idle" | "discovering" | "indexing" | "paused" | "done" | "error";
   progress: { total: number; done: number; currentItem: string };
 };
 

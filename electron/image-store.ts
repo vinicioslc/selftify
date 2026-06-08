@@ -60,7 +60,8 @@ class ElectronImageStore {
           this.meta.set(entry.md5, entry);
         }
       }
-    } catch {
+    } catch (err) {
+      console.warn("[electron-image-store] loadMeta error:", err);
       this.meta.clear();
     }
   }
@@ -72,8 +73,8 @@ class ElectronImageStore {
       const tmp = this.metaPath + ".tmp";
       fs.writeFileSync(tmp, JSON.stringify(arr), "utf-8");
       fs.renameSync(tmp, this.metaPath);
-    } catch {
-      // non-critical
+    } catch (err) {
+      console.warn("[electron-image-store] flushMeta error:", err);
     }
   }
 
@@ -106,7 +107,7 @@ class ElectronImageStore {
       if (mbzReleaseId && !existing.mbzReleaseId) { existing.mbzReleaseId = mbzReleaseId; changed = true; }
       if (sourceUrl && !existing.sourceUrl) { existing.sourceUrl = sourceUrl; changed = true; }
       if (changed) {
-        await this.queue.add("flush-meta", null, "low");
+        this.queue.add("flush-meta", null, "low").catch(() => {});
       }
       return hash;
     }
@@ -126,7 +127,7 @@ class ElectronImageStore {
 
     this.meta.set(hash, entry);
     fs.writeFileSync(this.filePath(hash, format), Buffer.from(buffer));
-    await this.queue.add("flush-meta", null, "low");
+    this.queue.add("flush-meta", null, "low").catch(() => {});
     return hash;
   }
 
@@ -139,7 +140,8 @@ class ElectronImageStore {
     try {
       const data = fs.readFileSync(path);
       return { meta: entry, data: Array.from(new Uint8Array(data)) };
-    } catch {
+    } catch (err) {
+      console.warn("[electron-image-store] handleGet error:", err);
       return null;
     }
   }
@@ -177,10 +179,10 @@ class ElectronImageStore {
     this.meta.delete(hash);
     try {
       fs.unlinkSync(this.filePath(hash, entry.format));
-    } catch {
-      // already gone
+    } catch (err) {
+      console.warn("[electron-image-store] handleDelete unlink error:", err);
     }
-    await this.queue.add("flush-meta", null, "low");
+    this.queue.add("flush-meta", null, "low").catch(() => {});
   }
 
   private async handleClear(): Promise<void> {
@@ -188,10 +190,10 @@ class ElectronImageStore {
     try {
       fs.rmSync(this.cacheDir, { recursive: true, force: true });
       fs.mkdirSync(this.cacheDir, { recursive: true });
-    } catch {
-      // non-critical
+    } catch (err) {
+      console.warn("[electron-image-store] handleClear error:", err);
     }
-    await this.queue.add("flush-meta", null, "low");
+    this.queue.add("flush-meta", null, "low").catch(() => {});
   }
 
   private async handleFlushMeta(): Promise<void> {

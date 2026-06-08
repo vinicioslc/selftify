@@ -4,6 +4,7 @@ import { getIndexer, type Indexer, type IndexerStatus } from "../api/indexer/ind
 import { OriginType } from "../types/domain-types";
 import { useAuthStore } from "../stores/auth.store";
 import { getScanState, getQueueCount, getSongCount, updateScanState } from "../services/local-database";
+import { preloadImagesFromDotImg } from "../services/image-preloader";
 import { decideAutoScan } from "./auto-scan-logic";
 
 export function useLocalScan() {
@@ -27,12 +28,18 @@ export function useLocalScan() {
       indexerRef.current = await getIndexer(currentOrigin);
       unsubscribeRef.current = indexerRef.current.onProgress((s) => {
         setStatus(s);
-        const mappedStatus = s.status === "indexing" ? "scanning" : s.status;
+        const mappedStatus = s.status === "indexing" || s.status === "discovering" ? "scanning" : s.status;
         setScanStatus(mappedStatus as any);
         setScanProgress({ total: s.progress.total, done: s.progress.done, currentDir: s.progress.currentItem });
         if (s.status === "done") {
           setLastScanned(Date.now());
           setScanningOriginId(null);
+          const { currentOrigin } = useAuthStore.getState();
+          if (currentOrigin?.folderPath) {
+            preloadImagesFromDotImg(currentOrigin.folderPath).catch((err) =>
+              console.warn("[use-local-scan] image preload failed:", err),
+            );
+          }
         }
       });
     }
@@ -94,9 +101,15 @@ export function useLocalScan() {
       case "mark-done":
         await updateScanState({ scan_status: "done", last_scanned_at: Date.now() });
         await startWatcherIfReady();
+        preloadImagesFromDotImg(folder).catch((err) =>
+          console.warn("[use-local-scan] image preload failed:", err),
+        );
         break;
       case "skip":
         await startWatcherIfReady();
+        preloadImagesFromDotImg(folder).catch((err) =>
+          console.warn("[use-local-scan] image preload failed:", err),
+        );
         break;
     }
   }, [resume, startScan]);
@@ -109,8 +122,8 @@ export function useLocalScan() {
       if (count === 0) return;
       const idx = await ensureIndexer();
       await idx.startWatcher();
-    } catch {
-      // non-local origins have noop indexer — ignore
+    } catch (err) {
+      console.warn("[use-local-scan] startWatcherIfReady error:", err);
     }
   }
 

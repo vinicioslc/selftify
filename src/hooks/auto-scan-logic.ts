@@ -10,7 +10,7 @@ export interface AutoScanInput {
 export function decideAutoScan(input: AutoScanInput): AutoScanAction {
   const { rootFolder, scanState, queueCount, songCount } = input;
 
-  if (scanState && (scanState.scan_status === "scanning" || scanState.scan_status === "paused")) {
+  if (scanState && (scanState.scan_status === "scanning" || scanState.scan_status === "paused" || scanState.scan_status === "indexing")) {
     return queueCount > 0 ? "resume" : "mark-done";
   }
 

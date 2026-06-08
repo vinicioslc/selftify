@@ -18,6 +18,13 @@ export interface PlatformService {
   fileExists(path: string): Promise<boolean>;
   getFileStats(path: string): Promise<{ size: number; modifiedAt: number } | null>;
 
+  writeFile(path: string, data: Uint8Array): Promise<boolean>;
+  deleteFile(path: string): Promise<boolean>;
+  createDirectory(path: string): Promise<boolean>;
+  renameFile(oldPath: string, newPath: string): Promise<boolean>;
+
   getSetting(key: string): Promise<any>;
   setSetting(key: string, value: any): Promise<void>;
+
+  onCookiesInvalid(callback: () => void): () => void;
 }

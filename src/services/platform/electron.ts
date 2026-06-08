@@ -32,12 +32,33 @@ export function createElectronPlatformService(): PlatformService {
       return api()?.fs?.getFileStats(path) ?? null;
     },
 
+    async writeFile(path, data) {
+      return api()?.fs?.writeFile(path, Array.from(data)) ?? false;
+    },
+
+    async deleteFile(path) {
+      return api()?.fs?.deleteFile(path) ?? false;
+    },
+
+    async createDirectory(path) {
+      return api()?.fs?.createDirectory(path) ?? false;
+    },
+
+    async renameFile(oldPath, newPath) {
+      return api()?.fs?.renameFile(oldPath, newPath) ?? false;
+    },
+
     async getSetting(key) {
       return api()?.settings?.get(key) ?? null;
     },
 
     async setSetting(key, value) {
       await api()?.settings?.set(key, value);
+    },
+
+    onCookiesInvalid(callback) {
+      const apiInstance = api();
+      return apiInstance?.onCookiesInvalid?.(callback) ?? (() => {});
     },
   };
 }
