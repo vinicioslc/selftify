@@ -13,46 +13,20 @@ import {
   setCachedSearch,
   hashSearchQuery,
 } from "./musicbrainz-cache";
-import { getImageUrlByTag, storeImage } from "./image-cache";
+import { getDiskCache, type MusicBrainzContext } from "./musicbrainz-disk-cache";
+// Local image cache removed — fetching cover URLs directly
+
+import { useAuthStore } from "../stores/auth.store";
+import { OriginType } from "../types/domain-types";
 
 const BASE_URL = "https://musicbrainz.org/ws/2";
 const COVER_ART_URL = "https://coverartarchive.org/release";
 const RATE_LIMIT_MS = 1200;
 const APP_NAME = "Selftify/1.0.0";
 
-type QueueItem = {
-  resolve: (value: Response) => void;
-  reject: (reason: unknown) => void;
-  url: string;
-  init: RequestInit;
-};
+let lastMbRequestAt = 0;
 
-let lastRequestTime = 0;
-let pendingQueue: QueueItem[] = [];
-let processing = false;
-
-async function processQueue() {
-  if (processing) return;
-  processing = true;
-  while (pendingQueue.length > 0) {
-    const now = Date.now();
-    const elapsed = now - lastRequestTime;
-    if (elapsed < RATE_LIMIT_MS) {
-      await new Promise((r) => setTimeout(r, RATE_LIMIT_MS - elapsed));
-    }
-    const item = pendingQueue.shift()!;
-    lastRequestTime = Date.now();
-    try {
-      const response = await fetch(item.url, item.init);
-      item.resolve(response);
-    } catch (err) {
-      item.reject(err);
-    }
-  }
-  processing = false;
-}
-
-function enqueueRequest(url: string, init: RequestInit = {}): Promise<Response> {
+async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (!headers.has("User-Agent")) {
     headers.set("User-Agent", APP_NAME);
@@ -60,16 +34,26 @@ function enqueueRequest(url: string, init: RequestInit = {}): Promise<Response> 
   if (!headers.has("Accept")) {
     headers.set("Accept", "application/json");
   }
-  return new Promise<Response>((resolve, reject) => {
-    pendingQueue.push({ resolve, reject, url, init: { ...init, headers } });
-    processQueue();
-  });
+  if (!headers.has("Authorization")) {
+    const token = useAuthStore.getState().currentOrigin?.musicBrainzToken;
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+  const hasToken = Boolean(headers.get("Authorization"));
+  const minGap = hasToken ? 200 : RATE_LIMIT_MS;
+  const elapsed = Date.now() - lastMbRequestAt;
+  if (elapsed < minGap) {
+    await new Promise((r) => setTimeout(r, minGap - elapsed));
+  }
+  lastMbRequestAt = Date.now();
+  return fetch(url, { ...init, headers });
 }
 
 async function apiGet<T>(endpoint: string): Promise<T> {
-  const response = await enqueueRequest(`${BASE_URL}${endpoint}`);
+  const response = await musicbrainzFetch(`${BASE_URL}${endpoint}`);
   if (!response.ok) {
-    throw new Error(`MusicBrainz API error: ${response.status} ${response.statusText}`);
+    throw new Error(`MusicBrainz API error: ${response.status}`);
   }
   return response.json();
 }
@@ -122,7 +106,7 @@ export async function searchReleases(
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBRelease>>(
-    `/release/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json`,
+    `/release/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json&inc=release-groups`,
   );
 
   await setCachedSearch(cacheKey, result);
@@ -150,46 +134,58 @@ export async function searchArtists(
 }
 
 export async function getCachedCoverUrl(releaseMbid: string): Promise<string | null> {
-  const tag = `mbz-cover/${releaseMbid}`;
-  const cached = await getImageUrlByTag(tag);
-  if (cached) return cached;
-
   try {
-    const response = await enqueueRequest(`${COVER_ART_URL}/${releaseMbid}/front-250.jpg`);
+    const response = await musicbrainzFetch(`${COVER_ART_URL}/${releaseMbid}/front-250.jpg`);
     if (!response.ok) return null;
-
     const blob = await response.blob();
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    const format = contentType.startsWith("image/png") ? "image/png"
-      : contentType.startsWith("image/webp") ? "image/webp"
-      : "image/jpeg";
-
-    await storeImage(blob, format, [tag]);
-    return getImageUrlByTag(tag);
-  } catch {
+    return URL.createObjectURL(blob);
+  } catch (err) {
+    console.warn("[mb-client] getCachedCoverUrl failed:", err);
     return null;
   }
 }
 
-export async function getReleaseDetail(releaseMbid: string): Promise<MBRelease | null> {
+export async function getReleaseDetail(
+  releaseMbid: string,
+  ctx?: MusicBrainzContext,
+): Promise<MBRelease | null> {
   const cacheKey = `rel-${releaseMbid}`;
+  const libraryRoot = ctx ? getLibraryRoot() : undefined;
+
+  if (libraryRoot && ctx) {
+    const r = await getDiskCache(libraryRoot).get<MBRelease>(ctx.artistName, cacheKey, ctx.artistMbid);
+    if (r) return r;
+  }
 
   const cached = await getCachedMetadata<MBRelease>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBRelease>(
-      `/release/${releaseMbid}?fmt=json&inc=artist-credits+recordings`,
+      `/release/${releaseMbid}?fmt=json&inc=artist-credits+recordings+media`,
     );
     await setCachedMetadata(cacheKey, result);
+    if (libraryRoot && ctx) {
+      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
+    }
     return result;
-  } catch {
+  } catch (err) {
+    console.warn("[mb-client] getReleaseDetail failed:", err);
     return null;
   }
 }
 
-export async function getReleaseByReleaseGroup(rgId: string): Promise<MBRelease | null> {
+export async function getReleaseByReleaseGroup(
+  rgId: string,
+  ctx?: MusicBrainzContext,
+): Promise<MBRelease | null> {
   const cacheKey = `rel-rg-${rgId}`;
+  const libraryRoot = ctx ? getLibraryRoot() : undefined;
+
+  if (libraryRoot && ctx) {
+    const r = await getDiskCache(libraryRoot).get<MBRelease>(ctx.artistName, cacheKey, ctx.artistMbid);
+    if (r) return r;
+  }
 
   const cached = await getCachedMetadata<MBRelease>(cacheKey);
   if (cached) return cached;
@@ -199,15 +195,30 @@ export async function getReleaseByReleaseGroup(rgId: string): Promise<MBRelease 
       `/release?release-group=${rgId}&fmt=json&inc=artist-credits+recordings&limit=1`,
     );
     const release = result.releases?.[0] ?? null;
-    if (release) await setCachedMetadata(cacheKey, release);
+    if (release) {
+      await setCachedMetadata(cacheKey, release);
+      if (libraryRoot && ctx) {
+        await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, release, ctx.artistMbid);
+      }
+    }
     return release;
-  } catch {
+  } catch (err) {
+    console.warn("[mb-client] getReleaseByReleaseGroup failed:", err);
     return null;
   }
 }
 
-export async function getRecordingDetail(recordingMbid: string): Promise<MBRecording | null> {
+export async function getRecordingDetail(
+  recordingMbid: string,
+  ctx?: MusicBrainzContext,
+): Promise<MBRecording | null> {
   const cacheKey = `rec-${recordingMbid}`;
+  const libraryRoot = ctx ? getLibraryRoot() : undefined;
+
+  if (libraryRoot && ctx) {
+    const r = await getDiskCache(libraryRoot).get<MBRelease>(ctx.artistName, cacheKey, ctx.artistMbid);
+    if (r) return r;
+  }
 
   const cached = await getCachedMetadata<MBRecording>(cacheKey);
   if (cached) return cached;
@@ -217,8 +228,12 @@ export async function getRecordingDetail(recordingMbid: string): Promise<MBRecor
       `/recording/${recordingMbid}?fmt=json&inc=artist-credits+releases`,
     );
     await setCachedMetadata(cacheKey, result);
+    if (libraryRoot && ctx) {
+      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
+    }
     return result;
-  } catch {
+  } catch (err) {
+    console.warn("[mb-client] getRecordingDetail failed:", err);
     return null;
   }
 }
@@ -227,8 +242,15 @@ export async function getArtistReleaseGroups(
   artistMbid: string,
   limit = 50,
   offset = 0,
+  ctx?: MusicBrainzContext,
 ): Promise<{ groups: MBReleaseGroup[]; total: number }> {
   const cacheKey = `rg-art-${artistMbid}-${limit}-${offset}`;
+  const libraryRoot = ctx ? getLibraryRoot() : undefined;
+
+  if (libraryRoot && ctx) {
+    const r = await getDiskCache(libraryRoot).get<MusicBrainzReleaseGroupResponse>(ctx.artistName, cacheKey, ctx.artistMbid);
+    if (r) return { groups: r["release-groups"] ?? [], total: r.count ?? 0 };
+  }
 
   const cached = await getCachedMetadata<MusicBrainzReleaseGroupResponse>(cacheKey);
   if (cached) return { groups: cached["release-groups"] ?? [], total: cached.count ?? 0 };
@@ -238,14 +260,27 @@ export async function getArtistReleaseGroups(
       `/release-group?artist=${artistMbid}&fmt=json&limit=${limit}&offset=${offset}`,
     );
     await setCachedMetadata(cacheKey, result);
+    if (libraryRoot && ctx) {
+      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
+    }
     return { groups: result["release-groups"] ?? [], total: result.count ?? 0 };
-  } catch {
+  } catch (err) {
+    console.warn("[mb-client] getArtistReleaseGroups failed:", err);
     return { groups: [], total: 0 };
   }
 }
 
-export async function getArtistDetail(artistMbid: string): Promise<MBArtist | null> {
+export async function getArtistDetail(
+  artistMbid: string,
+  ctx?: MusicBrainzContext,
+): Promise<MBArtist | null> {
   const cacheKey = `art-${artistMbid}`;
+  const libraryRoot = ctx ? getLibraryRoot() : undefined;
+
+  if (libraryRoot && ctx) {
+    const r = await getDiskCache(libraryRoot).get<MBArtist>(ctx.artistName, cacheKey, ctx.artistMbid);
+    if (r) return r;
+  }
 
   const cached = await getCachedMetadata<MBArtist>(cacheKey);
   if (cached) return cached;
@@ -255,8 +290,17 @@ export async function getArtistDetail(artistMbid: string): Promise<MBArtist | nu
       `/artist/${artistMbid}?fmt=json&inc=tags`,
     );
     await setCachedMetadata(cacheKey, result);
+    if (libraryRoot && ctx) {
+      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
+    }
     return result;
-  } catch {
+  } catch (err) {
+    console.warn("[mb-client] getArtistDetail failed:", err);
     return null;
   }
+}
+
+function getLibraryRoot(): string | undefined {
+  const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
+  return origin?.folderPath || undefined;
 }

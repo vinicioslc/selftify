@@ -40,6 +40,7 @@ export type MBRelease = {
   }>;
   "media"?: Array<{
     format?: string;
+    position?: string;
     "track-count"?: number;
     tracks?: Array<{
       id: string;

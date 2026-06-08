@@ -11,10 +11,23 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
 import { useState, useEffect } from "react";
-import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe } from "lucide-react";
+import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe, Database, HardDrive } from "lucide-react";
 import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
 import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
 import { OriginEditDialog } from "./origin-edit-dialog";
+import { CacheManagerModal } from "./cache-manager-modal";
+import { RankingView } from "./ranking-view";
+import { useStatusStore } from "../../stores/status.store";
+import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group";
+import { getDiskCache, clearAllDiskCaches, type MusicBrainzCacheTtl } from "../../services/musicbrainz-disk-cache";
+
+const PROVIDER_META: Record<string, { label: string; description: string; domain: string }> = {
+  embedded: { label: "Embedded Tags", description: "Cover art extracted from file tags", domain: "local" },
+  cover_art_archive: { label: "Cover Art Archive", description: "Official covers indexed by MusicBrainz", domain: "coverartarchive.org" },
+  musicbrainz_release_group: { label: "MusicBrainz RG", description: "Release group → releases → CAA", domain: "musicbrainz.org" },
+  itunes: { label: "iTunes Search", description: "Apple Music / iTunes Store album art", domain: "itunes.apple.com" },
+  deezer: { label: "Deezer", description: "Deezer album covers", domain: "api.deezer.com" },
+};
 
 type SettingsPageProps = {
   initialTab?: string;
@@ -28,13 +41,17 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     visualizerEnabled, setVisualizerEnabled,
     crossfadeEnabled, setCrossfadeEnabled,
     crossfadeDuration, setCrossfadeDuration,
+    transitionMixingEnabled, setTransitionMixingEnabled,
     sidebarCollapsed,
     animationsEnabled, setAnimationsEnabled,
     activeAudioOutputs, setActiveAudioOutputs,
     autoSwitchOutput, setAutoSwitchOutput,
-    imageFetchRateLimitMs, setImageFetchRateLimitMs,
-    imageFetchMaxConcurrent, setImageFetchMaxConcurrent,
     imageFetchTimeoutMs, setImageFetchTimeoutMs,
+    searchTimeoutMs, setSearchTimeoutMs,
+    streamTimeoutMs, setStreamTimeoutMs,
+    cacheTtlMinutes, setCacheTtlMinutes,
+    musicbrainzCacheTtl, setMusicbrainzCacheTtl,
+    artworkProviders, isArtworkProviderEnabled, getArtworkPaceMs, setArtworkProvider,
   } = useSettingsStore();
 
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
@@ -55,6 +72,10 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   }, [audioManagerRef]);
 
   const [editingOrigin, setEditingOrigin] = useState<Origin | null>(null);
+  const [cacheModalOpen, setCacheModalOpen] = useState(false);
+  const [clearingImageCache, setClearingImageCache] = useState(false);
+  const [clearingDiskCache, setClearingDiskCache] = useState(false);
+  const [diskCacheCleared, setDiskCacheCleared] = useState(false);
 
   const [form, setForm] = useState({
     folderPath: "",
@@ -116,6 +137,23 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     }
   }
 
+  async function handleClearImageCache() {
+    setClearingImageCache(true);
+    console.debug("[settings] clearing image cache");
+    useStatusStore.getState().addMessage("Clearing image cache...", "info", "Settings");
+    try {
+      const { clearImageCaches } = await import("../../services/image-fetch");
+      await clearImageCaches();
+      console.debug("[settings] image cache cleared");
+      useStatusStore.getState().addMessage("Image cache cleared", "success", "Settings");
+    } catch (err) {
+      console.error("[settings] image cache clear failed:", err);
+      useStatusStore.getState().addMessage("Image cache clear failed", "danger", "Settings");
+    } finally {
+      setClearingImageCache(false);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       <ScrollArea className="flex-1">
@@ -132,6 +170,8 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
               <TabsTrigger value="audio">Audio</TabsTrigger>
               <TabsTrigger value="visualizer">Visualizer</TabsTrigger>
               <TabsTrigger value="network">Network</TabsTrigger>
+              <TabsTrigger value="ranking">Ranking</TabsTrigger>
+              <TabsTrigger value="artwork">Artwork</TabsTrigger>
               <TabsTrigger value="appearance">Appearance</TabsTrigger>
             </TabsList>
 
@@ -292,6 +332,37 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                       />
                     </div>
                   )}
+
+                  <Separator className="my-2" />
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">Transition Mixing</p>
+                      <p className="text-sm text-muted-foreground">
+                        Fade out current track while fading in the next (overlap)
+                      </p>
+                    </div>
+                    <Switch
+                      checked={transitionMixingEnabled}
+                      onCheckedChange={setTransitionMixingEnabled}
+                    />
+                  </div>
+                  {transitionMixingEnabled && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span>Transition duration</span>
+                        <span>{crossfadeDuration}s</span>
+                      </div>
+                      <Slider
+                        value={[crossfadeDuration]}
+                        onValueChange={([v]) => setCrossfadeDuration(v)}
+                        min={0}
+                        max={12}
+                        step={0.5}
+                      />
+                      <p className="text-xs text-muted-foreground">0s = instant switch</p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -417,63 +488,205 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">Network Settings</CardTitle>
-                  <CardDescription>Control how the app fetches cover art and other images</CardDescription>
+                  <CardDescription>Control timeout and caching behavior for YouTube / MusicBrainz operations</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Rate Limit (ms)</span>
-                      <span>{imageFetchRateLimitMs}ms</span>
-                    </div>
-                    <Slider
-                      value={[imageFetchRateLimitMs]}
-                      onValueChange={([v]) => setImageFetchRateLimitMs(v)}
-                      min={0}
-                      max={5000}
-                      step={100}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Minimum interval between image requests (0 = no limit)
-                    </p>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Max Concurrent Fetches</span>
-                      <span>{imageFetchMaxConcurrent}</span>
-                    </div>
-                    <Slider
-                      value={[imageFetchMaxConcurrent]}
-                      onValueChange={([v]) => setImageFetchMaxConcurrent(v)}
-                      min={1}
-                      max={20}
-                      step={1}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Maximum parallel image downloads
-                    </p>
-                  </div>
-
-                  <Separator />
-
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span>Fetch Timeout (ms)</span>
                       <span>{imageFetchTimeoutMs}ms</span>
                     </div>
-                    <Slider
-                      value={[imageFetchTimeoutMs]}
-                      onValueChange={([v]) => setImageFetchTimeoutMs(v)}
-                      min={1000}
-                      max={60000}
-                      step={1000}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Time before an image request is aborted
-                    </p>
+                    <Slider value={[imageFetchTimeoutMs]} onValueChange={([v]) => setImageFetchTimeoutMs(v)} min={1000} max={60000} step={1000} />
+                    <p className="text-xs text-muted-foreground">Time before an image request is aborted</p>
                   </div>
+                  <Separator />
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Search Timeout (ms)</span>
+                      <span>{searchTimeoutMs}ms</span>
+                    </div>
+                    <Slider value={[searchTimeoutMs]} onValueChange={([v]) => setSearchTimeoutMs(v)} min={5000} max={120000} step={1000} />
+                    <p className="text-xs text-muted-foreground">Max time for a YouTube search operation</p>
+                  </div>
+                  <Separator />
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Stream Timeout (ms)</span>
+                      <span>{streamTimeoutMs}ms</span>
+                    </div>
+                    <Slider value={[streamTimeoutMs]} onValueChange={([v]) => setStreamTimeoutMs(v)} min={5000} max={120000} step={1000} />
+                    <p className="text-xs text-muted-foreground">Max time for extracting a YouTube stream URL</p>
+                  </div>
+                  <Separator />
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Cache TTL (minutes)</span>
+                      <span>{cacheTtlMinutes}min</span>
+                    </div>
+                    <Slider value={[cacheTtlMinutes]} onValueChange={([v]) => setCacheTtlMinutes(v)} min={1} max={1440} step={5} />
+                    <p className="text-xs text-muted-foreground">How long search results stay cached before re-fetching</p>
+                  </div>
+                  <Separator />
+                  <div>
+                    <Button variant="outline" size="sm" className="gap-2" onClick={() => setCacheModalOpen(true)}>
+                      <Database className="h-4 w-4" /> Manage Cache
+                    </Button>
+                    <p className="mt-1 text-xs text-muted-foreground">View and clear cached search results and MB→YT mappings</p>
+                  </div>
+                  <Separator />
+                  <div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={handleClearImageCache}
+                      disabled={clearingImageCache}
+                    >
+                      <Trash2 className="h-4 w-4" /> {clearingImageCache ? "Clearing images..." : "Clear Image Cache"}
+                    </Button>
+                    <p className="mt-1 text-xs text-muted-foreground">Remove cached album, artist, and search thumbnails so they are fetched again</p>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-medium flex items-center gap-2">
+                      <HardDrive className="h-4 w-4" /> MusicBrainz Disk Cache
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                      Store MusicBrainz metadata in <code className="text-[10px]">db.*.selftify</code> files inside artist folders.
+                      Survives browser data clears and avoids redundant HTTP requests.
+                    </p>
+
+                    <RadioGroup
+                      value={musicbrainzCacheTtl}
+                      onValueChange={(v) => setMusicbrainzCacheTtl(v as MusicBrainzCacheTtl)}
+                      className="flex flex-wrap gap-x-6 gap-y-2"
+                    >
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <RadioGroupItem value="1min" /> 1 minute
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <RadioGroupItem value="15min" /> 15 minutes
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <RadioGroupItem value="30min" /> 30 minutes
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <RadioGroupItem value="never" /> Never expire
+                      </label>
+                    </RadioGroup>
+
+                    <p className="text-xs text-muted-foreground">
+                      TTL before re-fetching cached metadata from MusicBrainz.
+                    </p>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={async () => {
+                        setClearingDiskCache(true);
+                        const origin = origins.find((o) => o.type === OriginType.LOCAL);
+                        if (origin?.folderPath) {
+                          await clearAllDiskCaches(origin.folderPath);
+                        }
+                        setClearingDiskCache(false);
+                        setDiskCacheCleared(true);
+                        setTimeout(() => setDiskCacheCleared(false), 2000);
+                      }}
+                      disabled={clearingDiskCache}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {clearingDiskCache ? "Clearing..." : diskCacheCleared ? "\u2713 Cleared" : "Clear Disk Cache Now"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="ranking" className="space-y-4">
+              <RankingView />
+            </TabsContent>
+
+            <TabsContent value="artwork" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Artwork Providers</CardTitle>
+                  <CardDescription>
+                    Control which artwork providers are active and their request rate
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {Object.entries(artworkProviders).length === 0 && (
+                    <p className="text-sm text-muted-foreground">No artwork providers configured.</p>
+                  )}
+                  {Object.entries(artworkProviders).map(([name, setting]) => {
+                    const providerMeta = PROVIDER_META[name] || {
+                      label: name,
+                      description: "",
+                      domain: "",
+                    };
+                    return (
+                      <div
+                        key={name}
+                        className={`rounded-lg border p-4 transition-opacity ${
+                          setting.enabled ? "" : "opacity-50"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <Switch
+                              id={`provider-${name}`}
+                              checked={setting.enabled}
+                              onCheckedChange={(v) =>
+                                setArtworkProvider(name, { enabled: v })
+                              }
+                            />
+                            <div>
+                              <label
+                                htmlFor={`provider-${name}`}
+                                className="cursor-pointer font-medium"
+                              >
+                                {providerMeta.label}
+                              </label>
+                              <p className="text-xs text-muted-foreground">
+                                {providerMeta.description}
+                              </p>
+                              <code className="text-[10px] text-muted-foreground">
+                                {providerMeta.domain}
+                              </code>
+                            </div>
+                          </div>
+                          <span className="whitespace-nowrap text-xs font-mono tabular-nums">
+                            {setting.paceMs >= 1000
+                              ? `${(setting.paceMs / 1000).toFixed(0)}s`
+                              : `${setting.paceMs}ms`}
+                          </span>
+                        </div>
+                        {setting.enabled && (
+                          <div className="mt-3 space-y-1">
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>Fast (100ms)</span>
+                              <span>Slow (10s)</span>
+                            </div>
+                            <Slider
+                              value={[setting.paceMs]}
+                              onValueChange={([v]) =>
+                                setArtworkProvider(name, { paceMs: v })
+                              }
+                              min={100}
+                              max={10000}
+                              step={50}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Delay between requests — lower is faster but uses more API quota
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -521,6 +734,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
               </Card>
             </TabsContent>
           </Tabs>
+          <CacheManagerModal open={cacheModalOpen} onOpenChange={setCacheModalOpen} />
         </div>
       </ScrollArea>
     </div>

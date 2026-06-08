@@ -1,9 +1,21 @@
 import { db as selftifyDb } from "./local-database";
 import type { MbzMetadataCache, MbzSearchCache } from "./local-database-types";
+import { useSettingsStore } from "../stores/settings.store";
+import type { MusicBrainzCacheTtl } from "./musicbrainz-disk-cache";
 
-const SEARCH_TTL_MS = 5 * 60 * 1000;
 const METADATA_LRU_MAX = 500;
 const SEARCH_LRU_MAX = 200;
+
+function getTtlMs(): number {
+  return (useSettingsStore.getState().cacheTtlMinutes ?? 60) * 60 * 1000;
+}
+
+export function getDiskTtlMs(): number {
+  const v = useSettingsStore.getState().musicbrainzCacheTtl;
+  if (v === "never") return 0;
+  const map: Record<string, number> = { "1min": 60_000, "15min": 900_000, "30min": 1_800_000 };
+  return map[v] ?? 900_000;
+}
 
 type LruEntry<T> = { data: T; ts: number };
 
@@ -18,9 +30,13 @@ function lruSet<K, V>(map: Map<K, LruEntry<V>>, key: K, value: V, max: number) {
   map.set(key, { data: value, ts: Date.now() });
 }
 
-function lruGet<K, V>(map: Map<K, LruEntry<V>>, key: K): V | null {
+function lruGet<K, V>(map: Map<K, LruEntry<V>>, key: K, ttlMs: number = getTtlMs()): V | null {
   const entry = map.get(key);
   if (!entry) return null;
+  if (Date.now() - entry.ts > ttlMs) {
+    map.delete(key);
+    return null;
+  }
   entry.ts = Date.now();
   return entry.data;
 }
@@ -37,17 +53,23 @@ export function hashSearchQuery(params: Record<string, unknown>): string {
 }
 
 export async function getCachedMetadata<T extends object>(key: string): Promise<T | null> {
-  const lru = lruGet(metadataLru, key);
+  const ttl = getTtlMs();
+  const lru = lruGet(metadataLru, key, ttl);
   if (lru) return lru as T;
 
   try {
     const row = await selftifyDb.mbz_metadata_cache.get(key);
-    if (row) {
+    if (row && Date.now() - row.cached_at < ttl) {
       const data = JSON.parse(row.data) as T;
       lruSet(metadataLru, key, data, METADATA_LRU_MAX);
       return data;
     }
-  } catch {}
+    if (row) {
+      await selftifyDb.mbz_metadata_cache.delete(key);
+    }
+  } catch (err) {
+    console.warn("[mb-cache] getCachedMetadata error:", err);
+  }
 
   return null;
 }
@@ -61,7 +83,9 @@ export async function setCachedMetadata(key: string, data: object): Promise<void
       data: JSON.stringify(data),
       cached_at: Date.now(),
     });
-  } catch {}
+  } catch (err) {
+    console.warn("[mb-cache] setCachedMetadata error:", err);
+  }
 }
 
 export async function getCachedSearch<T extends object>(queryHash: string): Promise<T | null> {
@@ -78,7 +102,9 @@ export async function getCachedSearch<T extends object>(queryHash: string): Prom
     if (row) {
       await selftifyDb.mbz_search_cache.delete(queryHash);
     }
-  } catch {}
+  } catch (err) {
+    console.warn("[mb-cache] getCachedSearch error:", err);
+  }
 
   return null;
 }
@@ -90,9 +116,11 @@ export async function setCachedSearch(queryHash: string, data: object): Promise<
     await selftifyDb.mbz_search_cache.put({
       key: queryHash,
       data: JSON.stringify(data),
-      expires_at: Date.now() + SEARCH_TTL_MS,
+      expires_at: Date.now() + getTtlMs(),
     });
-  } catch {}
+  } catch (err) {
+    console.warn("[mb-cache] setCachedSearch error:", err);
+  }
 }
 
 export async function clearExpiredSearchCache(): Promise<void> {
@@ -104,7 +132,9 @@ export async function clearExpiredSearchCache(): Promise<void> {
     for (const row of expired) {
       await selftifyDb.mbz_search_cache.delete(row.key);
     }
-  } catch {}
+  } catch (err) {
+    console.warn("[mb-cache] clearExpiredSearchCache error:", err);
+  }
 }
 
 export async function clearAllCaches(): Promise<void> {
@@ -113,5 +143,7 @@ export async function clearAllCaches(): Promise<void> {
   try {
     await selftifyDb.mbz_metadata_cache.clear();
     await selftifyDb.mbz_search_cache.clear();
-  } catch {}
+  } catch (err) {
+    console.warn("[mb-cache] clearAllCaches error:", err);
+  }
 }
