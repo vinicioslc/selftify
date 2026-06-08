@@ -1,5 +1,6 @@
 import type { ImageRecord } from "./image-store";
 import { recordToBlobUrl as indexDbRecordToBlobUrl, getImageByMd5 as indexDbGetByMd5, getImageBySourceUrl as indexDbGetByUrl, storeImage as indexDbStore, updateImageMeta as indexDbUpdateMeta, findImages as indexDbFind } from "./image-store";
+import { emitCoverUpdate } from "./cover-event-bus";
 
 function getApi() {
   return (window as any).electronApi?.imageCache as {
@@ -51,6 +52,7 @@ export async function electronStoreImage(record: ImageRecord): Promise<void> {
     mbzReleaseGroupId: record.mbzReleaseGroupId,
     mbzReleaseId: record.mbzReleaseId,
   });
+  emitCoverUpdate(record.artistName, record.albumName, record.mbzArtistId, record.mbzReleaseGroupId, record.mbzReleaseId);
 }
 
 export async function electronGetImageByMd5(hash: string): Promise<ImageRecord | null> {
@@ -84,6 +86,13 @@ export async function electronRecordToBlobUrl(record: ImageRecord): Promise<stri
     const blob = new Blob([record.blob], { type: record.format });
     return URL.createObjectURL(blob);
   }
+  if (record.md5) {
+    const full = await electronGetImageByMd5(record.md5);
+    if (full && full.blob.byteLength > 0) {
+      const blob = new Blob([full.blob], { type: full.format });
+      return URL.createObjectURL(blob);
+    }
+  }
   return indexDbRecordToBlobUrl(record);
 }
 
@@ -115,4 +124,14 @@ export async function electronFindImages(
   }
   const results = await api.find(query as unknown as Record<string, unknown>);
   return results.map(metaToRecord);
+}
+
+export async function electronClearImageStore(): Promise<void> {
+  const api = getApi();
+  if (!api) {
+    const { clearImageStore } = await import("./image-store");
+    await clearImageStore();
+    return;
+  }
+  await api.clear();
 }

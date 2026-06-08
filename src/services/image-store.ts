@@ -1,7 +1,9 @@
+import { emitCoverUpdate } from "./cover-event-bus";
+
 const DB_NAME = "selftify-images-v2";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const CACHE_VERSION_KEY = "selftify-cache-version";
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const STORE = "images";
 const INDEX_ARTIST = "by_artist";
 const INDEX_ALBUM = "by_album";
@@ -72,6 +74,7 @@ export async function storeImage(record: ImageRecord): Promise<void> {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  emitCoverUpdate(record.artistName, record.albumName, record.mbzArtistId, record.mbzReleaseGroupId, record.mbzReleaseId);
 }
 
 export async function updateImageMeta(
@@ -122,6 +125,17 @@ export async function getImageByArtist(artistName: string): Promise<ImageRecord 
     const tx = db.transaction(STORE, "readonly");
     const index = tx.objectStore(STORE).index(INDEX_ARTIST);
     const req = index.get(artistName);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getImageByAlbum(albumName: string): Promise<ImageRecord | null> {
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const index = tx.objectStore(STORE).index(INDEX_ALBUM);
+    const req = index.get(albumName);
     req.onsuccess = () => resolve(req.result ?? null);
     req.onerror = () => reject(req.error);
   });
@@ -184,8 +198,8 @@ export async function checkCacheVersion(): Promise<void> {
   if (stored !== String(CACHE_VERSION)) {
     try {
       await clearImageStore();
-    } catch {
-      // storage unavailable
+    } catch (err) {
+      console.warn("[image-store] Failed to clear store on version change:", err);
     }
     localStorage.setItem(CACHE_VERSION_KEY, String(CACHE_VERSION));
   }

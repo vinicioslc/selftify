@@ -11,24 +11,33 @@ import { SearchPage } from "./features/search/search-page";
 import { SettingsPage } from "./features/settings/settings-page";
 import { AuthPage } from "./features/auth/auth-page";
 import { LocalPage } from "./features/local/local-page";
+import { AutoLocalScan } from "./features/local/auto-local-scan";
 import { NowPlayingPage } from "./features/now-playing/now-playing-page";
 import { AlbumPage } from "./features/album/album-page";
 import { ArtistPage } from "./features/artist/artist-page";
+import { PlaylistListPage } from "./features/playlist/playlist-list-page";
+import { PlaylistDetailPage } from "./features/playlist/playlist-detail-page";
 import { useState, useEffect, useCallback } from "react";
+import { AlertTriangle } from "lucide-react";
 import type { AppView } from "./types/types";
-import type { Album, AlbumArtist } from "./types/domain-types";
+import type { Album, AlbumArtist, Playlist } from "./types/domain-types";
 import { OriginType } from "./types/domain-types";
 import "./styles/layout.css";
+import { YoutubeRankingDebug } from "./features/debug/youtube-ranking-debug";
+import { DownloadQueuePanel } from "./features/download/download-queue-panel";
+import { getPlatformService } from "./services/platform/factory";
+import { CookieEditDialog } from "./features/settings/cookie-edit-dialog";
 
 type SearchState = {
   query: string;
-  mode: "local" | "musicbrainz" | "youtube-pure";
+  mode: "local" | "musicbrainz" | "youtube";
 };
 
 type NavEntry = {
   view: AppView;
   album: Album | null;
   artist: AlbumArtist | null;
+  playlist?: Playlist | null;
   searchState?: SearchState;
 };
 
@@ -40,22 +49,41 @@ export function App() {
   const [currentView, setCurrentView] = useState<AppView>("home");
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [selectedArtist, setSelectedArtist] = useState<AlbumArtist | null>(null);
+  const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
     mode: currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local",
   });
   const [navHistory, setNavHistory] = useState<NavEntry[]>([]);
   const [navFuture, setNavFuture] = useState<NavEntry[]>([]);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [showCookieToast, setShowCookieToast] = useState(false);
+  const [showCookieDialog, setShowCookieDialog] = useState(false);
+
+  // Toggle debug panel with Ctrl+Shift+D
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.ctrlKey && e.shiftKey && e.key === "D") {
+        e.preventDefault();
+        setShowDebugPanel((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
+
+  // Listen for yt-dlp cookie invalid warnings from Electron main process
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    getPlatformService().then((svc) => {
+      cleanup = svc.onCookiesInvalid(() => {
+        setShowCookieToast(true);
+      });
+    });
+    return () => cleanup?.();
+  }, []);
 
   const hasServers = origins.length > 0;
-
-  if (!hasServers) {
-    return (
-      <WebAudioProvider>
-        <AuthPage onConnected={() => setCurrentView("home")} />
-      </WebAudioProvider>
-    );
-  }
 
   function pushNavEntry(view: AppView, album: Album | null, artist: AlbumArtist | null) {
     const entry: NavEntry = { view, album, artist };
@@ -78,6 +106,14 @@ export function App() {
     setSelectedArtist(artist);
     setSelectedAlbum(null);
     setCurrentView("artist-detail");
+  }
+
+  function handleNavigatePlaylist(playlist: Playlist) {
+    pushNavEntry(currentView, selectedAlbum, selectedArtist);
+    setSelectedPlaylist(playlist);
+    setSelectedAlbum(null);
+    setSelectedArtist(null);
+    setCurrentView("playlist-detail");
   }
 
   function handleBack() {
@@ -139,7 +175,7 @@ export function App() {
     if (q || mode) {
       setSearchState({
         query: q || "",
-        mode: (mode === "local" || mode === "musicbrainz" || mode === "youtube-pure") ? mode : (currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local"),
+        mode: (mode === "local" || mode === "musicbrainz" || mode === "youtube") ? mode : (currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local"),
       });
     }
   }, []);
@@ -156,6 +192,7 @@ export function App() {
             onSearchStateChange={handleSearchStateChange}
             onNavigateAlbum={handleNavigateAlbum}
             onNavigateArtist={handleNavigateArtist}
+            onNavigate={navigateTo}
           />
         );
       case "settings":
@@ -165,15 +202,46 @@ export function App() {
       case "local-albums":
       case "local-artists":
       case "local-songs":
-      case "playlists":
         return (
           <LocalPage
             onNavigateAlbum={handleNavigateAlbum}
             onNavigateArtist={handleNavigateArtist}
           />
         );
+      case "playlists":
+        return (
+          <PlaylistListPage
+            onNavigatePlaylist={handleNavigatePlaylist}
+            onNavigateAlbum={handleNavigateAlbum}
+            onNavigateArtist={handleNavigateArtist}
+          />
+        );
+      case "playlist-detail":
+        return selectedPlaylist ? (
+          <PlaylistDetailPage
+            playlist={selectedPlaylist}
+            onBack={() => {
+              setSelectedPlaylist(null);
+              setCurrentView("playlists");
+            }}
+            onNavigateAlbum={handleNavigateAlbum}
+            onNavigateArtist={handleNavigateArtist}
+          />
+        ) : (
+          <PlaylistListPage
+            onNavigatePlaylist={handleNavigatePlaylist}
+            onNavigateAlbum={handleNavigateAlbum}
+            onNavigateArtist={handleNavigateArtist}
+          />
+        );
       case "now-playing":
-        return <NowPlayingPage onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />;
+        return (
+          <NowPlayingPage
+            onNavigateAlbum={handleNavigateAlbum}
+            onNavigateArtist={handleNavigateArtist}
+            onClose={handleGoBack}
+          />
+        );
       case "album-detail":
         return selectedAlbum ? (
           <AlbumPage album={selectedAlbum} onBack={handleBack} onNavigateArtist={handleNavigateArtist} />
@@ -197,8 +265,12 @@ export function App() {
 
   return (
     <WebAudioProvider>
-      <div className="layout">
-        <TopBar />
+      <AutoLocalScan />
+      {!hasServers ? (
+        <AuthPage onConnected={() => setCurrentView("home")} />
+      ) : (
+        <div className={`layout ${showDebugPanel ? "" : "debug-hidden"}`}>
+        <TopBar currentView={currentView} onToggleDebug={() => setShowDebugPanel((v) => !v)} />
         <div className={`main-content ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
           <div style={{ gridArea: "sidebar" }}>
             <Sidebar currentView={currentView} onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
@@ -210,11 +282,36 @@ export function App() {
             </div>
           </div>
         </div>
+        {showDebugPanel && (
+          <div className="debug-panel">
+            <YoutubeRankingDebug onClose={() => setShowDebugPanel(false)} />
+          </div>
+        )}
         <div className="player-area">
-          <PlayerBar onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+          <PlayerBar currentView={currentView} onNavigate={navigateTo} onGoBack={handleGoBack} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
         </div>
+        <FullScreenPlayer onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+        <DownloadQueuePanel />
+
+        {showCookieToast && (
+          <button
+            onClick={() => {
+              setShowCookieToast(false);
+              setShowCookieDialog(true);
+            }}
+            className="fixed bottom-[calc(var(--player-bar-height)+8px)] left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-600 bg-amber-950/90 px-4 py-2 text-sm text-amber-200 shadow-lg backdrop-blur transition-colors hover:bg-amber-900/90"
+          >
+            <AlertTriangle className="h-4 w-4" />
+            <span>YouTube cookies expired — click to update</span>
+          </button>
+        )}
+
+        <CookieEditDialog
+          open={showCookieDialog}
+          onOpenChange={setShowCookieDialog}
+        />
       </div>
-      <FullScreenPlayer onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+      )}
     </WebAudioProvider>
   );
 }

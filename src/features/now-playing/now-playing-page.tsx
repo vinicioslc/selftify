@@ -3,7 +3,7 @@ import { useState, useRef } from "react";
 import { PlayerStatus } from "../../types/domain-types";
 import type { Album, AlbumArtist } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
-import { Avatar } from "../../components/ui/avatar";
+import { CoverImage } from "../../components/ui/art-image";
 import { Slider } from "../../components/ui/slider";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
@@ -17,9 +17,16 @@ import {
   Repeat,
   Trash2,
   Music,
+  X,
 } from "lucide-react";
 
-export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist }: { onNavigateAlbum?: (album: Album) => void; onNavigateArtist?: (artist: AlbumArtist) => void }) {
+type NowPlayingPageProps = {
+  onNavigateAlbum?: (album: Album) => void;
+  onNavigateArtist?: (artist: AlbumArtist) => void;
+  onClose?: () => void;
+};
+
+export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist, onClose }: NowPlayingPageProps) {
   const {
     currentTrack,
     status,
@@ -48,10 +55,25 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist }: { onNaviga
 
   return (
     <div className="flex h-full flex-col">
+      {/* Close button */}
+      {onClose && (
+        <div className="flex items-center justify-between border-b border-border px-4 py-2">
+          <h2 className="text-sm font-semibold text-foreground">Now Playing</h2>
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="Close now playing"
+          >
+            <X className="h-4 w-4" />
+            <span className="hidden sm:inline">Close</span>
+          </button>
+        </div>
+      )}
+
       {/* Now playing header */}
       {currentTrack ? (
         <div className="relative z-10 flex flex-col items-center gap-4 border-b border-border p-6 md:flex-row">
-          <Avatar
+          <CoverImage
             src={currentTrack.imageUrl}
             alt={currentTrack.name}
             fallback={currentTrack.name.charAt(0)}
@@ -222,7 +244,7 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist }: { onNaviga
                   <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
                     {i + 1}
                   </span>
-                  <Avatar
+                  <CoverImage
                     src={track.imageUrl}
                     alt={track.name}
                     fallback={track.name.charAt(0)}

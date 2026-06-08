@@ -26,9 +26,11 @@ const mockAudio = vi.hoisted(() => {
     get ended() { return this._ended; },
     set ended(v: boolean) { this._ended = v; },
     preload: "",
+    buffered: { length: 0, start: vi.fn(), end: vi.fn() },
     load: vi.fn(),
-    play: vi.fn(),
+    play: vi.fn().mockResolvedValue(undefined),
     pause: vi.fn(),
+    removeAttribute: vi.fn(),
     addEventListener: vi.fn((event: string, fn: (...args: any[]) => void) => {
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event)!.add(fn);
@@ -49,10 +51,12 @@ const mockAudio = vi.hoisted(() => {
       instance._currentTime = 0;
       instance._paused = true;
       instance._ended = false;
+      instance.buffered.length = 0;
       listeners.clear();
       instance.load.mockClear();
       instance.play.mockClear();
       instance.pause.mockClear();
+      instance.removeAttribute.mockClear();
       instance.addEventListener.mockClear();
       instance.removeEventListener.mockClear();
     },
@@ -67,6 +71,7 @@ vi.stubGlobal("Audio", AudioMock);
 vi.mock("../../../services/audio-engine", () => ({
   connectMediaElement: vi.fn(),
   resumeContext: vi.fn().mockResolvedValue(undefined),
+  getAudioContext: vi.fn().mockReturnValue(undefined),
   destroy: vi.fn(),
   setOutputDevice: vi.fn().mockResolvedValue(undefined),
   addStateChangeListener: vi.fn().mockReturnValue(vi.fn()),
@@ -121,7 +126,7 @@ describe("WebAudioProvider — playback race condition", () => {
     root.render(<WebAudioProvider><div /></WebAudioProvider>);
 
     // Simula race condition: currentTrack + status=PLAYING simultâneos
-    const playSpy = vi.fn();
+    const playSpy = vi.fn().mockResolvedValue(undefined);
     mockAudio.instance.play = playSpy;
     mockAudio.instance._readyState = 1; // não carregado
 
@@ -141,7 +146,7 @@ describe("WebAudioProvider — playback race condition", () => {
     mockAudio.instance._readyState = 4;
     mockAudio.instance._fireEvent("canplay");
 
-    // Agora play DEVE ter sido chamado uma vez
+    // play() deve ter sido chamado (audio carregou e status é PLAYING)
     await vi.waitFor(() => {
       expect(playSpy).toHaveBeenCalledOnce();
     });
@@ -150,7 +155,7 @@ describe("WebAudioProvider — playback race condition", () => {
   it("play() não é chamado se usuário pausou antes do carregamento", async () => {
     root.render(<WebAudioProvider><div /></WebAudioProvider>);
 
-    const playSpy = vi.fn();
+    const playSpy = vi.fn().mockResolvedValue(undefined);
     mockAudio.instance.play = playSpy;
     mockAudio.instance._readyState = 1;
 

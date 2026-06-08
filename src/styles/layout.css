@@ -2,16 +2,20 @@
 .layout {
   display: grid;
   grid-template-areas:
-    "topbar"
-    "main-content"
-    "player";
+    "topbar topbar"
+    "main-content debug"
+    "player player";
   grid-template-rows: var(--topbar-height) 1fr var(--player-bar-height);
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr auto;
   gap: 0;
   height: 100%;
   overflow: hidden;
   padding-bottom: 6px;
   box-sizing: border-box;
+}
+
+.layout.debug-hidden {
+  grid-template-columns: 1fr 0px;
 }
 
 /* TopBar drag region */
@@ -48,6 +52,13 @@
   min-height: 0;
   overflow: hidden;
   background: hsl(var(--background));
+}
+
+.debug-panel {
+  grid-area: debug;
+  width: 320px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .player-area {

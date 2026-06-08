@@ -159,13 +159,10 @@ export function AuthPage({ onConnected }: AuthPageProps) {
                 <label className="text-sm font-medium">MusicBrainz Token</label>
                 <Input
                   className="mt-1"
-                  placeholder="abc-123-def-456 (optional, increases rate limit)"
+                  placeholder="abc-123-def-456 (optional)"
                   value={form.musicBrainzToken}
                   onChange={(e) => setForm({ ...form, musicBrainzToken: e.target.value })}
                 />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Without a token, rate limit is 1 request/second. With a token, ~50 req/s.
-                </p>
               </div>
 
               <div>
