@@ -25,7 +25,8 @@ export class BrowserAudioOutputStrategy implements AudioOutputStrategy {
       const outputs = all.filter((d) => d.kind === "audiooutput");
       const defaultId = await this.getDefaultDeviceId();
       return outputs.map((d) => deviceToAudioDevice(d, d.deviceId === defaultId));
-    } catch {
+    } catch (err) {
+      console.warn("[browser-audio] getDevices error:", err);
       return [];
     }
   }
@@ -39,7 +40,8 @@ export class BrowserAudioOutputStrategy implements AudioOutputStrategy {
         (d) => d.kind === "audiooutput" && d.deviceId === "default"
       );
       return defaultOutput?.deviceId ?? null;
-    } catch {
+    } catch (err) {
+      console.warn("[browser-audio] getDefaultDeviceId error:", err);
       return null;
     }
   }

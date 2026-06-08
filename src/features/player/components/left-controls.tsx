@@ -1,6 +1,6 @@
 import { usePlayerStore } from "../../../stores/player.store";
 import { useSettingsStore } from "../../../stores/settings.store";
-import { Avatar } from "../../../components/ui/avatar";
+import { CoverImage } from "../../../components/ui/art-image";
 import { Button } from "../../../components/ui/button";
 import { ChevronUp, AudioLines, Sparkles, BarChart3 } from "lucide-react";
 import type { VisualizerType } from "../../../stores/settings.store";
@@ -39,7 +39,7 @@ export function LeftControls({ onNavigate, onNavigateAlbum, onNavigateArtist }: 
             variant="ghost"
             className="h-full w-full shrink-0 overflow-hidden rounded-none p-0"
           >
-            <Avatar
+            <CoverImage
               src={currentTrack.imageUrl}
               alt={currentTrack.name}
               fallback={currentTrack.name.charAt(0)}

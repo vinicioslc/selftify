@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Slider } from "../../components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import { Avatar } from "../../components/ui/avatar";
+import { CoverImage } from "../../components/ui/art-image";
 import { VisualizerContainer } from "../visualizer/visualizer-container";
 import { formatDuration } from "../../lib/utils";
 import {
@@ -98,7 +98,7 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
               <VisualizerContainer fullScreen />
             </div>
           ) : (
-            <Avatar
+            <CoverImage
             src={currentTrack.imageUrl}
             alt={currentTrack.name}
             fallback={currentTrack.name.charAt(0)}
@@ -277,7 +277,7 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
                         <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
                           {i + 1}
                         </span>
-                        <Avatar
+                        <CoverImage
                           src={track.imageUrl}
                           alt={track.name}
                           fallback={track.name.charAt(0)}

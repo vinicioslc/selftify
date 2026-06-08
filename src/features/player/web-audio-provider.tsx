@@ -8,7 +8,8 @@ function checkMpvAvailable(): Promise<boolean> {
     const api = (window as any).electronApi?.mpv;
     if (!api?.isAvailable) return Promise.resolve(false);
     return api.isAvailable();
-  } catch {
+  } catch (err) {
+    console.warn("[web-audio-provider] checkMpvAvailable error:", err);
     return Promise.resolve(false);
   }
 }

@@ -1,0 +1,162 @@
+import type { Song } from "../types/domain-types";
+import { getSongByMbid, getSongById } from "./local-database";
+import { dbSongToSong } from "./dto";
+import { getStreamUrl } from "./youtube-download-service";
+import { getMbzYtMapping, setMbzYtMapping, type MbzYtMapping, type StreamSourceCandidate } from "./search-cache";
+import { useStatusStore } from "../stores/status.store";
+
+export type ResolveResult = {
+  song: Song;
+  source: "local" | "youtube" | "none";
+};
+
+function addMsg(text: string, level: "info" | "success" | "warn" | "danger" = "info") {
+  useStatusStore.getState().addMessage(text, level, "Player");
+}
+
+function log(msg: string) {
+  console.debug(`[stream-resolver] ${msg}`);
+}
+
+/**
+ * Find local songs in the database that share the same mbzRecordingId.
+ */
+export async function findLocalCandidates(mbzRecordingId: string, originId: string): Promise<StreamSourceCandidate[]> {
+  const dbSong = await getSongByMbid(mbzRecordingId);
+  if (!dbSong || !dbSong.path) return [];
+  const song = dbSongToSong(dbSong, originId);
+  return [{
+    type: "local",
+    song,
+    filePath: dbSong.path,
+    bitrate: dbSong.bitrate ?? undefined,
+    sampleRate: dbSong.sample_rate ?? undefined,
+    fileSize: dbSong.file_size ?? undefined,
+    fileExtension: dbSong.file_extension ?? undefined,
+  }];
+}
+
+/**
+ * Find a single local song by mbzRecordingId.
+ */
+export async function findLocalSongByMbid(mbzRecordingId: string, originId: string): Promise<Song | null> {
+  const dbSong = await getSongByMbid(mbzRecordingId);
+  if (!dbSong || !dbSong.path) return null;
+  return dbSongToSong(dbSong, originId);
+}
+
+/**
+ * Resolve a playable song path using local-first strategy:
+ * 1. If song.path already exists → use it directly (local)
+ * 2. If song.mbzRecordingId → check for local file with same MBZ ID
+ * 3. If local file found → use it (auto-select, save preference)
+ * 4. If saved preference in MbzYtMapping → respect it
+ * 5. Otherwise → YouTube search + stream extraction
+ *
+ * @param manualVideoId Optional YouTube video ID to force a specific video
+ */
+export async function resolveSong(song: Song, manualVideoId?: string): Promise<ResolveResult> {
+  // Step 1: path already set (local file or pre-resolved stream)
+  if (song.path) {
+    return { song, source: "local" };
+  }
+
+  // Step 2: try to find local file by MBZ ID
+  if (song.mbzRecordingId) {
+    // Check saved preference first
+    const mapping = await getMbzYtMapping(song.mbzRecordingId);
+    if (mapping?.selectedSource === "local" && mapping.localSongId) {
+      const localDbSong = await getSongById(mapping.localSongId);
+      if (localDbSong?.path) {
+        const localSong = dbSongToSong(localDbSong, song.originId);
+        log(`using saved local selection: ${localSong.path}`);
+        addMsg("Playing local file (saved preference)", "info");
+        return { song: localSong, source: "local" };
+      }
+    }
+
+    // Auto-detect: query local DB for same MBZ ID
+    const localSong = await findLocalSongByMbid(song.mbzRecordingId, song.originId);
+    if (localSong?.path) {
+      log(`auto-selected local file: ${localSong.path}`);
+      // Save preference for future plays
+      if (song.mbzRecordingId) {
+        saveLocalPreference(song.mbzRecordingId, localSong, mapping);
+      }
+      addMsg("Playing local file", "info");
+      return { song: localSong, source: "local" };
+    }
+
+    // Step 3: use manual video ID if provided (from SongInfoDialog selection)
+    if (manualVideoId) {
+      const streamUrl = await getStreamUrl(song, manualVideoId);
+      if (streamUrl) {
+        return { song: { ...song, path: streamUrl }, source: "youtube" };
+      }
+    }
+
+    // Step 4: if saved source is youtube, respect it
+    if (mapping?.selectedSource === "youtube") {
+      const streamUrl = await getStreamUrl(song);
+      if (streamUrl) {
+        return { song: { ...song, path: streamUrl }, source: "youtube" };
+      }
+    }
+  }
+
+  // Step 5: fall back to YouTube
+  const streamUrl = manualVideoId ? await getStreamUrl(song, manualVideoId) : await getStreamUrl(song);
+  if (streamUrl) {
+    return { song: { ...song, path: streamUrl }, source: "youtube" };
+  }
+
+  // Nothing worked
+  return { song, source: "none" };
+}
+
+/**
+ * Resolve multiple songs in parallel.
+ */
+export async function resolveSongs(songs: Song[]): Promise<ResolveResult[]> {
+  return Promise.allSettled(
+    songs.map((s) => resolveSong(s))
+  ).then((results) =>
+    results.map((r) =>
+      r.status === "fulfilled" ? r.value : { song: songs[results.indexOf(r)], source: "none" as const }
+    )
+  );
+}
+
+async function saveLocalPreference(mbzRecordingId: string, localSong: Song, existingMapping?: MbzYtMapping | null) {
+  try {
+    const now = Date.now();
+    if (existingMapping) {
+      await setMbzYtMapping({
+        ...existingMapping,
+        selectedSource: "local",
+        localSongId: localSong.id,
+        selectedVideoId: existingMapping.selectedVideoId,
+        selectedType: "auto",
+        updatedAt: now,
+      });
+    } else {
+      await setMbzYtMapping({
+        mbzRecordingId,
+        songName: localSong.name,
+        artistName: localSong.artistName,
+        albumName: localSong.albumName,
+        albumImageUrl: localSong.imageUrl,
+        selectedVideoId: localSong.id,
+        selectedType: "auto",
+        selectedSource: "local",
+        localSongId: localSong.id,
+        candidates: "[]",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    log("local preference saved");
+  } catch (err) {
+    console.warn("[stream-resolver] failed to save local preference:", err);
+  }
+}

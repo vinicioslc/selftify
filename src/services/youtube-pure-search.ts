@@ -31,6 +31,7 @@ export async function searchYouTubePure(
   query: string,
   _offset?: number,
   _cookie?: string | null,
+  originId?: string,
 ): Promise<YTPureSearchResult> {
   const api = getElectronYt();
   if (!api) {
@@ -44,7 +45,7 @@ export async function searchYouTubePure(
 
   const songs: Song[] = rawItems.map((item, i) => ({
     id: `ytpure-${item.id}`,
-    originId: "youtube-pure",
+    originId: originId || "youtube-pure",
     originType: OriginType.LOCAL,
     name: item.title,
     artistName: item.uploader || "Unknown",

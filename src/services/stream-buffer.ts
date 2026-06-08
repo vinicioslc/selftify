@@ -1,5 +1,7 @@
+import { platformFetch } from "./platform-fetch";
+
 export async function preloadStream(url: string, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(url, { signal });
+  const response = await platformFetch(url, { signal });
   if (!response.ok) {
     throw new Error(`Failed to preload stream: ${response.status} ${response.statusText}`);
   }

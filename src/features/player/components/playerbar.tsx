@@ -6,12 +6,14 @@ import { CenterControls } from "./center-controls";
 import { RightControls } from "./right-controls";
 
 type PlayerbarProps = {
+  currentView?: string;
   onNavigate?: (view: any) => void;
+  onGoBack?: () => void;
   onNavigateAlbum?: (album: Album) => void;
   onNavigateArtist?: (artist: AlbumArtist) => void;
 };
 
-export function PlayerBar({ onNavigate, onNavigateAlbum, onNavigateArtist }: PlayerbarProps) {
+export function PlayerBar({ currentView, onNavigate, onGoBack, onNavigateAlbum, onNavigateArtist }: PlayerbarProps) {
   const { currentTrack } = usePlayerStore();
   const { sidebarCollapsed } = useSettingsStore();
 
@@ -30,7 +32,7 @@ export function PlayerBar({ onNavigate, onNavigateAlbum, onNavigateArtist }: Pla
         )}
       </div>
       <div className="playerbar-section right">
-        <RightControls onNavigate={onNavigate} />
+        <RightControls currentView={currentView} onNavigate={onNavigate} onGoBack={onGoBack} onNavigateAlbum={onNavigateAlbum} onNavigateArtist={onNavigateArtist} />
       </div>
     </div>
   );

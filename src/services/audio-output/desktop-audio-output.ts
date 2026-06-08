@@ -19,7 +19,8 @@ export class DesktopAudioOutputStrategy implements AudioOutputStrategy {
         groupId: '',
         kind: 'audiooutput' as const,
       }));
-    } catch {
+    } catch (err) {
+      console.warn("[desktop-audio] getDevices failed, falling back to browser:", err);
       return this.browserFallback.getDevices();
     }
   }
@@ -35,7 +36,9 @@ export class DesktopAudioOutputStrategy implements AudioOutputStrategy {
         await mpv.setDevice(deviceId);
         return;
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[desktop-audio] mpv setSinkId failed, falling back to browser:", err);
+    }
     await this.browserFallback.setSinkId(audio, deviceId);
   }
 
