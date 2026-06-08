@@ -53,6 +53,8 @@ export type Song = {
   mbzRecordingId?: string;
   mbzTrackId?: string;
   mbzArtistId?: string;
+  mbzReleaseGroupId?: string;
+  mbzAlbumId?: string;
 };
 
 export type Album = {
@@ -115,4 +117,30 @@ export type PlayQueueAddOptions = {
   type: "now" | "next" | "last" | "shuffle";
   byStartIndex?: boolean;
   startIndex?: number;
+};
+
+export enum DownloadStatus {
+  PENDING = "pending",
+  SEARCHING = "searching",
+  DOWNLOADING_AUDIO = "downloading-audio",
+  GETTING_COVER = "getting-cover",
+  PROCESSING_COVER = "processing-cover",
+  EMBEDDING_COVER = "embedding-cover",
+  COMPLETED = "completed",
+  FAILED = "failed",
+  CANCELLED = "cancelled",
+}
+
+export type DownloadTask = {
+  id: string;
+  song: Song;
+  status: DownloadStatus;
+  progress: number;
+  stepLabel: string;
+  error?: string;
+  videoId?: string;
+  audioPath?: string;
+  coverPath?: string;
+  createdAt: number;
+  completedAt?: number;
 };

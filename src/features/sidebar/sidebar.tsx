@@ -6,24 +6,23 @@ import type { Album, AlbumArtist } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
-import { Avatar } from "../../components/ui/avatar";
+import { CoverImage } from "../../components/ui/art-image";
 import { ResizeHandle } from "../../components/ui/resize-handle";
 import { VisualizerContainer } from "../visualizer/visualizer-container";
+import { useDownloadStore } from "../../stores/download.store";
 import {
   Home,
   Search,
   Library,
   Settings,
+  ListMusic,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
-  ChevronUp,
   Disc3,
-  Music2,
-  FolderOpen,
-  Globe,
+  Download,
 } from "lucide-react";
-import { useState } from "react";
+import { Badge } from "../../components/ui/badge";
 
 type SidebarProps = {
   currentView: AppView;
@@ -32,29 +31,33 @@ type SidebarProps = {
   onNavigateArtist?: (artist: AlbumArtist) => void;
 };
 
-const navItems: { id: AppView; label: string; icon: any }[] = [
+const navItems: { id: string; label: string; icon: any }[] = [
   { id: "home", label: "Home", icon: Home },
   { id: "search", label: "Search", icon: Search },
+  { id: "playlists", label: "Playlists", icon: ListMusic },
   { id: "local-songs", label: "Local", icon: Library },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "downloads", label: "Downloads", icon: Download },
 ];
 
 export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateArtist }: SidebarProps) {
   const { sidebarCollapsed, sidebarWidth, toggleSidebar, setSidebarWidth, sidebarAlbumCollapsed, setSidebarAlbumCollapsed, sidebarShowVisualizer, setSidebarShowVisualizer, visualizerType } = useSettingsStore();
+  const setPanelOpen = useDownloadStore((s) => s.setPanelOpen);
+  const pendingCount = useDownloadStore((s) => s.tasks.filter(t => t.status === "pending" || t.status === "searching" || t.status === "downloading-audio" || t.status === "getting-cover" || t.status === "processing-cover" || t.status === "embedding-cover").length);
+
+  function handleNavClick(itemId: string) {
+    if (itemId === "downloads") {
+      setPanelOpen(true);
+    } else {
+      onNavigate(itemId as AppView);
+    }
+  }
+
   const { currentTrack } = usePlayerStore();
   const { currentOrigin } = useAuthStore();
-  const [searchExpanded, setSearchExpanded] = useState(true);
 
   function handleResize(width: number) {
     setSidebarWidth(width);
-  }
-
-  function handleSearchLocal() {
-    onNavigate("search");
-  }
-
-  function handleSearchOnline() {
-    onNavigate("search");
   }
 
   if (sidebarCollapsed) {
@@ -66,10 +69,11 @@ export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateAr
         {navItems.map((item) => (
           <Button
             key={item.id}
-            variant={currentView === item.id ? "default" : "ghost"}
+                variant={item.id === "downloads" ? "ghost" : currentView === item.id ? "default" : "ghost"}
             size="icon"
-            onClick={() => onNavigate(item.id)}
+            onClick={() => handleNavClick(item.id)}
             className={currentView === item.id ? "" : "text-sidebar-foreground hover:text-foreground"}
+            title={item.label}
           >
             <item.icon className="h-5 w-5" />
           </Button>
@@ -93,64 +97,30 @@ export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateAr
       <ScrollArea className="flex-1 py-2">
         <nav className="space-y-1">
           {navItems.map((item) => {
-            if (item.id === "search") {
-              return (
-                <div key={item.id}>
-                  <button
-                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-normal transition-colors ${
-                      currentView === item.id
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground hover:bg-accent hover:text-accent-foreground"
-                    }`}
-                    onClick={() => setSearchExpanded(!searchExpanded)}
-                  >
-                    <item.icon className="h-4 w-4 shrink-0" />
-                    <span className="flex-1">{item.label}</span>
-                    {searchExpanded ? (
-                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    )}
-                  </button>
-                  {searchExpanded && (
-                    <div className="ml-2 mt-0.5 space-y-0.5 pl-2">
-                      <button
-                        title="Search local files"
-                        className="flex w-full items-center gap-3 rounded-md px-3 py-1.5 text-left text-xs font-normal text-sidebar-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                        onClick={handleSearchLocal}
-                      >
-                        <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">Local Files</span>
-                      </button>
-                      {currentOrigin?.enableOnlineSearch && (
-                        <button
-                          title="Search with MusicBrainz + YouTube"
-                          className="flex w-full items-center gap-3 rounded-md px-3 py-1.5 text-left text-xs font-normal text-sidebar-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                          onClick={handleSearchOnline}
-                        >
-                          <Globe className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">Online Search</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            }
+            const isDownloads = item.id === "downloads";
+            const isActive = !isDownloads && currentView === item.id;
             return (
               <Button
                 key={item.id}
-                variant={currentView === item.id ? "secondary" : "ghost"}
+                variant={isActive ? "secondary" : "ghost"}
                 className={`w-full justify-start px-3 text-sm font-normal ${
                   currentView === item.id
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground hover:text-foreground"
                 }`}
-                onClick={() => onNavigate(item.id)}
+                onClick={() => handleNavClick(item.id)}
               >
                 <span className="flex w-full items-center gap-3">
                   <item.icon className="h-4 w-4 shrink-0" />
                   {item.label}
+                  {isDownloads && pendingCount > 0 && (
+                    <Badge
+                      variant="destructive"
+                      className="ml-auto h-5 min-w-[20px] rounded-full px-1.5 text-[10px]"
+                    >
+                      {pendingCount}
+                    </Badge>
+                  )}
                 </span>
               </Button>
             );
@@ -216,7 +186,7 @@ export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateAr
                 className="relative w-full overflow-hidden"
                 style={{ aspectRatio: "1/1" }}
               >
-                <Avatar
+                <CoverImage
                   src={currentTrack.imageUrl}
                   alt={currentTrack.name}
                   fallback={currentTrack.name.charAt(0)}

@@ -1,5 +1,5 @@
 import { Album } from "../../types/domain-types";
-import { Avatar } from "../../components/ui/avatar";
+import { CoverImage } from "../../components/ui/art-image";
 import { Button } from "../../components/ui/button";
 import { Play } from "lucide-react";
 
@@ -21,7 +21,7 @@ export function AlbumGrid({ albums, onPlayAlbum, onNavigateAlbum }: AlbumGridPro
           onClick={() => onNavigateAlbum(album)}
         >
           <div className="relative mb-2">
-            <Avatar
+            <CoverImage
               src={album.imageUrl}
               alt={album.name}
               fallback={album.name.charAt(0).toUpperCase()}

@@ -3,3 +3,4 @@ export { usePlayerStore } from "./player.store";
 export { useSettingsStore } from "./settings.store";
 export { useLocalLibraryStore } from "./local-library.store";
 export { useStatusStore } from "./status.store";
+export { useCoverStore } from "./cover.store";

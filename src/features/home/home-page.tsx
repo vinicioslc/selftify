@@ -3,8 +3,9 @@ import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { getController } from "../../api/controller";
-import { type Album, type AlbumArtist, OriginType } from "../../types/domain-types";
+import { type Album, type AlbumArtist, type Song, OriginType } from "../../types/domain-types";
 import type { AppView } from "../../types/types";
+import { resolveSongs } from "../../services/stream-resolver";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
@@ -74,9 +75,10 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist }: Home
     try {
       const controller = await getController();
       const songs = await controller.getAlbumSongs(album.albumArtistName, album.name);
-      if (songs.length > 0) {
-        setQueue(songs, { type: "now" });
-      }
+      if (songs.length === 0) return;
+      const results = await resolveSongs(songs);
+      const all = results.map((r) => r.song);
+      setQueue(all, { type: "now" });
     } catch (err) {
       console.error("[home] failed to play album:", err);
     }

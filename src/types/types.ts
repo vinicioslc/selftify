@@ -28,6 +28,7 @@ export type AppView =
   | "local-artists"
   | "local-songs"
   | "playlists"
+  | "playlist-detail"
   | "settings"
   | "settings-visualizer"
   | "now-playing"

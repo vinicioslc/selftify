@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { cn } from "../../lib/utils";
-import { Settings2, Check, ArrowUp } from "lucide-react";
+import { Settings2, Check, ArrowUp, ChevronRight } from "lucide-react";
 
 export type ColumnDef<T> = {
   id: string;
@@ -19,6 +19,7 @@ type DataTableProps<T> = {
   getRowId: (item: T) => string;
   onRowClick?: (item: T) => void;
   onRowDoubleClick?: (item: T) => void;
+  onRowContextMenu?: (item: T, e: React.MouseEvent) => void;
   selectedId?: string | null;
   onSelectedIdChange?: (id: string | null) => void;
   loading?: boolean;
@@ -27,6 +28,9 @@ type DataTableProps<T> = {
   storageKey?: string;
   defaultSortColumn?: string;
   defaultSortDirection?: "asc" | "desc";
+  renderExpanded?: (item: T) => React.ReactNode;
+  expandedIds?: Set<string>;
+  onToggleExpand?: (id: string) => void;
 };
 
 const STORAGE_PREFIX = "data-table-cols-";
@@ -53,6 +57,10 @@ export function DataTable<T>({
   storageKey,
   defaultSortColumn,
   defaultSortDirection = "asc",
+  renderExpanded,
+  expandedIds,
+  onToggleExpand,
+  onRowContextMenu,
 }: DataTableProps<T>) {
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
@@ -72,7 +80,8 @@ export function DataTable<T>({
         if (parsed[col.id]) valid[col.id] = parsed[col.id];
       }
       return valid;
-    } catch {
+    } catch (err) {
+      console.warn("[data-table] column width parse error:", err);
       return {};
     }
   });
@@ -107,11 +116,13 @@ export function DataTable<T>({
   );
 
   const gridTemplate = useMemo(
-    () =>
-      visibleColumns
-        .map((col) => columnWidths[col.id] || col.width || "auto")
-        .join(" "),
-    [visibleColumns, columnWidths]
+    () => {
+      const cols = visibleColumns
+        .map((col) => columnWidths[col.id] || col.width || "auto");
+      if (renderExpanded) cols.unshift("2rem");
+      return cols.join(" ");
+    },
+    [visibleColumns, columnWidths, renderExpanded]
   );
 
   const toggleableColumns = useMemo(
@@ -281,6 +292,7 @@ export function DataTable<T>({
         className="mb-1 grid gap-2 text-xs text-muted-foreground"
         style={{ gridTemplateColumns: gridTemplate }}
       >
+        {renderExpanded && <div className="px-2 py-1" />}
         {visibleColumns.map((col, i) => (
           <div
             key={col.id}
@@ -322,26 +334,53 @@ export function DataTable<T>({
         {sortedData.map((item, index) => {
           const id = getRowId(item);
           const isSelected = selectedId === id;
+          const isExpanded = expandedIds?.has(id) ?? false;
           return (
-            <div
-              key={id}
-              className={cn(
-                "grid gap-2 rounded-lg px-2 py-2 transition-colors",
-                isSelected && "bg-accent",
-                !isSelected && "hover:bg-accent/50"
-              )}
-              style={{ gridTemplateColumns: gridTemplate }}
-              onClick={() => {
-                onSelectedIdChange?.(id);
-                onRowClick?.(item);
-              }}
-              onDoubleClick={() => onRowDoubleClick?.(item)}
-            >
-              {visibleColumns.map((col) => (
-                <div key={col.id} className={cn("min-w-0", col.id === "track" && "text-right")}>
-                  {col.render(item, index, isSelected)}
+            <div key={id}>
+              <div
+                className={cn(
+                  "group grid gap-2 rounded-lg px-2 py-2 transition-colors",
+                  isSelected && "bg-accent",
+                  !isSelected && "hover:bg-accent/50",
+                  isExpanded && "rounded-b-none",
+                )}
+                style={{ gridTemplateColumns: gridTemplate }}
+                onClick={() => {
+                  onSelectedIdChange?.(id);
+                  onRowClick?.(item);
+                }}
+                onDoubleClick={() => onRowDoubleClick?.(item)}
+                onContextMenu={(e) => onRowContextMenu?.(item, e)}
+              >
+                {renderExpanded && (
+                  <div className="flex items-center">
+                    <button
+                      className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleExpand?.(id);
+                      }}
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "h-4 w-4 transition-transform",
+                          isExpanded && "rotate-90",
+                        )}
+                      />
+                    </button>
+                  </div>
+                )}
+                {visibleColumns.map((col) => (
+                  <div key={col.id} className={cn("min-w-0", col.id === "track" && "text-right")}>
+                    {col.render(item, index, isSelected)}
+                  </div>
+                ))}
+              </div>
+              {isExpanded && renderExpanded && (
+                <div className="rounded-b-lg border-t border-border bg-muted/30 px-4 py-3">
+                  {renderExpanded(item)}
                 </div>
-              ))}
+              )}
             </div>
           );
         })}

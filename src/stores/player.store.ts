@@ -16,6 +16,7 @@ type PlayerState = {
   positionMs: number;
   isBuffering: boolean;
   isFullScreen: boolean;
+  transitionProgress: number; // 0 = no transition, 0-1 = crossfade progress
 
   setVolume: (volume: number) => void;
   setSeek: (seek: number) => void;
@@ -37,6 +38,7 @@ type PlayerState = {
   setCurrentTrack: (song: Song | null) => void;
   setIsFullScreen: (value: boolean) => void;
   toggleFullScreen: () => void;
+  setTransitionProgress: (progress: number) => void;
 };
 
 function buildQueue(songs: Song[]): QueueSong[] {
@@ -61,6 +63,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
   positionMs: 0,
   isBuffering: false,
   isFullScreen: false,
+  transitionProgress: 0,
 
   setVolume: (volume) => set({ volume }),
   setSeek: (seek) => set((state) => ({ seek, seekId: state.seekId + 1 })),
@@ -175,4 +178,5 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
 
   setIsFullScreen: (isFullScreen) => set({ isFullScreen }),
   toggleFullScreen: () => set((state) => ({ isFullScreen: !state.isFullScreen })),
+  setTransitionProgress: (transitionProgress) => set({ transitionProgress }),
 }));

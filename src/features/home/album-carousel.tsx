@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Album } from "../../types/domain-types";
-import { Avatar } from "../../components/ui/avatar";
+import { CoverImage } from "../../components/ui/art-image";
 import { Button } from "../../components/ui/button";
 import { Play } from "lucide-react";
 
