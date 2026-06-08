@@ -1,7 +1,7 @@
 # Spec: Search Refactor — Local-Only Origin + Online Search
 
-> **Status**: implemented
-> **Last update**: 2026-05-30
+> **Status**: implemented  
+> **Last update**: 2026-06-08
 > **Target**: `selftify` — simplify origin model, unify search flow around LOCAL files with optional MusicBrainz + YouTube online search
 
 ## Implementation Log (Kaizen)
@@ -227,6 +227,35 @@ playSong() online result
 - Locally indexed songs still work (fall back to controller when no path)
 - Web mode: Electron API unavailable → `downloadAndGetPath` returns null →
   `setQueue([song])` without path → controller handles normally
+
+### Entry 9: Centralized image resolution para MB search results (cover + artist)
+
+**Date**: 2026-06-08
+
+**Problem**: MB search results mostravam `imageUrl: null` para songs e artists (capa de álbum e imagem de artista ausentes). O `searchMusicBrainz()` criava `AlbumArtist` com `imageUrl: null` e `Song` com URLs cruas do coverartarchive.org que não passavam pelo pipeline centralizado.
+
+**Changes**:
+
+1. **`ServerController` interface** (`controller.ts`):
+   - `populateSongImages(songs): Song[]` — resolve capas de álbuns para uma lista de músicas
+   - `populateArtistImages(artists): AlbumArtist[]` — resolve imagens de artista para uma lista
+
+2. **`local-controller.ts`**:
+   - `populateSongImages()` chama `resolveAlbumCover()` — match estrito por álbum (nunca fallback artista)
+   - `populateArtistImages()` chama `findArtistImage()` — busca por `artistName`, prioriza registros sem `albumName` (imagens de `<artist>/.img/`)
+   - Ambos expostos no `return { ... }` do controller
+
+3. **`search-page.tsx`** — MB search flow:
+   - Cache hit + fresh search: após obter `mbRaw`, chama `ctrl.populateSongImages()` para songs e `ctrl.populateArtistImages()` para artists
+   - Resultados vão para `setCachedResult()` com imagens já resolvidas (cache quente)
+
+4. **`search-service.ts`** — `Song` agora inclui `mbzReleaseGroupId` e `mbzAlbumId` para permitir match por MBZ ID no `resolveCover`.
+
+**Validation**:
+- MB song rows mostram capa de álbum correta (via `resolveAlbumCover`)
+- MB artist cards mostram imagem do artista (via `findArtistImage`, prioriza `<artist>/.img/`)
+- Cache hit retorna imagens já resolvidas
+- `typecheck` passou sem erros
 
 ---
 

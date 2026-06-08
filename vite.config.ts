@@ -13,6 +13,9 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    watch: {
+      ignored: ["**/legacy/**"],
+    },
     proxy: {
       "/youtubei": {
         target: "https://www.youtube.com",

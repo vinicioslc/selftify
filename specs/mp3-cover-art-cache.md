@@ -1,338 +1,321 @@
 # Spec: MP3 Cover Art Extraction, Caching & Retrieval
 
-> **Status**: pending  
+> **Status**: implemented  
 > **Created**: 2026-05-28  
+> **Last updated**: 2026-06-07  
 > **Target**: `selftify` — local music cover art support
 
 ---
 
 ## Problem
 
-Local music files (MP3, FLAC, etc.) with embedded ID3/picture tags are scanned, but cover art is explicitly **skipped** (`skipCovers: true`). No image is stored or displayed. The `imageUrl` field in `Song`/`Album`/`AlbumArtist` types is **always `null`** for local origin.
+Local music files (MP3, FLAC, etc.) with embedded ID3/picture tags are scanned, but cover art was initially **skipped** (`skipCovers: true`). No image was stored or displayed. The `imageUrl` field in `Song`/`Album`/`AlbumArtist` types was **always `null`** for local origin.
 
 ## Goal
 
-Extract embedded cover art during the local file scan, persist it in a **browser-storage cache** (IndexedDB), and provide fast retrieval via tag-based keys. Eliminate duplicate storage via content-addressed hashing.
+Extract embedded cover art during the local file scan, persist it in a **deduplicated IndexedDB storage** (`selftify-images-v2`), enrich with MusicBrainz IDs from ID3 tags for reliable matching, and provide fast retrieval via field-based queries. Avoid network requests for covers that exist locally.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                     local-indexer.ts (scan)                          │
-│  processFile() → music-metadata (skipCovers: false)                  │
-│                → picture[] → hash → IndexedDB                        │
-│                → tags: [artist/X, album/X/Y, song/songId]            │
+┌─────────────────────────────────────────────────────────────────────┐
+│                   local-indexer.ts (scan phase)                      │
+│                                                                      │
+│ processFile() → music-metadata (skipCovers: false)                   │
+│   → embedded picture → hash → ImageRecord (with MBZ IDs)             │
+│   → storeImage() in IndexedDB                                        │
+│                                                                      │
+│ processDir() → .img/ folder found                                    │
+│   → reads image file → storeImage() (without MBZ IDs yet)            │
+│                                                                      │
+│ image-preloader.ts (post-scan)                                       │
+│   → preloadAlbumImage() → queries songs in same album                │
+│   → updateImageMeta() attaches MBZ IDs to .img/ ImageRecord          │
 └──────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                   image-cache.ts (new service)                       │
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                   image-store.ts (storage layer)                      │
 │                                                                      │
-│  IndexedDB "ytmusic-images":                                         │
-│  ┌─────────────┐    ┌──────────────────────────────────┐            │
-│  │  images     │    │  tags                             │            │
-│  │─────────────│    │──────────────────────────────────│            │
-│  │ hash (PK)   │◄───│ hash (FK)                        │            │
-│  │ blob        │    │ tag (string, indexed)            │            │
-│  │ format      │    │  e.g. "artist/Pink Floyd"        │            │
-│  │ size        │    │       "album/Pink Floyd/Wall"    │            │
-│  │ created_at  │    │       "song/local_abc123"        │            │
-│  └─────────────┘    └──────────────────────────────────┘            │
-│                                                                      │
-│  In-memory blob-URL cache: Map<hash, string>                         │
+│  IndexedDB "selftify-images-v2" (v3):                                │
+│  ┌──────────────────────────────┐                                    │
+│  │  images (object store)       │  ← single store                    │
+│  │  ─────────────────────────── │                                    │
+│  │  md5 (PK — SHA-256 hex)     │                                    │
+│  │  blob (ArrayBuffer)          │                                    │
+│  │  format (MIME type)          │                                    │
+│  │  size                        │                                    │
+│  │  width? / height?            │                                    │
+│  │  createdAt                   │                                    │
+│  │  artistName? (indexed)       │                                    │
+│  │  albumName? (indexed)        │                                    │
+│  │  mbzArtistId? (indexed)      │                                    │
+│  │  mbzReleaseGroupId? (indexed)│                                    │
+│  │  mbzReleaseId?               │                                    │
+│  │  sourceUrl? (indexed)        │                                    │
+│  └──────────────────────────────┘                                    │
 │                                                                      │
 │  Public API:                                                         │
-│    storeImage(blob, format, tags) → hash                             │
-│    getImageUrlByTag(tag) → string | null                             │
-│    getImageUrlsByTagPrefix(prefix) → string[]                        │
-│    getHash(blob) → string                                            │
-│    clear()                                                           │
+│    storeImage(record) → void         (skips if md5 exists)           │
+│    updateImageMeta(md5, meta) → void (enrich existing record)        │
+│    getImageByMd5(hash) → ImageRecord | null                          │
+│    getImageByArtist(name) → ImageRecord | null                       │
+│    getImageByAlbum(name) → ImageRecord | null                        │
+│    getImageBySourceUrl(url) → ImageRecord | null                     │
+│    findImages(query) → ImageRecord[]    (full cursor scan)           │
+│    recordToBlobUrl(record) → blob: URL                               │
+│    clearImageStore() → void                                           │
 └──────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                  local-controller.ts (query)                          │
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                 cover-resolver.ts (CENTRALIZED SERVICE)               │
 │                                                                      │
-│  getImageUrl(songId):                                                │
-│    1. Try tag "song/<songId>"                                        │
-│    2. Fallback tag "album/<artist>/<album>"                          │
-│    3. Fallback tag "artist/<artist>"                                 │
+│  resolveCover(CoverInput):                                           │
+│    1. loadFromAlbumDotImg()         ← filesystem .img/ folder       │
+│       → caches to IndexedDB for next time                            │
+│    2. findImages() with MBZ→name   ← IndexedDB (embedded tags)      │
+│    3. findCoverFromDeezer()        ← remote API                     │
+│       → caches to IndexedDB for next time                            │
+│    4. findCoverFromItunes()        ← remote API                     │
+│       → caches to IndexedDB for next time                            │
+│    5. return { source: "none" }    ← letter avatar fallback         │
 │                                                                      │
-│  toSong(): imageUrl = blob URL from cache (resolved async)           │
-│                                                                      │
-│  New album methods:                                                  │
-│    getAlbumList() → aggregate from songs table                       │
-│    getAlbumDetail() → aggregate + cached image                       │
-│                                                                      │
-│  New artist methods:                                                 │
-│    getAlbumArtistList() → aggregate from songs table                 │
-│    getAlbumArtistDetail() → aggregate + all artist images            │
+│  Usado por: local-controller.ts, use-cover.ts (React hook)           │
 └──────────────────────────────────────────────────────────────────────┘
+                               │
+                  ┌────────────┴────────────┐
+                  ▼                         ▼
+┌────────────────────────────┐  ┌─────────────────────────────────────┐
+│ local-controller.ts        │  │ use-cover.ts (React hook)           │
+│ (song rows, album lists)   │  │ (album pages, artist pages)         │
+│ → resolveImageUrl()        │  │ → resolveCover() via hook           │
+│   delegates to cover-resolver│ │   + coverEventBus subscription     │
+└────────────────────────────┘  └─────────────────────────────────────┘
 ```
 
 ---
 
-## Tag Scheme
+## Storage Schema
 
-| Tag Pattern | Purpose | Cardinality | Query Example |
-|---|---|---|---|
-| `artist/<artistName>` | Artist image | 1+ per artist | `getImageUrlsByTagPrefix("artist/Pink Floyd")` → all images |
-| `album/<artistName>/<albumName>` | Album cover | 1+ per album | `getImageUrlByTag("album/Pink Floyd/The Wall")` → first match |
-| `song/<songId>` | Track-specific image | 0-1 per song | `getImageUrlByTag("song/local_abc123")` |
-
-**Rules**:
-- All artist/album names are normalized to **lowercase** for tag storage (case-insensitive lookup)
-- Multiple images per tag are allowed — retrieval returns first match by default, or all via prefix
-- The same image blob (same hash) can have **multiple tags** (e.g., same cover for song + album + artist)
-
----
-
-## Deduplication via Content Hashing
-
-**Primary key**: SHA-256 hash of the raw image blob bytes.
-
-Why SHA-256 over user-requested MD5:
-- Built into all browsers/Tauri WebViews via `crypto.subtle.digest("SHA-256", data)`
-- No external dependency required
-- Collision-resistant (unlike MD5 which has known collisions)
-- Same property: identical bytes → identical hash → stored once
-
-A `storeImage()` call hashes the blob first. If the hash already exists in IndexedDB, **only** the new tag is added (no duplicate blob storage).
-
----
-
-## Image Cache Service
-
-### New file: `src/services/image-cache.ts`
+### `ImageRecord` — the single unit
 
 ```typescript
-// ── IndexedDB Schema ──
-
-// DB: "ytmusic-images" v1
-// Object Store "images"   — keyPath: "hash"
-// Object Store "tags"     — keyPath: autoIncrement
-//   Index "by_hash" on hash
-//   Index "by_tag"  on tag
-
-// ── Types ──
-
-type StoredImage = {
-  hash: string;        // SHA-256 hex (PK)
-  blob: Blob;           // raw image bytes
-  format: string;       // MIME type (e.g., "image/jpeg", "image/png")
-  size: number;         // byte length
-  created_at: number;
+type ImageRecord = {
+  md5: string;                    // SHA-256 hex (PK)
+  blob: ArrayBuffer;              // raw image bytes
+  format: string;                 // MIME type (image/jpeg, image/png, etc.)
+  size: number;                   // byte length
+  width?: number;                 // optional dimensions
+  height?: number;
+  createdAt: number;              // timestamp
+  artistName?: string;            // normalized (lowercase, trimmed)
+  albumName?: string;             // normalized
+  mbzArtistId?: string;           // MusicBrainz artist ID
+  mbzReleaseGroupId?: string;     // MusicBrainz release-group ID (identifies album)
+  mbzReleaseId?: string;          // MusicBrainz release ID (specific edition)
+  sourceUrl?: string;             // original file path or URL
 };
+```
 
-type ImageTag = {
-  id?: number;
-  hash: string;
-  tag: string;          // e.g. "artist/pink floyd"
+### IndexedDB structure
+
+- **Database**: `selftify-images-v2` (version 3)
+- **Object store**: `images` keyed by `md5`
+- **Indexes**:
+  | Index name | Field | Purpose |
+  |---|---|---|
+  | `by_artist` | `artistName` | Lookup by normalized artist name |
+  | `by_album` | `albumName` | Lookup by normalized album name |
+  | `by_mbz` | `mbzArtistId` | Lookup by MusicBrainz artist ID |
+  | `by_rg` | `mbzReleaseGroupId` | Lookup by release-group ID |
+  | `by_url` | `sourceUrl` | Lookup by original path |
+
+### Deduplication
+
+SHA-256 hash of the raw image bytes. `storeImage()` checks `md5` first — if a record with the same hash exists, the write is skipped entirely (no duplicate blobs). `updateImageMeta()` can later enrich an existing record without duplicating the blob.
+
+---
+
+## Image Ingestion
+
+### Source A: Embedded MP3/FLAAC cover art
+
+During `processFile()` in `local-indexer.ts`:
+
+```typescript
+// music-metadata extracts common.picture[]
+if (parsed.picture && parsed.picture.data.length > 0) {
+  const buf = new Uint8Array(parsed.picture.data).buffer;
+  const hash = await md5Hash(buf);
+  const artistNorm = parsed.artist?.toLowerCase().trim();
+  const albumNorm = parsed.album?.toLowerCase().trim();
+
+  const record = {
+    md5: hash, blob: buf,
+    format: parsed.picture.format || "image/jpeg",
+    size: buf.byteLength, createdAt: Date.now(),
+    sourceUrl: `local://${filePath}`,
+    artistName: artistNorm || undefined,
+    albumName: albumNorm || undefined,
+    mbzArtistId: meta.mbz_artist_id || undefined,         // ← from ID3 tags
+    mbzReleaseGroupId: meta.mbz_release_group_id || undefined,  // ← from ID3 tags
+  };
+  await storeImage(record); // or electronStoreImage() on Electron
+}
+```
+
+**MBZ ID provenance**: extracted from the same song's ID3 tags (`TXXX:MusicBrainz Artist Id`, `TXXX:MusicBrainz Release Group Id`, etc.). Available at scan time because the song is being parsed right then.
+
+### Source B: `.img/` folder on filesystem
+
+During `processDir()` in `local-indexer.ts`:
+
+```typescript
+// Walks directory tree, finds .img/ subdirectories
+// Derives artist/album from folder path structure
+const artistName = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
+const albumName = pathParts.length >= 1 ? pathParts[pathParts.length - 1] : null;
+
+const record = {
+  md5: hash, blob: imgData.buffer as ArrayBuffer,
+  format: ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg",
+  size: imgData.length, createdAt: Date.now(),
+  sourceUrl: `local://${relPath}/.img/${imgEntry.name}`,
+  artistName: artistName?.toLowerCase().trim(),
+  albumName: albumName?.toLowerCase().trim(),
+  // mbzArtistId/mbzReleaseGroupId ← NOT available here
+  // (enriched post-scan by preloader)
 };
-
-// ── Public API ──
-
-async function storeImage(blob: Blob, format: string, tags: string[]): Promise<string>
-// 1. Reads blob bytes → ArrayBuffer
-// 2. SHA-256 hash via crypto.subtle.digest
-// 3. If hash not in "images" → store blob + format
-// 4. For each tag → INSERT INTO "tags" (hash, tag) if not exists
-// 5. Returns hash
-
-async function getImageUrlByTag(tag: string): Promise<string | null>
-// 1. Query "tags" index by_tag = tag, limit 1
-// 2. If found → query "images" by hash
-// 3. Blob → URL.createObjectURL → cache in memory Map<hash, string>
-// 4. Return blob URL
-
-async function getImageUrlsByTagPrefix(prefix: string): Promise<string[]>
-// 1. Open cursor on "tags" index "by_tag"
-// 2. Range: IDBKeyRange.bound(prefix, prefix + '\uffff')
-// 3. Collect unique hashes
-// 4. For each hash → getImageUrlByTag-like blob-URL resolution
-// 5. Return array of blob URLs
-
-async function getHash(blob: Blob): Promise<string>
-// SHA-256 of blob bytes → hex string
-
-async function clear(): Promise<void>
-// Deletes all images and tags, revokes all cached blob URLs
+await storeImage(record);
 ```
 
-### Memory cache for blob URLs
+**MBZ ID enrichment**: after the scan completes, `image-preloader.ts:preloadAlbumImage()` runs:
 
-```typescript
-const blobUrlCache = new Map<string, string>();
-// hash → blobURL
-// Prevents creating new blob URLs on every call
-// On clear(): revokeObjectURL for each, then clear map
-```
+1. Queries `getSongsByAlbum(artist, album)` from the Dexie database (all songs are now indexed with ID3 tag metadata)
+2. Reads `mbz_artist_id`, `mbz_release_group_id`, `mbz_album_id` from the first matching song
+3. Calls `updateImageMeta()` / `electronUpdateImageMeta()` to attach the MBZ IDs to the existing `ImageRecord`
+
+This guarantees that even `.img/` folder images end up with the correct MBZ IDs without any network request.
+
+### Source C: Online providers (CoverArtArchive, iTunes, Deezer)
+
+Only used as last resort when no local image exists. Resolved via `use-cover.ts` hook or `image-fetch.ts`. Results are saved back to `image-store.ts` for future local access.
 
 ---
 
-## Indexer Changes
+## Query Priority
 
-### File: `src/api/indexer/local-indexer.ts`
+There is a single centralized service: [`cover-resolver.ts`](../src/services/cover-resolver.ts).
 
-#### Change 1: Enable cover extraction
+### `resolveCover()` — unified entry point
 
-**Line 211** — change `skipCovers: true` to `skipCovers: false`
-
-```diff
-- const result = await mm.parseBuffer(data, { path: filePath }, { duration: true, skipCovers: true });
-+ const result = await mm.parseBuffer(data, { path: filePath }, { duration: true, skipCovers: false });
-```
-
-#### Change 2: Extract and store cover images
-
-After the `music-metadata` parsing section (after line 230), add image extraction:
+All cover lookups — song rows, album pages, artist pages — go through this function:
 
 ```typescript
-// Extract embedded pictures
-const pictures = result.common.picture || [];
-const imageTags: string[] = [];
+// Called by:
+//   - local-controller.ts: resolveImageUrl() → delegates here
+//   - use-cover.ts hook:           resolveCover() directly
+//
+// Priority:
+//   1. .img/ folder on filesystem (loadFromAlbumDotImg)
+//   2. IndexedDB (findImages with MBZ→name cascade)
+//   3. Deezer remote API (findCoverFromDeezer)
+//   4. iTunes remote API (findCoverFromItunes)
+//   5. return { source: "none", blobUrl: null }
 
-if (artistNormalized) {
-  imageTags.push(`artist/${artistNormalized}`);
-}
-if (albumNormalized && artistNormalized) {
-  imageTags.push(`album/${artistNormalized}/${albumNormalized}`);
-}
+export async function resolveCover(input: CoverInput): Promise<CoverResult> {
+  // Step 1: .img/ folder (filesystem — always current)
+  const dotImgUrl = await loadFromAlbumDotImg(artist, album);
+  if (dotImgUrl) { cacheToStore(dotImgUrl); return dotImgUrl; }
 
-const songId = fileIdFromPath(filePath);
-imageTags.push(`song/${songId}`);
-
-for (const picture of pictures) {
-  const blob = new Blob([picture.data], { type: picture.format });
-  await imageCache.storeImage(blob, picture.format, imageTags);
-}
-```
-
-#### Change 3: Normalize artist/album names for tags
-
-Names used in tags must be lowercase-normalized:
-
-```typescript
-const artistNormalized = meta.artist_name.toLowerCase().trim();
-const albumNormalized = meta.album_name?.toLowerCase().trim() || null;
-```
-
-#### Change 4: Cleanup on re-scan
-
-In the `start()` function (line 49-73), add `await imageCache.clear()` alongside `deleteAllSongs()`.
-
----
-
-## Local Controller Changes
-
-### File: `src/api/local/local-controller.ts`
-
-#### Change 1: `toSong()` now resolves imageUrl
-
-```typescript
-async function toSong(row: any): Promise<Song> {
-  const artistNorm = (row.artist_name || "").toLowerCase().trim();
-  const albumNorm = (row.album_name || "").toLowerCase().trim();
-  
-  let imageUrl: string | null = null;
-  
-  // Priority: song-specific → album → artist
-  imageUrl = await imageCache.getImageUrlByTag(`song/${row.id}`);
-  if (!imageUrl && albumNorm && artistNorm) {
-    imageUrl = await imageCache.getImageUrlByTag(`album/${artistNorm}/${albumNorm}`);
+  // Step 2: IndexedDB (embedded tags from scan)
+  //   queries in order: mbzArtistId+mbzReleaseGroupId,
+  //                     mbzArtistId+mbzReleaseId,
+  //                     artistName+albumName,
+  //                     artistName,
+  //                     mbzArtistId
+  for (const q of queries) {
+    const url = await findFromStore(q);
+    if (url) return url;
   }
-  if (!imageUrl && artistNorm) {
-    imageUrl = await imageCache.getImageUrlByTag(`artist/${artistNorm}`);
-  }
-  
-  return { ...same, imageUrl };
+
+  // Step 3: Deezer (remote, with caching)
+  const deezerUrl = await findCoverFromDeezer(artist, album);
+  if (deezerUrl) { cacheToStore(deezerUrl); return deezerUrl; }
+
+  // Step 4: iTunes (remote, with caching)
+  const itunesUrl = await findCoverFromItunes(artist, album);
+  if (itunesUrl) { cacheToStore(itunesUrl); return itunesUrl; }
+
+  return { source: "none", blobUrl: null };
 }
 ```
 
-#### Change 2: `getImageUrl()` implementation
-
-```typescript
-getImageUrl: async (songId: string) => {
-  const row = await getSongById(songId);
-  if (!row) return null;
-  const artistNorm = (row.artist_name || "").toLowerCase().trim();
-  const albumNorm = (row.album_name || "").toLowerCase().trim();
-  
-  return imageCache.getImageUrlByTag(`song/${songId}`)
-    || (albumNorm && artistNorm ? imageCache.getImageUrlByTag(`album/${artistNorm}/${albumNorm}`) : null)
-    || (artistNorm ? imageCache.getImageUrlByTag(`artist/${artistNorm}`) : null);
-}
+Remote results (Deezer, iTunes) are cached into IndexedDB via `cacheToStore()` so subsequent lookups hit step 2 directly.}
+return null;
 ```
 
-#### Change 3: Implement album list/detail from DB aggregation
+### `use-cover()` hook (album pages)
 
-```typescript
-getAlbumList: async (_offset = 0, limit = 100) => {
-  const rows = await getAlbumsFromSongs(); // NEW DB query
-  return rows.map(row => ({
-    ...toAlbum(row),
-    imageUrl: ... // from imageCache.getImageUrlByTag(`album/${artistNorm}/${albumNorm}`)
-  }));
-}
-```
-
-#### Change 4: Implement artist list/detail from DB aggregation
-
-```typescript
-getAlbumArtistList: async (_offset = 0, limit = 100) => {
-  const rows = await getArtistsFromSongs(); // NEW DB query
-  return rows.map(row => ({
-    ...toArtist(row),
-    imageUrl: ... // from imageCache.getImageUrlByTag(`artist/${artistNorm}`)
-  }));
-}
-```
-
-#### Change 5: All methods using `toSong()` become async-aware
-
-Since `toSong()` now does async IndexedDB lookups, callers that `map(toSong)` need to use `Promise.all()`:
-
-```typescript
-search: async (query, limit = 50) => {
-  const results = await searchSongs(query, limit);
-  return {
-    songs: await Promise.all(results.map(toSong)),
-    albums: [],
-    albumArtists: [],
-  } as SearchResults;
-},
-```
+The `use-cover.ts` hook on album pages delegates to `resolveCover()` from the centralized `cover-resolver.ts` service. It adds:
+- In-memory `blobCache` Map for zero-latency re-renders
+- `coverEventBus` subscription so the hook re-resolves when a new image is stored for the same artist+album
 
 ---
 
-## Database Queries (New)
+## Domain Type Changes
 
-### File: `src/services/local-database.ts`
+### `Song` type ([`domain-types.ts`](../src/types/domain-types.ts))
 
-Add aggregation queries for album/artist views:
+Two new fields carry MusicBrainz IDs from the scan:
 
 ```typescript
-export async function getAlbumsFromSongs(): Promise<{ name: string; artist_name: string }[]> {
-  const db = await getDb();
-  return db.select(
-    `SELECT DISTINCT album_name as name, artist_name
-     FROM songs
-     WHERE album_name IS NOT NULL
-     ORDER BY artist_name, album_name`
-  );
-}
-
-export async function getArtistsFromSongs(): Promise<{ name: string }[]> {
-  const db = await getDb();
-  return db.select(
-    `SELECT DISTINCT artist_name as name
-     FROM songs
-     ORDER BY artist_name`
-  );
-}
+mbzReleaseGroupId?: string;
+mbzAlbumId?: string;
 ```
+
+### `dto.ts` — `dbSongToSong()`
+
+Maps the existing `DbSong` columns to the new domain fields:
+
+```typescript
+mbzReleaseGroupId: row.mbz_release_group_id || undefined,
+mbzAlbumId: row.mbz_album_id || undefined,
+```
+
+These columns were already present in `DbSong` and the schema (Dexie version 4+) — they just were not exposed through the domain type.
+
+---
+
+## Electron-Specific Handling
+
+### `electron-image-store.ts`
+
+On Electron, images are stored via IPC to the main process (`window.electronApi.imageCache`). The main process stores them in a native cache. The Electron wrapper:
+- Checks for `electronApi.imageCache`; if absent, falls back to IndexedDB (`image-store.ts`)
+- On `find()` calls, returns metadata-only records with `blob: new ArrayBuffer(0)`
+- Full blob data is fetched via `electronGetImageByMd5(hash)`
+- `electronRecordToBlobUrl()` handles the zero-byte check and re-fetches if needed
+- `electronUpdateImageMeta()` re-stores the record with updated metadata via `api.store()`
+
+### `local-controller.ts` — Electron bridge
+
+The `recordToBlobUrlSafe()` helper detects Electron's zero-byte blobs and fetches the full blob before creating a `URL.createObjectURL()`.
+
+---
+
+## Source of MBZ IDs
+
+| Image source | MBZ IDs come from | When |
+|---|---|---|
+| **Embedded MP3 cover** | Same song's ID3 tags | At scan time (in `processFile()`) |
+| **`.img/` folder** | Songs in the same album folder | Post-scan enrichment (`preloadAlbumImage()`) |
+| **Online provider** | MusicBrainz release ID from search | At query time |
+
+All local image resolution is **zero-network**: MBZ IDs come from ID3 metadata already in the files.
 
 ---
 
@@ -340,10 +323,17 @@ export async function getArtistsFromSongs(): Promise<{ name: string }[]> {
 
 | File | Action | Purpose |
 |---|---|---|
-| `src/services/image-cache.ts` | **CREATE** | IndexedDB image store + tag index + blob-URL cache |
-| `src/api/indexer/local-indexer.ts` | **MODIFY** | `skipCovers: false`, extract pictures, store in cache |
-| `src/api/local/local-controller.ts` | **MODIFY** | Async imageUrl resolution, implement album/artist methods |
-| `src/services/local-database.ts` | **MODIFY** | Add aggregation queries for albums/artists |
+| `src/services/image-store.ts` | **CREATE** | IndexedDB `selftify-images-v2`, `ImageRecord`, `findImages()` cursor scan |
+| `src/services/electron-image-store.ts` | **CREATE** | Electron IPC wrapper; falls back to `image-store.ts` |
+| `src/services/image-preloader.ts` | **CREATE** | Post-scan `.img/` folder scanning + MBZ ID enrichment |
+| `src/services/cover-event-bus.ts` | **CREATE** | Pub/sub for `storeImage` → `useCover` re-resolution |
+| `src/services/dot-img-loader.ts` | **CREATE** | On-demand filesystem `.img/` reading |
+| `src/services/cover-resolver.ts` | **CREATE** | **Centralized** `resolveCover()` — unifies all cover resolution: `.img/` → IndexedDB → Deezer → iTunes |
+| `src/api/indexer/local-indexer.ts` | **MODIFY** | `skipCovers: false`, store embedded covers with MBZ IDs, `.img/` dir processing |
+| `src/api/local/local-controller.ts` | **MODIFY** | `resolveImageUrl()` delegates to `resolveCover()` |
+| `src/hooks/use-cover.ts` | **MODIFY** | `resolveFromStore()` replaced by `resolveCover()` from centralized service |
+| `src/types/domain-types.ts` | **MODIFY** | `Song` gains `mbzReleaseGroupId`, `mbzAlbumId` |
+| `src/services/dto.ts` | **MODIFY** | Maps `mbz_release_group_id`, `mbz_album_id` to domain |
 
 ---
 
@@ -354,27 +344,29 @@ export async function getArtistsFromSongs(): Promise<{ name: string }[]> {
 | API | Used for |
 |---|---|
 | `crypto.subtle.digest("SHA-256")` | Content hashing (deduplication key) |
-| `indexedDB` | Persistent key-value store for images + tags |
+| `indexedDB` | Persistent key-value store for images |
 | `URL.createObjectURL()` / `URL.revokeObjectURL()` | Convert blobs to displayable URLs |
 | `music-metadata` (already a dep) | Extract `common.picture[]` from ID3/Vorbis tags |
+| `window.electronApi.imageCache` | Electron main-process image store |
 
 ---
 
 ## Fallback Behavior
 
-1. **No embedded cover** → `imageUrl` remains `null` → UI shows letter avatar (existing behavior)
-2. **IndexedDB unavailable** (rare: private browsing in strict mode) → graceful skip, `imageUrl = null`
+1. **No embedded cover + no `.img/` folder** → `imageUrl` remains `null` → UI shows letter avatar (existing behavior)
+2. **IndexedDB unavailable** (private browsing) → graceful skip, `imageUrl = null`
 3. **Hash collision** (SHA-256) → virtually impossible, no special handling needed
-4. **Large images** → cap at 2 MB per image to prevent storage bloat (ID3 covers are typically < 500 KB)
+4. **Electron store missing** → `electronGetImageByMd5` re-fetches via IPC
 
 ---
 
 ## Performance Considerations
 
-- **Scan speed**: Enabling `skipCovers: false` adds ~100-200ms per file (parsing + IndexedDB write). For large libraries, the async batch processing in the indexer naturally handles this.
-- **Blob URL lifetime**: Blob URLs are kept in memory until `clear()` is called (on re-scan). Revocation strategy can be improved later with LRU or reference counting.
-- **IndexedDB reads**: Tag-based queries use indexed lookups (no full scan). Query time < 1ms typical.
-- **Deduplication savings**: For albums with 10+ tracks sharing the same embedded cover, only 1 blob is stored instead of 10.
+- **Scan speed**: Enabling `skipCovers: false` adds ~100-200ms per file (parsing + IndexedDB write). Batch processing mitigates this.
+- **Blob URL lifetime**: Blob URLs are kept in memory until `clearImageStore()` is called on re-scan.
+- **IndexedDB reads**: `findImages()` does a full cursor scan with JS filtering. For libraries with < 1000 images, this is < 10ms. For larger libraries, an index-only compound query should be considered.
+- **Deduplication savings**: Albums with 10+ tracks sharing the same embedded cover store only 1 blob instead of 10.
+- **`useCover` in-memory cache**: `blobCache` Map keeps resolved blob URLs for the session, avoiding repeated IndexedDB reads.
 
 ---
 

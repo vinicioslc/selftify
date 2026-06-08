@@ -333,6 +333,46 @@ Base it on the problem description in <feature-name>.md.
 
 The `.md` file is the **source of truth** for scope. The `.ui.md` and `.api.md` files derive from it and should be kept in sync.
 
+### Spec-First Rule
+
+**Toda adição de código deve ser pautada em alguma spec.** Antes de implementar qualquer funcionalidade, comportamento, ou mudança de API:
+
+1. Verifique se já existe uma spec que cobre o escopo em `specs/`.
+2. Se existir, implemente exatamente o que está especificado. Se o comportamento real divergir do spec, atualize o spec primeiro.
+3. Se **não** existir spec para o que está sendo implementado, **crie ou atualize a spec mais adequada** antes de escrever código, documentando: problema, solução, tipos, eventos, arquivos afetados e edge cases.
+4. Specs são artefatos vivos — toda descoberta durante implementação que altere o design original deve ser refletida na spec correspondente.
+
+A única exceção é refatoração puramente mecânica (renomear variável, extrair função) sem mudança de comportamento visível.
+
+### Spec Update on Implementation
+
+**Após implementar qualquer funcionalidade coberta por spec(s), o agente DEVE atualizar as specs correspondentes para refletir o estado real do código.**
+
+1. Ao finalizar a implementação, localize a spec mais relevante em `specs/`:
+   - Busque pelo nome da feature ou arquivos alterados
+   - Se houver múltiplas specs (.md, .ui.md, .api.md), atualize todas
+
+2. Atualize na spec:
+   - **Arquivos alterados**: confira a lista real vs o planejado, adicione/remova conforme necessário
+   - **Tipos/contratos**: se a implementação divergiu dos tipos planejados, corrija na spec
+   - **Comportamento**: se edge cases ou fluxos foram descobertos durante a implementação, documente
+   - **Decisões técnicas**: se algo foi feito diferente do spec original, explique o motivo na spec
+
+3. A spec deve SEMPRE refletir o código atual, não o planejado. Spec desatualizada = spec quebrada.
+
+4. Se a implementação revelar que uma spec está incompleta (faltam seções, tipos, fluxos), adicione o que falta — não crie uma nova spec para isso a menos que seja uma feature totalmente nova.
+
+### Spec-First Reading Rule
+
+**Sempre que o usuário pedir uma alteração ou nova funcionalidade, o agente DEVE ler a spec relevante em `specs/` ANTES de ler qualquer código-fonte.**
+
+1. Identifique qual spec cobre a funcionalidade baseando-se no nome da feature ou palavras-chave do pedido
+2. Leia a spec (`specs/<feature>.md`, `.ui.md`, `.api.md`) primeiro — ela contém o design acordado, tipos, contratos e arquivos afetados
+3. Só depois de compreender o design da spec, leia os arquivos de código relevantes
+4. Se não existir spec para o que está sendo pedido, crie a spec antes de implementar (conforme regra Spec-First Rule acima)
+
+Isto garante que o agente entende o comportamento esperado antes de mergulhar no código existente.
+
 ---
 
 ## Design Principles
@@ -343,12 +383,200 @@ The `.md` file is the **source of truth** for scope. The `.ui.md` and `.api.md` 
 - **Mobile-first responsive**: Tailwind breakpoints for adaptive layout
 - **Source-agnostic UI**: Same components work with YouTube or Local
 - **Observability**: Console.debug() with `[Selftify]` prefix for API calls
+- **HTTP error logging**: Use `console.warn` for 4xx (client/not-found — normal part of operation). Use `console.error` for 5xx (server/network — actual failures). Never treat 404 as an error — it means "resource doesn't exist" and is expected for optional resources like cover art.
 - **User-facing status**: Any operation of interest to the user (loading, searching, indexing, playing) must publish a brief message via `useStatusStore.getState().addMessage(text, level, source)` so it appears in the TopBar status popover. Use `"info"` for normal activity, `"success"` for completion, `"warn"` for warnings, `"danger"` for errors. Examples: `"Searching local files..."`, `"Found 42 songs"`, `"Scan complete"`.
 - **No cross-project references**: This project must never reference any other self-hosted music projects. See `USER_INSTRUCTIONS.md` for details.
 
 ---
 
-## Cross-Platform Patterns (Electron + Capacitor Android)
+## UI Framework Stack & Conventions
+
+### Camadas da Stack de UI
+
+```
+shadcn/ui (componentes prontos)
+    └── Radix UI (primitives headless)
+            └── React 19
+                    └── Tailwind CSS v3 (estilos)
+```
+
+Cada camada tem um propósito específico e regras claras de uso.
+
+---
+
+### 1. Radix UI — Primitives Headless
+
+**O que é**: Coleção de componentes headless acessíveis (WAI-ARIA compliant) que fornecem comportamento, estado e eventos sem estilo próprio.
+
+**Pacotes instalados**:
+
+| Pacote | Wrapper shadcn? | Uso |
+|--------|:---:|-----|
+| `@radix-ui/react-accordion` | ❌ | Seções colapsáveis |
+| `@radix-ui/react-avatar` | ✅ `avatar.tsx` | Imagens de perfil/álbum com fallback |
+| `@radix-ui/react-dialog` | ✅ `dialog.tsx` | Modais (OriginEditDialog, AddToPlaylistDialog) |
+| `@radix-ui/react-dropdown-menu` | ❌ | Menus de contexto |
+| `@radix-ui/react-label` | ❌ | Rótulos de formulário |
+| `@radix-ui/react-popover` | ✅ `popover.tsx` | Popover de status (TopBar) |
+| `@radix-ui/react-scroll-area` | ❌ (custom CSS) | Scroll estilizado |
+| `@radix-ui/react-select` | ❌ | Dropdowns de seleção |
+| `@radix-ui/react-separator` | ✅ `separator.tsx` | Divisores visuais (Sidebar) |
+| `@radix-ui/react-slider` | ✅ `slider.tsx` | Sliders de volume/crossfade (Settings) |
+| `@radix-ui/react-slot` | ✅ `button.tsx` | Polymorphic `asChild` pattern |
+| `@radix-ui/react-switch` | ✅ `switch.tsx` | Toggles (Settings) |
+| `@radix-ui/react-tabs` | ✅ `tabs.tsx` | Abas (Settings) |
+| `@radix-ui/react-toast` | ❌ | Notificações toast |
+| `@radix-ui/react-tooltip` | ❌ | Tooltips |
+
+**Regras**:
+- **Nunca importe Radix diretamente nas features.** Sempre use o wrapper shadcn em `src/components/ui/`.
+- Se um wrapper não existir, **crie-o** seguindo o padrão shadcn antes de usar o Radix bruto.
+- Wrappers shadcn seguem o padrão: `import * as XPrimitive from "@radix-ui/react-x"` + `cn()` + `forwardRef`.
+
+**Por que Radix e não outro**:
+- Acessibilidade nativa (focus trap, keyboard nav, ARIA attributes)
+- Comportamento cross-platform consistente (Electron, Capacitor, Web)
+- APIs compostas (compound components) que permitem customização total via Tailwind
+
+---
+
+### 2. shadcn/ui — Componentes Prontos
+
+**O que é**: Coleção de componentes React construídos sobre Radix UI + Tailwind CSS, distribuídos como código copiável (não é uma lib npm — você mantém os arquivos).
+
+**Componentes existentes** em `src/components/ui/`:
+
+```
+avatar.tsx    badge.tsx     button.tsx    card.tsx
+dialog.tsx    input.tsx     popover.tsx   resize-handle.tsx
+scan-indicator.tsx          scroll-area.tsx   separator.tsx
+slider.tsx    switch.tsx    tabs.tsx      textarea.tsx
+```
+
+**Como adicionar um novo componente shadcn**:
+
+```bash
+npx shadcn@latest add <component-name>
+# Ou manual: crie o arquivo em src/components/ui/<name>.tsx
+```
+
+**Regras**:
+- Use `cn()` da `lib/utils.ts` para merge de classes Tailwind
+- Use `cva()` (Class Variance Authority) para variantes de componente (ex: `buttonVariants`)
+- Componentes usam `forwardRef` para composição
+- Siga o padrão de props: `className` opcional + `React.ComponentPropsWithoutRef<>`
+- Tema via variáveis CSS em `globals.css` (ex: `--primary`, `--muted`, etc.)
+
+---
+
+### 3. Tailwind CSS v3 — Estilização
+
+**Configuração**: `tailwind.config.ts` com `tailwindcss-animate` para animações.
+
+**Padrões de tema**:
+
+```ts
+// Cores via variáveis CSS (dark/light)
+colors: {
+  border: "hsl(var(--border))",
+  background: "hsl(var(--background))",
+  primary: { DEFAULT: "hsl(var(--primary))", foreground: "..." },
+  // ...
+}
+```
+
+**Variáveis de layout** (em `globals.css`):
+
+```css
+:root {
+  --player-bar-height: 90px;
+  --sidebar-width: 280px;
+  --topbar-height: 38px;
+}
+```
+
+**Regras**:
+- Sempre use as variáveis CSS de tema (`bg-background`, `text-foreground`, `border-border`) — nunca cores fixas
+- Dark mode via classe `.light` (light theme) + `.dark` (default escuro)
+- Layout principal: CSS Grid com áreas nomeadas (`layout.css`)
+- Animações com `data-[state=open/closed]:animate-in/out` (Radix + tailwindcss-animate)
+- Responsivo: breakpoints Tailwind (`sm:`, `md:`, `lg:`) — mobile-first
+
+---
+
+### 4. Lucide React — Ícones
+
+**Pacote**: `lucide-react`
+
+**Regras**:
+- Prefira ícones do Lucide sobre SVGs inline ou outras libs
+- Tamanhos padrão: `h-4 w-4` (16px) para inline, `h-5 w-5` (20px) para navegação
+- Cor herdada via `text-foreground`/`currentColor`
+- Use `sr-only` para texto alternativo quando o ícone for o único conteúdo
+
+---
+
+### 5. Class Variance Authority (CVA)
+
+**Pacote**: `class-variance-authority`
+
+**Uso**: Definir variantes de componentes (tamanho, cor, estilo).
+
+```ts
+const buttonVariants = cva(
+  "inline-flex items-center justify-center ...",
+  {
+    variants: {
+      variant: { default: "...", destructive: "...", ghost: "..." },
+      size: { default: "h-9 px-4", sm: "h-8", lg: "h-10", icon: "h-9 w-9" },
+    },
+  }
+);
+```
+
+**Regras**:
+- Use CVA para **todas** as variantes visuais de componentes compartilhados
+- Evite condicionais manuais (`if variant === "x"`) quando CVA pode resolver
+- Combine com `cn()` para classes extras via prop `className`
+
+---
+
+### 6. Zustand — Estado Global
+
+**Pacote**: `zustand` com middleware `persist`
+
+**Stores existentes**:
+
+| Store | Persiste? | Finalidade |
+|-------|:---------:|------------|
+| `auth.store` | ✅ | Lista de origins + origin atual |
+| `player.store` | ✅ | Fila, faixa atual, volume, shuffle, repeat |
+| `settings.store` | ✅ | Tema, visualizador, preferências de playback |
+| `status.store` | ❌ | Mensagens de status (TopBar popover) |
+| `ranking-debug.store` | ❌ | Debug de ranking YouTube |
+
+**Regras**:
+- Stores são a **única fonte de estado global** — não use Context API
+- Use `persist` apenas para estado que deve sobreviver a refresh (auth, settings, player)
+- Prefira **slices** (Zustand slices pattern) se uma store crescer demais
+- Ações síncronas diretas na store; ações assíncronas via funções separadas que chamam `getState()`
+
+---
+
+### 7. TanStack React Query — Dados Assíncronos
+
+**Pacote**: `@tanstack/react-query`
+
+**Configuração**: `QueryClient` em `main.tsx`, provider em `App.tsx`.
+
+**Uso**: Chamadas a controllers (busca, listagem de álbuns/artistas/músicas).
+
+**Regras**:
+- Use React Query para **dados de API** (search, listagens, detalhes)
+- Use Zustand para **estado de UI** (sidebar aberta/fechada, faixa atual, tema)
+- Evite sobrepor os dois — cada um tem seu domínio
+
+---
 
 ### The `platformFetch` Pattern
 
@@ -445,3 +673,68 @@ This avoids re-authentication on every call and works identically on all platfor
 | `yt-dlp` | ✅ Via `child_process` in main | ❌ No system binary |
 
 **Rule of thumb**: If a library depends on Node.js APIs (fs, child_process, native addons), it **only works in Electron**. If it's pure JS/TS with only `fetch`/`Web API`, it can work on both platforms but may need the `platformFetch` wrapper.
+
+---
+
+## Audio Playback Peculiarities
+
+### YouTube stream URLs have no CORS
+
+`googlevideo.com` (YouTube audio stream) does **NOT** send `Access-Control-Allow-Origin`. When using `AudioContext.createMediaElementSource()` to route an `<audio>` element through an `AnalyserNode` (for visualizers), Chromium **silences** the output for cross-origin media that lacks CORS headers. The `<audio>` element plays fine alone, but once connected via `createMediaElementSource`, **no audio comes out**.
+
+**Solution**: Dual audio elements — one connected to the AudioContext (local files), one standalone (streams).
+
+```ts
+// browser-audio-provider.tsx
+const audioRef = useRef<HTMLAudioElement | null>(null);       // local → AudioContext
+const streamAudioRef = useRef<HTMLAudioElement | null>(null); // stream → direct playback
+
+function isStreamUrl(url: string): boolean {
+  return url.startsWith("https://") && !url.startsWith("file://");
+}
+```
+
+| Element | Connected to AudioContext? | Used for |
+|---------|---------------------------|----------|
+| `audioRef` | ✅ `createMediaElementSource` → AnalyserNode | Local files (no CORS) |
+| `streamAudioRef` | ❌ Direct `<audio>` playback | YouTube streams (googlevideo.com) |
+
+When switching between local and stream, pause the inactive element before loading the active one.
+
+### `resumeContext()` only needed for local files
+
+Only call `audioCtx.resume()` when playing through the AudioContext pipeline. Stream playback via the standalone `<audio>` element doesn't need an AudioContext at all — it plays directly through the browser's audio output. This also avoids autoplay-policy issues since `<audio>.play()` from a user gesture always works.
+
+### yt-dlp stream URLs expire
+
+Each `yt:stream-url` extraction returns a signed URL with an `expire` parameter (~6h from generation). The `ytStreamCache` caches them for 5 minutes (`CACHE_TTL`). Do not cache for longer than that, as expired URLs return 403.
+
+### Sequential yt-dlp operations
+
+The `TaskQueue` in `electron/queue.ts` processes tasks **sequentially** (single-threaded). A play click triggers this chain:
+
+```
+MusicBrainz:  play → searchAndRank (yt:search, ~3-10s) → getStreamUrl (yt:stream-url, ~3-5s) → audio
+YouTube Pure: play → getStreamUrl (yt:stream-url, ~3-5s) → audio
+```
+
+Total time from click to first audible sound: **8–15s** for MusicBrainz, **3–5s** for YouTube Pure. This is expected — yt-dlp must extract the stream URL on-demand. If a task is already running (e.g. a previous search), new tasks queue behind it.
+
+### Audio format of YouTube streams
+
+`yt-dlp --format bestaudio[ext=webm]/bestaudio` returns format **251** (Opus 160kbps in WebM container). Chrome/Chromium/Electron play this natively. Safari does not support WebM audio; macOS Electron users may need a different format strategy.
+
+### Every playback path must resolve `song.path`
+
+Search results, album pages, artist pages, and local file listings each have their own `playSong()` function. When adding stream URL resolution (via `getStreamUrl`), **every** playback path must be updated — not just the search page.
+
+Rules:
+- **Local files** already have `song.path` set → `setQueue([song])` is correct.
+- **Online songs** (MusicBrainz, YouTube) have `song.path = null` → must call `getStreamUrl(song)` first, then `setQueue([{...song, path: streamUrl}])`.
+- **Mixed pages** (album page has local + online songs): check `if (song.path)` before resolving.
+- **Play All** must resolve every song individually via `Promise.allSettled`.
+
+Always grep for `setQueue` across the entire codebase when adding/modifying playback to catch all paths:
+```bash
+grep -rn "setQueue" src/features/ --include="*.tsx"
+```
