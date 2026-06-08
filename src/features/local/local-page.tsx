@@ -6,18 +6,27 @@ import { useLocalScan } from "../../hooks/use-local-scan";
 import { useStatusStore } from "../../stores/status.store";
 import { getController } from "../../api/controller";
 import { OriginType, type Song, type Album, type AlbumArtist } from "../../types/domain-types";
-import { getAllSongs, getScanState, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres, type DbSong } from "../../services/local-database";
-import { getImageUrlByTag } from "../../services/image-cache";
+import { getAllSongs, getScanState, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres } from "../../services/local-database";
+import { dbSongToSong } from "../../services/dto";
 import { SCAN_STATUS_LABEL } from "../../lib/status-labels";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { Avatar } from "../../components/ui/avatar";
+import { CoverImage } from "../../components/ui/art-image";
 import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { formatDuration } from "../../lib/utils";
-import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc, ChevronLeft, ChevronRight } from "lucide-react";
+import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { DataTable, type ColumnDef } from "../shared/data-table";
+import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
+import { moveSongToTrash } from "../../services/move-to-trash";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 
 const PAGE_SIZE = 20;
 
@@ -26,34 +35,9 @@ interface LocalPageProps {
   onNavigateArtist?: (artist: AlbumArtist) => void;
 }
 
-async function dbSongToSong(s: DbSong, originId: string): Promise<Song> {
-  const artistNorm = s.artist_name.toLowerCase().trim();
-  const albumNorm = (s.album_name || "").toLowerCase().trim();
-  const songUrl = await getImageUrlByTag(`song/${s.id}`);
-  const albumUrl = albumNorm && artistNorm ? await getImageUrlByTag(`album/${artistNorm}/${albumNorm}`) : null;
-  const artistUrl = artistNorm ? await getImageUrlByTag(`artist/${artistNorm}`) : null;
-
-  return {
-    id: s.id,
-    originId,
-    originType: OriginType.LOCAL,
-    name: s.name,
-    artistName: s.artist_name || "Unknown Artist",
-    albumName: s.album_name || undefined,
-    duration: s.duration || null,
-    imageUrl: songUrl || albumUrl || artistUrl || null,
-    path: s.path,
-    genres: s.genre ? [s.genre] : undefined,
-    trackNumber: s.track_number || undefined,
-    discNumber: s.disc_number || undefined,
-    albumArtistName: s.album_artist || undefined,
-    releaseYear: s.year || undefined,
-  };
-}
-
 export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps) {
-  const { currentOrigin } = useAuthStore();
-  const { setQueue } = usePlayerStore();
+  const { currentOrigin, origins } = useAuthStore();
+  const { setQueue, addToQueue } = usePlayerStore();
   const [folderPath, setFolderPath] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [songs, setSongs] = useState<Song[]>([]);
@@ -65,6 +49,9 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   const [page, setPage] = useState(0);
   const [scanError, setScanError] = useState<string | null>(null);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
+  const [addToPlaylistSong, setAddToPlaylistSong] = useState<Song | null>(null);
+  const [contextMenuSong, setContextMenuSong] = useState<Song | null>(null);
+  const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
 
   const {
     rootFolder,
@@ -91,7 +78,9 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           if (state.scan_status === "done") {
             const all = await getAllSongs();
             const mapped = await Promise.all(all.map((s) => dbSongToSong(s, currentOrigin.id)));
-            setSongs(mapped);
+            const controller = await getController();
+            const withImages = await controller.populateSongImages(mapped);
+            setSongs(withImages);
             setTotalSongs(mapped.length);
             useStatusStore.getState().addMessage(`Loaded ${mapped.length} song${mapped.length !== 1 ? "s" : ""} from local library`, "info", "Library");
             setLocalStats({
@@ -103,8 +92,13 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           } else {
             setSongs([]);
             setTotalSongs(0);
+            const mappedStatus = state.scan_status === "indexing" ? "scanning" : state.scan_status;
+            useLocalLibraryStore.getState().setScanStatus(mappedStatus as any);
             useStatusStore.getState().addMessage("Local library scan not yet complete", "info", "Library");
           }
+        } else {
+          // No scan state in DB — reset store status
+          useLocalLibraryStore.getState().setScanStatus("idle");
         }
       } else if (searchQuery.trim()) {
         useStatusStore.getState().addMessage(`Searching local files for "${searchQuery}"...`, "info", "Search");
@@ -142,7 +136,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
     if (!isLocalMode || loading) return;
     (async () => {
       try { await autoScan(rootFolder); }
-      catch { /* ignore */ }
+      catch (err) { console.warn("[local-page] autoScan error:", err); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLocalMode, loading, rootFolder]);
@@ -284,8 +278,8 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                     setRootFolder(selected);
                     setScanError(null);
                   }
-                } catch {
-                  console.debug("[local] Native dialog unavailable");
+                } catch (err) {
+                  console.warn("[local-page] openFolderPicker error:", err);
                 }
               }}
             >
@@ -366,9 +360,48 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
 
       {!loading && !showSongs && isLocalMode && scanStatus === "scanning" && (
         <div className="flex flex-1 items-center justify-center">
-          <div className="text-center">
+          <div className="w-full max-w-sm text-center">
             <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
-            <p className="mt-2 text-sm text-muted-foreground">{SCAN_STATUS_LABEL.scanning} &mdash; extracting tags&hellip;</p>
+            {scanProgress.total > 0 ? (
+              <>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Extracting metadata&hellip;
+                </p>
+                <p className="mt-1 truncate text-xs text-muted-foreground/70">
+                  {scanProgress.currentDir?.replace(folderPath || rootFolder, "").replace(/^\//, "") || ""}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground/60">
+                  {scanProgress.done} / {scanProgress.total}
+                </p>
+                <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.round((scanProgress.done / scanProgress.total) * 100))}%` }}
+                  />
+                </div>
+              </>
+            ) : scanProgress.done > 0 ? (
+              <>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Scanning&hellip;
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground/60">
+                  Found {scanProgress.done} files so far
+                </p>
+                <p className="mt-1 truncate text-xs text-muted-foreground/70">
+                  {scanProgress.currentDir?.replace(folderPath || rootFolder, "").replace(/^\//, "") || ""}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Counting files&hellip;
+                </p>
+                <p className="mt-1 truncate text-xs text-muted-foreground/70">
+                  {scanProgress.currentDir?.replace(folderPath || rootFolder, "").replace(/^\//, "") || ""}
+                </p>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -470,7 +503,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                     sortValue: (s) => s.name,
                     render: (song) => (
                       <div className="flex min-w-0 items-center gap-3">
-                        <Avatar
+                        <CoverImage
                           src={song.imageUrl}
                           alt={song.name}
                           fallback={song.name.charAt(0)}
@@ -513,6 +546,26 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                       </span>
                     ),
                   },
+                  {
+                    id: "addToPlaylist",
+                    label: "",
+                    width: "40px",
+                    sortable: false,
+                    render: (song) => (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAddToPlaylistSong(song);
+                        }}
+                        title="Add to playlist"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                    ),
+                  },
                 ];
 
                 return (
@@ -523,6 +576,11 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                     selectedId={selectedSongId}
                     onSelectedIdChange={setSelectedSongId}
                     onRowDoubleClick={(song) => handlePlayEntry(song)}
+                    onRowContextMenu={(song, e) => {
+                      e.preventDefault();
+                      setContextMenuSong(song);
+                      setContextMenuPos({ x: e.clientX, y: e.clientY });
+                    }}
                     emptyMessage="No results match your filter."
                     storageKey="local-songs"
                     defaultSortColumn="title"
@@ -570,6 +628,83 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           </TabsContent>
           )}
         </Tabs>
+      )}
+
+      {/* Context Menu */}
+      {contextMenuSong && (
+        <div
+          className="fixed inset-0 z-50"
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={() => setContextMenuSong(null)}
+        >
+          <div
+            className="absolute"
+            style={{ left: contextMenuPos.x, top: contextMenuPos.y }}
+          >
+            <DropdownMenu open={true} onOpenChange={(o) => { if (!o) setContextMenuSong(null); }}>
+              <DropdownMenuTrigger asChild>
+                <span className="absolute w-px h-px" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                side="bottom"
+                align="start"
+                className="min-w-[180px]"
+                onCloseAutoFocus={(e) => e.preventDefault()}
+              >
+                <DropdownMenuItem
+                  onClick={() => {
+                    addToQueue?.([contextMenuSong], { type: "now" });
+                    setContextMenuSong(null);
+                  }}
+                >
+                  <span className="text-sm">▶ Play</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    addToQueue?.([contextMenuSong], { type: "next" });
+                    setContextMenuSong(null);
+                  }}
+                >
+                  <span className="text-sm">⏭ Play Next</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setAddToPlaylistSong(contextMenuSong);
+                    setContextMenuSong(null);
+                  }}
+                >
+                  <span className="text-sm">📋 Add to Playlist</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={async () => {
+                    const origin = origins.find((o) => o.id === contextMenuSong.originId);
+                    if (origin && contextMenuSong.path) {
+                      const ok = await moveSongToTrash(contextMenuSong.path, origin);
+                      if (ok) {
+                        setSongs((prev) => prev.filter((s) => s.id !== contextMenuSong.id));
+                      }
+                    }
+                    setContextMenuSong(null);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-2" />
+                  <span className="text-sm">Delete</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      )}
+
+      {/* Add to Playlist Dialog */}
+      {addToPlaylistSong && (
+        <AddToPlaylistDialog
+          open={!!addToPlaylistSong}
+          onOpenChange={(open) => { if (!open) setAddToPlaylistSong(null); }}
+          song={addToPlaylistSong}
+        />
       )}
     </div>
   );
