@@ -1,3 +1,6 @@
+import type { RankingWeights } from "../stores/settings.store";
+import { recordRanking } from "./search-cache";
+
 export type YoutubeSearchVideo = {
   id: string;
   title: string;
@@ -9,8 +12,10 @@ export type YoutubeSearchScoreBreakdown = {
   titleMatch: boolean;
   albumMatch: boolean;
   artistMatch: boolean;
+  artistOnChannel: boolean;
   exactDuration: boolean;
   closestDuration: boolean;
+  keywordScore: number;
   score: number;
 };
 
@@ -35,13 +40,10 @@ function getDurationSeconds(video: YoutubeSearchVideo): number {
 
 export function scoreYouTubeResults(
   videos: YoutubeSearchVideo[],
-  expected: {
-    album?: string;
-    artist?: string;
-    duration?: number;
-    title: string;
-  },
+  expected: { album?: string; artist?: string; duration?: number; title: string },
+  weights?: RankingWeights,
 ): YoutubeSearchScoredVideo[] {
+  const w = weights ?? { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, keywords: [] };
   const expectedTitle = normalizeText(expected.title);
   const expectedArtist = normalizeText(expected.artist || "");
   const expectedAlbum = normalizeText(expected.album || "");
@@ -52,31 +54,49 @@ export function scoreYouTubeResults(
     const duration = getDurationSeconds(video);
     const diff = expectedDuration > 0 ? Math.abs(duration - expectedDuration) : Number.POSITIVE_INFINITY;
 
+    let keywordScore = 0;
+    for (const kw of w.keywords) {
+      if (kw.term && videoTitle.includes(normalizeText(kw.term))) {
+        keywordScore += kw.weight;
+      }
+    }
+
     const breakdown: YoutubeSearchScoreBreakdown = {
       albumMatch: false,
       artistMatch: false,
+      artistOnChannel: false,
       closestDuration: false,
       exactDuration: false,
+      keywordScore,
       score: 0,
       titleMatch: false,
     };
 
     if (expectedTitle && videoTitle.includes(expectedTitle)) {
       breakdown.titleMatch = true;
-      breakdown.score += 1;
+      breakdown.score += w.title;
     }
     if (expectedAlbum && videoTitle.includes(expectedAlbum)) {
       breakdown.albumMatch = true;
-      breakdown.score += 1;
+      breakdown.score += w.album;
     }
     if (expectedArtist && videoTitle.includes(expectedArtist)) {
       breakdown.artistMatch = true;
-      breakdown.score += 0.5;
+      breakdown.score += w.artist;
+    }
+    if (expectedArtist) {
+      const channelName = normalizeText(video.uploader || "");
+      const segments = expectedArtist.split(/\s+/);
+      if (segments.some((seg) => channelName.includes(seg))) {
+        breakdown.artistOnChannel = true;
+        breakdown.score += w.artistOnChannel;
+      }
     }
     if (expectedDuration > 0 && duration === expectedDuration) {
       breakdown.exactDuration = true;
-      breakdown.score += 0.5;
+      breakdown.score += w.duration;
     }
+    breakdown.score += keywordScore;
     return { breakdown, diff, originalIndex, video };
   });
 
@@ -85,7 +105,7 @@ export function scoreYouTubeResults(
     for (const item of scored) {
       if (item.diff === minDiff) {
         item.breakdown.closestDuration = true;
-        item.breakdown.score += 0.2;
+        item.breakdown.score += w.duration * 0.2;
       }
     }
   }
@@ -94,5 +114,24 @@ export function scoreYouTubeResults(
     if (b.breakdown.score !== a.breakdown.score) return b.breakdown.score - a.breakdown.score;
     if (a.diff !== b.diff) return a.diff - b.diff;
     return a.originalIndex - b.originalIndex;
+  });
+}
+
+export async function persistRanking(
+  query: string,
+  scored: YoutubeSearchScoredVideo[],
+  voteDuration: number,
+): Promise<void> {
+  if (scored.length === 0) return;
+  const winner = scored[0];
+  await recordRanking({
+    query,
+    winnerId: winner.video.id,
+    winnerTitle: winner.video.title,
+    winnerUploader: winner.video.uploader || "",
+    score: winner.breakdown.score,
+    scores: JSON.stringify(winner.breakdown),
+    candidates: scored.length,
+    createdAt: Date.now(),
   });
 }
