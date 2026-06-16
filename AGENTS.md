@@ -118,11 +118,13 @@ selftify/
 ### 2. Web Audio API for audio playback
 
 All audio goes through the browser's `<audio>` element, connected to an `AudioContext` via `createMediaElementSource()`. This gives us:
+
 - The `AnalyserNode` for visualizers (butterchurn, audiomotion)
 - Cross-platform compatibility (mobile + desktop)
 - No native audio plugins needed
 
 The `WebAudioProvider` component wraps the app and manages:
+
 - `Audio` element lifecycle
 - `AnalyserNode` for visualizer data
 - Play/pause, seek, volume via React state → audio element
@@ -152,6 +154,7 @@ Each controller translates its source's native API into the shared `Song`, `Albu
 ### 4. Zustand over Context
 
 All global state uses Zustand with `persist` middleware (localStorage):
+
 - **`auth.store`**: Origin list + credentials
 - **`player.store`**: Queue, current track, playback state
 - **`settings.store`**: Theme, visualizer, playback preferences
@@ -270,6 +273,7 @@ A spec may have only `.md` and `.ui.md`, or all three — depending on scope.
 Created by: **developer** or **general agent** (audience: engineers)
 
 Contents:
+
 - Problem statement, architecture decisions, component tree
 - Props / state changes, files changed with line-level detail
 - Edge cases, error states, migration notes
@@ -279,6 +283,7 @@ Contents:
 Created by: **UI-UX agent** (audience: designers, product, front-end)
 
 Contents:
+
 - Visual layout, states per component (default, hover, active, disabled, empty, error)
 - Animation timing & curves, user flows, responsive behavior
 - Consistency rules (shapes, spacing, typography), accessibility
@@ -300,6 +305,7 @@ Base it on the problem description in <feature-name>.md.
 Created by: **API / Data agent** (audience: backend, state management)
 
 Contents:
+
 - Controller methods (inputs, outputs, error codes)
 - Store slices (state shape, actions, selectors)
 - Data transformations, DB queries, caching strategy, offline/error handling
@@ -344,35 +350,6 @@ The `.md` file is the **source of truth** for scope. The `.ui.md` and `.api.md` 
 
 A única exceção é refatoração puramente mecânica (renomear variável, extrair função) sem mudança de comportamento visível.
 
-### Spec Update on Implementation
-
-**Após implementar qualquer funcionalidade coberta por spec(s), o agente DEVE atualizar as specs correspondentes para refletir o estado real do código.**
-
-1. Ao finalizar a implementação, localize a spec mais relevante em `specs/`:
-   - Busque pelo nome da feature ou arquivos alterados
-   - Se houver múltiplas specs (.md, .ui.md, .api.md), atualize todas
-
-2. Atualize na spec:
-   - **Arquivos alterados**: confira a lista real vs o planejado, adicione/remova conforme necessário
-   - **Tipos/contratos**: se a implementação divergiu dos tipos planejados, corrija na spec
-   - **Comportamento**: se edge cases ou fluxos foram descobertos durante a implementação, documente
-   - **Decisões técnicas**: se algo foi feito diferente do spec original, explique o motivo na spec
-
-3. A spec deve SEMPRE refletir o código atual, não o planejado. Spec desatualizada = spec quebrada.
-
-4. Se a implementação revelar que uma spec está incompleta (faltam seções, tipos, fluxos), adicione o que falta — não crie uma nova spec para isso a menos que seja uma feature totalmente nova.
-
-### Spec-First Reading Rule
-
-**Sempre que o usuário pedir uma alteração ou nova funcionalidade, o agente DEVE ler a spec relevante em `specs/` ANTES de ler qualquer código-fonte.**
-
-1. Identifique qual spec cobre a funcionalidade baseando-se no nome da feature ou palavras-chave do pedido
-2. Leia a spec (`specs/<feature>.md`, `.ui.md`, `.api.md`) primeiro — ela contém o design acordado, tipos, contratos e arquivos afetados
-3. Só depois de compreender o design da spec, leia os arquivos de código relevantes
-4. Se não existir spec para o que está sendo pedido, crie a spec antes de implementar (conforme regra Spec-First Rule acima)
-
-Isto garante que o agente entende o comportamento esperado antes de mergulhar no código existente.
-
 ---
 
 ## Design Principles
@@ -383,7 +360,6 @@ Isto garante que o agente entende o comportamento esperado antes de mergulhar no
 - **Mobile-first responsive**: Tailwind breakpoints for adaptive layout
 - **Source-agnostic UI**: Same components work with YouTube or Local
 - **Observability**: Console.debug() with `[Selftify]` prefix for API calls
-- **HTTP error logging**: Use `console.warn` for 4xx (client/not-found — normal part of operation). Use `console.error` for 5xx (server/network — actual failures). Never treat 404 as an error — it means "resource doesn't exist" and is expected for optional resources like cover art.
 - **User-facing status**: Any operation of interest to the user (loading, searching, indexing, playing) must publish a brief message via `useStatusStore.getState().addMessage(text, level, source)` so it appears in the TopBar status popover. Use `"info"` for normal activity, `"success"` for completion, `"warn"` for warnings, `"danger"` for errors. Examples: `"Searching local files..."`, `"Found 42 songs"`, `"Scan complete"`.
 - **No cross-project references**: This project must never reference any other self-hosted music projects. See `USER_INSTRUCTIONS.md` for details.
 
@@ -429,11 +405,13 @@ Cada camada tem um propósito específico e regras claras de uso.
 | `@radix-ui/react-tooltip` | ❌ | Tooltips |
 
 **Regras**:
+
 - **Nunca importe Radix diretamente nas features.** Sempre use o wrapper shadcn em `src/components/ui/`.
 - Se um wrapper não existir, **crie-o** seguindo o padrão shadcn antes de usar o Radix bruto.
 - Wrappers shadcn seguem o padrão: `import * as XPrimitive from "@radix-ui/react-x"` + `cn()` + `forwardRef`.
 
 **Por que Radix e não outro**:
+
 - Acessibilidade nativa (focus trap, keyboard nav, ARIA attributes)
 - Comportamento cross-platform consistente (Electron, Capacitor, Web)
 - APIs compostas (compound components) que permitem customização total via Tailwind
@@ -461,6 +439,7 @@ npx shadcn@latest add <component-name>
 ```
 
 **Regras**:
+
 - Use `cn()` da `lib/utils.ts` para merge de classes Tailwind
 - Use `cva()` (Class Variance Authority) para variantes de componente (ex: `buttonVariants`)
 - Componentes usam `forwardRef` para composição
@@ -496,6 +475,7 @@ colors: {
 ```
 
 **Regras**:
+
 - Sempre use as variáveis CSS de tema (`bg-background`, `text-foreground`, `border-border`) — nunca cores fixas
 - Dark mode via classe `.light` (light theme) + `.dark` (default escuro)
 - Layout principal: CSS Grid com áreas nomeadas (`layout.css`)
@@ -509,6 +489,7 @@ colors: {
 **Pacote**: `lucide-react`
 
 **Regras**:
+
 - Prefira ícones do Lucide sobre SVGs inline ou outras libs
 - Tamanhos padrão: `h-4 w-4` (16px) para inline, `h-5 w-5` (20px) para navegação
 - Cor herdada via `text-foreground`/`currentColor`
@@ -535,6 +516,7 @@ const buttonVariants = cva(
 ```
 
 **Regras**:
+
 - Use CVA para **todas** as variantes visuais de componentes compartilhados
 - Evite condicionais manuais (`if variant === "x"`) quando CVA pode resolver
 - Combine com `cn()` para classes extras via prop `className`
@@ -556,6 +538,7 @@ const buttonVariants = cva(
 | `ranking-debug.store` | ❌ | Debug de ranking YouTube |
 
 **Regras**:
+
 - Stores são a **única fonte de estado global** — não use Context API
 - Use `persist` apenas para estado que deve sobreviver a refresh (auth, settings, player)
 - Prefira **slices** (Zustand slices pattern) se uma store crescer demais
@@ -572,6 +555,7 @@ const buttonVariants = cva(
 **Uso**: Chamadas a controllers (busca, listagem de álbuns/artistas/músicas).
 
 **Regras**:
+
 - Use React Query para **dados de API** (search, listagens, detalhes)
 - Use Zustand para **estado de UI** (sidebar aberta/fechada, faixa atual, tema)
 - Evite sobrepor os dois — cada um tem seu domínio
@@ -729,12 +713,53 @@ Total time from click to first audible sound: **8–15s** for MusicBrainz, **3�
 Search results, album pages, artist pages, and local file listings each have their own `playSong()` function. When adding stream URL resolution (via `getStreamUrl`), **every** playback path must be updated — not just the search page.
 
 Rules:
+
 - **Local files** already have `song.path` set → `setQueue([song])` is correct.
 - **Online songs** (MusicBrainz, YouTube) have `song.path = null` → must call `getStreamUrl(song)` first, then `setQueue([{...song, path: streamUrl}])`.
 - **Mixed pages** (album page has local + online songs): check `if (song.path)` before resolving.
 - **Play All** must resolve every song individually via `Promise.allSettled`.
 
 Always grep for `setQueue` across the entire codebase when adding/modifying playback to catch all paths:
+
 ```bash
 grep -rn "setQueue" src/features/ --include="*.tsx"
 ```
+
+---
+
+## Data Storage Conventions
+
+### Track paths MUST be relative-to-root and complete
+
+Every `track.path` stored in the SQLite database **must** be the full relative path from the library root, including the artist and album directory. Never strip the directories.
+
+**Correct**: `"Trapt/Amalgamation (1998)/01 - Sound Off.mp3"`
+**Wrong**: `"01 - Sound Off.mp3"` (no directory)
+
+Rationale:
+- The audio provider always prepends the library root via `resolveLocalPath(path)` → `root + "/" + path`.
+- Any path concatenation elsewhere (controllers, services) also assumes relative-to-root.
+- A bare filename would produce an invalid absolute path (`/home/user/Music/01 - Sound Off.mp3`), missing the artist/album directories.
+- No code should guess or reconstruct album directories (e.g. appending `(Year)`). The stored path is the source of truth.
+
+### File organizer updates the path
+
+When the file organizer runs (`organizeOnScan`), it moves files and updates `track.path` to reflect the new location. After organization, the path still follows the same convention: relative-to-root and complete.
+
+### Scanning sets the initial path
+
+In `local-indexer.ts`, the initial `track.path` assignment must use `getRelativePath(libraryRoot, filePath)` **without stripping directories**. Only strip if the path would exceed the library root:
+
+```ts
+// CORRECT: full relative path from library root
+track.path = getRelativePath(libraryRoot, filePath)
+// → "Artist/Album (Year)/file.mp3"
+
+// WRONG: strips directories, loses location
+track.path = getRelativePath(...).replace(`${artistDir}/.../`, "")
+// → "file.mp3" — useless without context
+```
+
+### Rescan after path changes
+
+If the path storage convention is changed, a full rescan is required to repopulate `track.path` for all existing entries. The database does not auto-migrate old entries. Use the rescan UI button or do a fresh scan after a schema/logic change.

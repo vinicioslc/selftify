@@ -7,7 +7,9 @@ import { Slider } from "../../components/ui/slider";
 import { Input } from "../../components/ui/input";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useSettingsStore, type RankingWeights, type KeywordWeight } from "../../stores/settings.store";
-import { getRecentRankings, clearRankingLog, clearAllMbzYtMappings, type RankingLogEntry } from "../../services/search-cache";
+import { getRecentRankings, clearRankingLog } from "../../services/sqlite-db/sqlite-db-ranking-log";
+import { clearAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
+import type { RankingLogEntry } from "../../services/sqlite-db/sqlite-db-ranking-log";
 
 function ScoreBreakdown({ scores }: { scores: string }) {
   const [open, setOpen] = useState(false);
@@ -103,7 +105,7 @@ export function RankingView() {
                 className="flex-1"
                 onValueChange={([v]) => setWeight(key, v)}
               />
-              <span className="w-8 text-right text-sm tabular-nums">{rankingWeights[key].toFixed(1)}</span>
+              <span className="w-8 text-right text-sm tabular-nums">{(rankingWeights[key] ?? 0).toFixed(1)}</span>
             </div>
           ))}
 
@@ -128,7 +130,7 @@ export function RankingView() {
                     className="w-24"
                     onValueChange={([v]) => handleUpdateKeywordWeight(kw.term, v)}
                   />
-                  <span className="w-8 text-right text-sm tabular-nums">{kw.weight.toFixed(1)}</span>
+                  <span className="w-8 text-right text-sm tabular-nums">{(kw.weight ?? 0).toFixed(1)}</span>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -177,7 +179,7 @@ export function RankingView() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Cached Mappings</CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => { clearAllMbzYtMappings(); }}>
+            <Button variant="ghost" size="sm" onClick={() => { clearAllSavedMbzYtMappings(); }}>
               <Trash2 className="h-3 w-3 mr-1" /> Clear All
             </Button>
           </div>
@@ -207,13 +209,13 @@ export function RankingView() {
             <ScrollArea className="max-h-80">
               <div className="space-y-1">
                 {rankings.map((r) => (
-                  <div key={r.id} className="flex items-center gap-3 rounded-md bg-muted/40 px-3 py-2 text-xs">
+                  <div key={r.createdAt + "-" + r.winnerId} className="flex items-center gap-3 rounded-md bg-muted/40 px-3 py-2 text-xs">
                     <div className="flex-1 min-w-0">
                       <p className="truncate font-medium">{r.winnerTitle}</p>
                       <p className="truncate text-muted-foreground">{r.query}</p>
                     </div>
                     <span className="text-muted-foreground shrink-0">{r.winnerUploader}</span>
-                    <Badge variant="secondary" className="shrink-0">{r.score.toFixed(1)}</Badge>
+                    <Badge variant="secondary" className="shrink-0">{(r.score ?? 0).toFixed(1)}</Badge>
                     <Badge variant="outline" className="shrink-0">{r.candidates} candidates</Badge>
                     <ScoreBreakdown scores={r.scores} />
                     <span className="text-muted-foreground shrink-0">{new Date(r.createdAt).toLocaleString()}</span>

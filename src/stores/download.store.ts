@@ -18,6 +18,7 @@ type DownloadStore = {
   updateTask: (taskId: string, partial: Partial<DownloadTask>) => void;
   setPanelOpen: (open: boolean) => void;
 
+  isInQueue: (song: Song) => boolean;
   getPendingCount: () => number;
   getCompletedCount: () => number;
   getFailedCount: () => number;
@@ -103,6 +104,8 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
   },
 
   setPanelOpen: (open: boolean) => set({ isPanelOpen: open }),
+
+  isInQueue: (song: Song) => get().tasks.some((t) => t.song.id === song.id && t.status !== DownloadStatus.CANCELLED),
 
   getPendingCount: () => get().tasks.filter((t) => t.status === DownloadStatus.PENDING || t.status === DownloadStatus.SEARCHING || t.status === DownloadStatus.DOWNLOADING_AUDIO || t.status === DownloadStatus.GETTING_COVER || t.status === DownloadStatus.PROCESSING_COVER || t.status === DownloadStatus.EMBEDDING_COVER).length,
 

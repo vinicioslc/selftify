@@ -1,6 +1,4 @@
 import { getPlatformService } from "./platform/factory";
-import { deleteSong } from "./local-database";
-import { fileIdFromPath } from "../stores/local-library.store";
 import { useStatusStore } from "../stores/status.store";
 import type { Origin } from "../types/domain-types";
 
@@ -62,10 +60,12 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
     finalDest = trashDir + "/" + base + "_" + Date.now() + ext;
   }
 
+  const absPath = filePath.startsWith("/") ? filePath : `${root}/${filePath}`;
+
   try {
-    const moved = await p.renameFile(filePath, finalDest);
+    const moved = await p.renameFile(absPath, finalDest);
     if (!moved) {
-      log(`rename/move failed for ${filePath} -> ${finalDest}`);
+      log(`rename/move failed for ${absPath} -> ${finalDest}`);
       addMsg("Cannot delete: file move failed", "danger");
       return false;
     }
@@ -73,16 +73,6 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
     log(`rename/move error: ${err}`);
     addMsg("Cannot delete: file move error", "danger");
     return false;
-  }
-
-  // Remove from local database
-  try {
-    const songId = fileIdFromPath(filePath);
-    await deleteSong(songId);
-  } catch (err) {
-    log(`failed to remove song from DB: ${err}`);
-    addMsg("File moved to trash but database entry could not be removed", "warn");
-    return true;
   }
 
   addMsg(`Moved to trash: ${fileName}`, "success");

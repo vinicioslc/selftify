@@ -1,25 +1,23 @@
 import { useCallback, useRef, useEffect, useState } from "react";
-import { useLocalLibraryStore } from "../stores/local-library.store";
 import { getIndexer, type Indexer, type IndexerStatus } from "../api/indexer/indexer";
 import { OriginType } from "../types/domain-types";
 import { useAuthStore } from "../stores/auth.store";
-import { getScanState, getQueueCount, getSongCount, updateScanState } from "../services/local-database";
-import { preloadImagesFromDotImg } from "../services/image-preloader";
-import { decideAutoScan } from "./auto-scan-logic";
+import { readConfig, readOrCreateConfig } from "../services/sqlite-db/sqlite-db-config";
 
 export function useLocalScan() {
   const indexerRef = useRef<Indexer | null>(null);
   const [status, setStatus] = useState<IndexerStatus>({ status: "idle", progress: { total: 0, done: 0, currentItem: "" } });
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  const { setRootFolder, setScanStatus, setScanProgress, setLastScanned, setScanningOriginId } =
-    useLocalLibraryStore();
-
   useEffect(() => {
     return () => {
       if (unsubscribeRef.current) unsubscribeRef.current();
     };
   }, []);
+
+  function getLibraryRoot(): string | undefined {
+    return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+  }
 
   const ensureIndexer = useCallback(async () => {
     if (!indexerRef.current) {
@@ -28,27 +26,13 @@ export function useLocalScan() {
       indexerRef.current = await getIndexer(currentOrigin);
       unsubscribeRef.current = indexerRef.current.onProgress((s) => {
         setStatus(s);
-        const mappedStatus = s.status === "indexing" || s.status === "discovering" ? "scanning" : s.status;
-        setScanStatus(mappedStatus as any);
-        setScanProgress({ total: s.progress.total, done: s.progress.done, currentDir: s.progress.currentItem });
-        if (s.status === "done") {
-          setLastScanned(Date.now());
-          setScanningOriginId(null);
-          const { currentOrigin } = useAuthStore.getState();
-          if (currentOrigin?.folderPath) {
-            preloadImagesFromDotImg(currentOrigin.folderPath).catch((err) =>
-              console.warn("[use-local-scan] image preload failed:", err),
-            );
-          }
-        }
       });
     }
     return indexerRef.current!;
-  }, [setScanStatus, setScanProgress, setLastScanned]);
+  }, []);
 
   const startScan = useCallback(async (folder: string) => {
     const { addOrigin, currentOrigin } = useAuthStore.getState();
-    setRootFolder(folder);
 
     let origin = currentOrigin;
     if (!origin) {
@@ -57,11 +41,10 @@ export function useLocalScan() {
       origin = newOrigin;
     }
     if (origin) {
-      setScanningOriginId(origin.id);
       const idx = await ensureIndexer();
       await idx.start(origin);
     }
-  }, [setRootFolder, ensureIndexer, setScanningOriginId]);
+  }, [ensureIndexer]);
 
   const pause = useCallback(async () => {
     const idx = await ensureIndexer();
@@ -77,55 +60,23 @@ export function useLocalScan() {
     if (indexerRef.current) {
       indexerRef.current.abort();
     }
-    setScanningOriginId(null);
-  }, [setScanningOriginId]);
+  }, []);
 
   const rescan = useCallback(async () => {
-    const state = await getScanState();
-    const folder = state?.root_folder;
-    if (folder) await startScan(folder);
+    const root = getLibraryRoot();
+    if (root) {
+      const config = await readConfig(root);
+      if (config) await startScan(root);
+    }
   }, [startScan]);
 
   const autoScan = useCallback(async (folder: string): Promise<void> => {
-    const state = await getScanState();
-    const queueCount = state ? await getQueueCount() : 0;
-    const songCount = await getSongCount();
-    const action = decideAutoScan({ rootFolder: folder, scanState: state, queueCount, songCount });
-    switch (action) {
-      case "start":
-        await startScan(folder);
-        break;
-      case "resume":
-        resume();
-        break;
-      case "mark-done":
-        await updateScanState({ scan_status: "done", last_scanned_at: Date.now() });
-        await startWatcherIfReady();
-        preloadImagesFromDotImg(folder).catch((err) =>
-          console.warn("[use-local-scan] image preload failed:", err),
-        );
-        break;
-      case "skip":
-        await startWatcherIfReady();
-        preloadImagesFromDotImg(folder).catch((err) =>
-          console.warn("[use-local-scan] image preload failed:", err),
-        );
-        break;
+    const config = await readConfig(folder);
+    // Start scan if: no config (fresh library), or scan was interrupted
+    if (!config || config.scanStatus !== "done") {
+      await startScan(folder);
     }
-  }, [resume, startScan]);
-
-  async function startWatcherIfReady() {
-    try {
-      const scanState = await getScanState();
-      if (!scanState || scanState.scan_status !== "done") return;
-      const count = await getSongCount();
-      if (count === 0) return;
-      const idx = await ensureIndexer();
-      await idx.startWatcher();
-    } catch (err) {
-      console.warn("[use-local-scan] startWatcherIfReady error:", err);
-    }
-  }
+  }, [startScan]);
 
   return { startScan, pause, resume, abort, rescan, autoScan, status };
 }

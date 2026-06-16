@@ -1,6 +1,8 @@
 import type { ArtworkProvider, ArtworkSearchInput, ArtworkCandidate } from "./types";
 import { platformFetch } from "../../platform-fetch";
 
+const LOG = "[Deezer]";
+
 export class DeezerProvider implements ArtworkProvider {
   readonly name = "deezer";
 
@@ -11,11 +13,23 @@ export class DeezerProvider implements ArtworkProvider {
     const query = encodeURIComponent(`${input.artist} ${input.album || input.title || ""}`);
     const url = `https://api.deezer.com/search/album?q=${query}`;
 
+    console.log(`${LOG} searching: artist="${input.artist}" album="${input.album}" url=${url}`);
+
     const res = await platformFetch(url, { signal });
-    if (!res.ok) throw new Error(`Deezer ${res.status}`);
+    if (!res.ok) {
+      if (res.status >= 400 && res.status < 500) {
+        console.warn(`${LOG} HTTP ${res.status} for "${input.artist}" / "${input.album}"`);
+      } else {
+        console.error(`${LOG} HTTP ${res.status} for "${input.artist}" / "${input.album}"`);
+      }
+      throw new Error(`Deezer ${res.status}`);
+    }
 
     const data = await res.json();
-    if (!data.data?.length) return [];
+    if (!data.data?.length) {
+      console.log(`${LOG} no results for "${input.artist}" / "${input.album}"`);
+      return [];
+    }
 
     const artistLower = input.artist.toLowerCase();
     const albumLower = (input.album || input.title || "").toLowerCase();
@@ -28,6 +42,8 @@ export class DeezerProvider implements ArtworkProvider {
     });
 
     const results = exact ? [exact, ...data.data.filter((r: any) => r !== exact).slice(0, 4)] : data.data.slice(0, 5);
+
+    console.log(`${LOG} got ${results.length} candidate(s) (exact=${!!exact}) for "${input.artist}" / "${input.album}"`);
 
     return results.map(
       (r: any): ArtworkCandidate => ({

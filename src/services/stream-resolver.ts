@@ -1,9 +1,12 @@
 import type { Song } from "../types/domain-types";
-import { getSongByMbid, getSongById } from "./local-database";
-import { dbSongToSong } from "./dto";
+import { OriginType, OriginType as OriginTypeEnum } from "../types/domain-types";
+import { getSongByMbid, getSongById, getSongByNameAndArtist } from "../api/local/local-queries";
 import { getStreamUrl } from "./youtube-download-service";
-import { getMbzYtMapping, setMbzYtMapping, type MbzYtMapping, type StreamSourceCandidate } from "./search-cache";
+import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
+import type { MbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
+import type { StreamSourceCandidate } from "../types/domain-types";
 import { useStatusStore } from "../stores/status.store";
+import { sqliteDbTrackToSong } from "./sqlite-db/sqlite-db-resolver";
 
 export type ResolveResult = {
   song: Song;
@@ -19,30 +22,33 @@ function log(msg: string) {
 }
 
 /**
- * Find local songs in the database that share the same mbzRecordingId.
+ * Find local songs in the database that match the given song.
+ * Tries mbzRecordingId first, then falls back to name+artist match.
  */
-export async function findLocalCandidates(mbzRecordingId: string, originId: string): Promise<StreamSourceCandidate[]> {
-  const dbSong = await getSongByMbid(mbzRecordingId);
-  if (!dbSong || !dbSong.path) return [];
-  const song = dbSongToSong(dbSong, originId);
-  return [{
-    type: "local",
-    song,
-    filePath: dbSong.path,
-    bitrate: dbSong.bitrate ?? undefined,
-    sampleRate: dbSong.sample_rate ?? undefined,
-    fileSize: dbSong.file_size ?? undefined,
-    fileExtension: dbSong.file_extension ?? undefined,
-  }];
+export async function findLocalCandidates(
+  mbzRecordingId: string,
+  originId: string,
+  songName?: string,
+  artistName?: string,
+): Promise<StreamSourceCandidate[]> {
+  let track = await getSongByMbid(mbzRecordingId);
+
+  if (!track && songName && artistName) {
+    track = await getSongByNameAndArtist(songName, artistName);
+  }
+
+  if (!track) return [];
+  const song = sqliteDbTrackToSong(track, originId, OriginType.LOCAL);
+  return [{ type: "local", song, filePath: track.path }];
 }
 
 /**
  * Find a single local song by mbzRecordingId.
  */
 export async function findLocalSongByMbid(mbzRecordingId: string, originId: string): Promise<Song | null> {
-  const dbSong = await getSongByMbid(mbzRecordingId);
-  if (!dbSong || !dbSong.path) return null;
-  return dbSongToSong(dbSong, originId);
+  const track = await getSongByMbid(mbzRecordingId);
+  if (!track) return null;
+  return sqliteDbTrackToSong(track, originId, OriginType.LOCAL);
 }
 
 /**
@@ -64,11 +70,11 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
   // Step 2: try to find local file by MBZ ID
   if (song.mbzRecordingId) {
     // Check saved preference first
-    const mapping = await getMbzYtMapping(song.mbzRecordingId);
+    const mapping = await getSavedMbzYtMapping(song.mbzRecordingId);
     if (mapping?.selectedSource === "local" && mapping.localSongId) {
-      const localDbSong = await getSongById(mapping.localSongId);
-      if (localDbSong?.path) {
-        const localSong = dbSongToSong(localDbSong, song.originId);
+      const localTrack = await getSongById(mapping.localSongId);
+      if (localTrack?.path) {
+        const localSong = sqliteDbTrackToSong(localTrack, song.originId, OriginType.LOCAL);
         log(`using saved local selection: ${localSong.path}`);
         addMsg("Playing local file (saved preference)", "info");
         return { song: localSong, source: "local" };
@@ -89,7 +95,7 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
 
     // Step 3: use manual video ID if provided (from SongInfoDialog selection)
     if (manualVideoId) {
-      const streamUrl = await getStreamUrl(song, manualVideoId);
+      const streamUrl = await getStreamUrl(song);
       if (streamUrl) {
         return { song: { ...song, path: streamUrl }, source: "youtube" };
       }
@@ -105,7 +111,7 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
   }
 
   // Step 5: fall back to YouTube
-  const streamUrl = manualVideoId ? await getStreamUrl(song, manualVideoId) : await getStreamUrl(song);
+  const streamUrl = await getStreamUrl(song);
   if (streamUrl) {
     return { song: { ...song, path: streamUrl }, source: "youtube" };
   }
@@ -131,7 +137,7 @@ async function saveLocalPreference(mbzRecordingId: string, localSong: Song, exis
   try {
     const now = Date.now();
     if (existingMapping) {
-      await setMbzYtMapping({
+      await setSavedMbzYtMapping({
         ...existingMapping,
         selectedSource: "local",
         localSongId: localSong.id,
@@ -140,7 +146,7 @@ async function saveLocalPreference(mbzRecordingId: string, localSong: Song, exis
         updatedAt: now,
       });
     } else {
-      await setMbzYtMapping({
+      await setSavedMbzYtMapping({
         mbzRecordingId,
         songName: localSong.name,
         artistName: localSong.artistName,
@@ -150,7 +156,7 @@ async function saveLocalPreference(mbzRecordingId: string, localSong: Song, exis
         selectedType: "auto",
         selectedSource: "local",
         localSongId: localSong.id,
-        candidates: "[]",
+        candidates: [],
         createdAt: now,
         updatedAt: now,
       });

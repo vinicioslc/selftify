@@ -3,6 +3,7 @@ import { usePlayerStore } from "../../stores/player.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { PlayerStatus } from "../../types/domain-types";
 import type { Album, AlbumArtist } from "../../types/domain-types";
+import { buildArtistNav, buildAlbumNav } from "../../lib/build-navigation";
 import { Button } from "../../components/ui/button";
 import { Slider } from "../../components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
@@ -93,51 +94,32 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden md:flex-row">
         {/* Left: album art or visualizer + basic controls */}
         <div className="flex flex-col items-center justify-center gap-6 p-8 md:w-1/2">
-          {visualizerEnabled && visualizerType !== "none" ? (
-            <div className="flex h-56 w-56 items-center justify-center overflow-hidden md:h-72 md:w-72 lg:h-96 lg:w-96">
-              <VisualizerContainer fullScreen />
-            </div>
-          ) : (
-            <CoverImage
-            src={currentTrack.imageUrl}
-            alt={currentTrack.name}
-            fallback={currentTrack.name.charAt(0)}
-            className="h-56 w-56 shadow-2xl md:h-72 md:w-72 lg:h-96 lg:w-96"
-          />
-          )}
+          <div className="relative flex h-56 w-56 items-center justify-center overflow-hidden md:h-72 md:w-72 lg:h-96 lg:w-96">
+            <VisualizerContainer fullScreen>
+              {visualizerEnabled && visualizerType !== "none" ? undefined : (
+                <CoverImage
+                  src={currentTrack.imageUrl}
+                  alt={currentTrack.name}
+                  fallback={currentTrack.name.charAt(0)}
+                  className="h-56 w-56 shadow-2xl md:h-72 md:w-72 lg:h-96 lg:w-96"
+                />
+              )}
+            </VisualizerContainer>
+          </div>
 
           <div className="text-center">
             <h2
               className="cursor-pointer text-2xl font-bold text-foreground hover:underline"
               onClick={() => {
-                const albumId = currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName?.toLowerCase().replace(/\s+/g, "-")}`;
-                const albumName = currentTrack.albumName;
-                if (albumName) {
-                  onNavigateAlbum?.({
-                    id: albumId,
-                    originId: currentTrack.originId,
-                    originType: currentTrack.originType,
-                    name: albumName,
-                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
-                    imageUrl: currentTrack.imageUrl || null,
-                  });
-                }
+                const nav = buildAlbumNav(currentTrack);
+                if (nav) onNavigateAlbum?.(nav);
               }}
             >
               {currentTrack.name}
             </h2>
             <span
               className="cursor-pointer text-lg text-muted-foreground hover:text-foreground hover:underline"
-              onClick={() => {
-                onNavigateArtist?.({
-                  id: `artist-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}`,
-                  originId: currentTrack.originId,
-                  originType: currentTrack.originType,
-                  name: currentTrack.artistName,
-                  imageUrl: currentTrack.imageUrl || null,
-                  mbz: currentTrack.mbzArtistId,
-                });
-              }}
+              onClick={() => onNavigateArtist?.(buildArtistNav(currentTrack))}
             >
               {currentTrack.artistName}
             </span>
@@ -145,16 +127,8 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
               <span
                 className="cursor-pointer text-sm text-muted-foreground/60 hover:text-foreground hover:underline"
                 onClick={() => {
-                  const albumId = currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName?.toLowerCase().replace(/\s+/g, "-")}`;
-                  const albumName = currentTrack.albumName!;
-                  onNavigateAlbum?.({
-                    id: albumId,
-                    originId: currentTrack.originId,
-                    originType: currentTrack.originType,
-                    name: albumName,
-                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
-                    imageUrl: currentTrack.imageUrl || null,
-                  });
+                  const nav = buildAlbumNav(currentTrack);
+                  if (nav) onNavigateAlbum?.(nav);
                 }}
               >
                 {currentTrack.albumName}
@@ -281,41 +255,32 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
                           src={track.imageUrl}
                           alt={track.name}
                           fallback={track.name.charAt(0)}
-                          className="h-10 w-10"
+                          className="h-10 w-10 shrink-0 rounded-md"
                         />
                         <div className="min-w-0 flex-1">
-                          <span
-                            className="cursor-pointer truncate text-sm font-medium text-foreground hover:underline"
-                            onClick={() => {
-                              if (track.albumName) {
-                                onNavigateAlbum?.({
-                                  id: track.albumId || `album-${(track.albumArtistName || track.artistName).toLowerCase().replace(/\s+/g, "-")}-${track.albumName.toLowerCase().replace(/\s+/g, "-")}`,
-                                  originId: track.originId,
-                                  originType: track.originType,
-                                  name: track.albumName,
-                                  albumArtistName: track.albumArtistName || track.artistName,
-                                  imageUrl: track.imageUrl || null,
-                                });
-                              }
-                            }}
-                          >
-                            {track.name}
-                          </span>
-                          <span
-                            className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
-                            onClick={() => {
-                              onNavigateArtist?.({
-                                id: `artist-${track.artistName.toLowerCase().replace(/\s+/g, "-")}`,
-                                originId: track.originId,
-                                originType: track.originType,
-                                name: track.artistName,
-                                imageUrl: track.imageUrl || null,
-                                mbz: track.mbzArtistId,
-                              });
-                            }}
-                          >
-                            {track.artistName}
-                          </span>
+                          <p className="truncate text-sm font-medium">{track.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            <span
+                              className="cursor-pointer hover:text-foreground hover:underline"
+                              onClick={() => onNavigateArtist?.(buildArtistNav(track))}
+                            >
+                              {track.artistName}
+                            </span>
+                            {track.albumName && (
+                              <>
+                                {" \u00b7 "}
+                                <span
+                                  className="cursor-pointer hover:text-foreground hover:underline"
+                                  onClick={() => {
+                                    const nav = buildAlbumNav(track);
+                                    if (nav) onNavigateAlbum?.(nav);
+                                  }}
+                                >
+                                  {track.albumName}
+                                </span>
+                              </>
+                            )}
+                          </p>
                         </div>
                         <span className="text-xs tabular-nums text-muted-foreground">
                           {formatDuration(track.duration)}
@@ -329,7 +294,7 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
 
             <TabsContent value="visualizer" className="flex-1 p-4">
               {visualizerEnabled && visualizerType !== "none" ? (
-                <div className="flex h-full w-full items-center justify-center">
+                <div className="relative flex h-full w-full items-center justify-center">
                   <VisualizerContainer fullScreen />
                 </div>
               ) : (

@@ -2,6 +2,7 @@
 
 > **Status**: implemented
 > **Created**: 2026-06-05
+> **Last updated**: 2026-06-09
 > **Target**: selftify — allow users to manage custom cover images per album and artist
 
 ---
@@ -14,11 +15,47 @@ The app needed a unified way to manage images for both albums and artists, with 
 
 ## Providers
 
+### Album artwork providers
+
 Only two artwork providers are used:
-- **iTunes** — searches `itunes.apple.com/search` by artist + album name
-- **Deezer** — searches `api.deezer.com/search/album` by artist + album name
+- **iTunes** — searches `itunes.apple.com/search?entity=album` by artist + album name, returns album artwork
+- **Deezer** — searches `api.deezer.com/search/album` by artist + album name, returns album artwork
 
 All other providers (CoverArtArchive, MusicBrainz RG, Spotify, Discogs, Fanart.tv, Embedded) were removed.
+
+### Artist image providers
+
+Separate provider classes exist for artist images in `src/services/artist-image/providers/`:
+- **iTunes** — searches `itunes.apple.com/search?entity=album` by artist name, filters by exact `artistName` match, returns album artwork as artist image proxy (iTunes doesn't provide artwork for `musicArtist` entities)
+- **Deezer** — searches `api.deezer.com/search/artist` by artist name, returns `picture_xl`
+
+Both are free, no API key required.
+
+### Provider interface
+
+```ts
+// src/services/artist-image/providers/types.ts
+type ArtistSearchInput = { artist: string; musicbrainzId?: string };
+type ArtistCandidate = { provider: string; url: string; thumbnailUrl?: string; sourceId?: string; blobUrl?: string | null };
+interface ArtistProvider { readonly name: string; search(input: ArtistSearchInput, signal?: AbortSignal): Promise<ArtistCandidate[]>; }
+```
+
+### Architecture
+
+```
+ArtistImageManager / artist-image.ts / use-artist-image.ts
+         │
+         ▼
+ArtistImageResolver (singleton — src/services/artist-image/providers/artist-resolver.ts)
+         │
+    ┌────┴────┐
+    ▼         ▼
+Deezer    iTunes
+Artist    Artist
+Provider  Provider
+```
+
+The resolver follows the same pattern as `ArtworkResolver`: routes through Electron IPC if available, falls back to renderer-side classes.
 
 ---
 
@@ -89,9 +126,10 @@ Where `{mbzId}.` is optional — only added when a MusicBrainz Release ID is kno
 | Section | Behavior |
 |---|---|
 | **Preview** | Shows current image (from store or .img folder, album covers filtered out) |
+| **Providers** | Deezer + iTunes. Search → select thumbnail → auto-save |
 | **Wikipedia** | Search by artist name → auto-save |
 | **Custom URL** | Paste image URL → auto-save |
-| **Remove** | Deletes all variants from .img folder + clears store |
+| **Remove** | Deletes all variants (wikipedia, custom, deezer, itunes) from .img folder + clears store |
 
 ---
 
@@ -106,8 +144,12 @@ Where `{mbzId}.` is optional — only added when a MusicBrainz Release ID is kno
 | `src/services/image-preloader.ts` | Created (scans .img folders after scan) |
 | `src/hooks/use-local-scan.ts` | Calls preloader on scan done / startup |
 | `src/services/electron-image-store.ts` | Fixed `electronRecordToBlobUrl` |
-| `src/services/artist-image.ts` | Uses `findImages` + filter + Electron store |
-| `src/hooks/use-artist-image.ts` | Uses `findImages` + filter + Electron store |
+| `src/services/artist-image.ts` | Uses `findImages` + filter + Electron store; added provider cascade |
+| `src/hooks/use-artist-image.ts` | Uses `findImages` + filter + Electron store; added provider source |
+| `src/services/artist-image/providers/types.ts` | Created — `ArtistProvider` interface, `ArtistSearchInput`, `ArtistCandidate`, `ARTIST_PROVIDER_META` |
+| `src/services/artist-image/providers/deezer.provider.ts` | Created — `DeezerArtistProvider` (`api.deezer.com/search/artist`) |
+| `src/services/artist-image/providers/itunes.provider.ts` | Created — `ITunesArtistProvider` (`itunes.apple.com/search?entity=album` + artist match) |
+| `src/services/artist-image/providers/artist-resolver.ts` | Created — `ArtistImageResolver` singleton (IPC-aware) |
 | `src/api/indexer/local-indexer.ts` | Stability fixes (timeout, try/catch, batch) |
 
 ---
@@ -121,3 +163,6 @@ Where `{mbzId}.` is optional — only added when a MusicBrainz Release ID is kno
 | **Provider returns no results** | Shows empty state, user can try Wikipedia |
 | **Album covers in artist search** | Filtered by `!r.albumName` |
 | **Filesystem save fails** | Non-fatal — store save always works |
+| **iTunes artist has no albums** | Candidate URL empty → filtered out; user can try Deezer or Wikipedia instead |
+| **Deezer artist not found** | Returns empty array; falls through to next source |
+| **Both providers return nothing** | Falls back to Wikipedia; if that also fails, error message shown |

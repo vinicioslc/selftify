@@ -1,4 +1,4 @@
-import { getAlbumDir, getSongsByArtist } from "./local-database";
+import { getAlbumDir, getSongsByArtist } from "../api/local/local-queries";
 import { platformFetch } from "./platform-fetch";
 
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp"];

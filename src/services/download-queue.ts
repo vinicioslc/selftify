@@ -2,10 +2,11 @@ import type { Song, DownloadTask } from "../types/domain-types";
 import { DownloadStatus, OriginType } from "../types/domain-types";
 import { useDownloadStore } from "../stores/download.store";
 import { useAuthStore } from "../stores/auth.store";
+import { useStatusStore } from "../stores/status.store";
 import { getDownloadPlatform } from "./download-platform";
 import { searchAndRank } from "./youtube-download-service";
 import type { MBArtist, MBRecording } from "./musicbrainz-types";
-import type { MusicBrainzContext } from "./musicbrainz-disk-cache";
+import type { MusicBrainzContext } from "./musicbrainz-types";
 
 const MB_TIMEOUT = 5000;
 
@@ -154,6 +155,26 @@ function getDownloadFolder(song: Song): string {
   return origin?.downloadFolder || "";
 }
 
+function computeExpectedFilePath(folder: string, meta: MbMetadata, songName: string): string {
+  const safeArtist = (meta.artistName || "Unknown").replace(/[<>:"/\\|?*]/g, '_');
+  const safeTitle = (songName || "Unknown").replace(/[<>:"/\\|?*]/g, '_');
+
+  const prefix = meta.trackNumber
+    ? `${String(meta.trackNumber).padStart(2, '0')} - `
+    : '';
+
+  let albumDir: string;
+  if (meta.albumName) {
+    const safeAlbum = meta.albumName.replace(/[<>:"/\\|?*]/g, '_');
+    albumDir = meta.releaseYear ? `${safeAlbum} (${meta.releaseYear})` : safeAlbum;
+  } else {
+    albumDir = `${safeTitle} (Single)`;
+  }
+
+  const filename = `${prefix}${safeTitle}`;
+  return `${folder}/${safeArtist}/${albumDir}/${filename}.mp3`;
+}
+
 async function resolveCoverBytes(
   song: Song,
   videoId: string,
@@ -263,12 +284,102 @@ function complete(store: any, taskId: string, extra?: Record<string, unknown>): 
   });
 }
 
+async function addDownloadedTrackToLibrary(
+  audioPath: string,
+  song: Song,
+  meta: MbMetadata,
+): Promise<void> {
+  const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
+  const libraryRoot = origin?.folderPath;
+  if (!libraryRoot || !audioPath.startsWith(libraryRoot)) {
+    console.warn("[download-queue] downloaded file outside library root, skipping DB insert");
+    return;
+  }
+
+  const db = await import("./db/database");
+  if (!db.isReady()) {
+    console.warn("[download-queue] DB not ready, skipping library insert");
+    return;
+  }
+
+  const relPath = audioPath.slice(libraryRoot.length + 1);
+  const artistName = meta.artistName || song.artistName || "Unknown";
+  const albumName = meta.albumName || `${song.name} (Single)`;
+  const albumId = `${artistName}/${albumName}`;
+  const trackId = `${albumId}/${relPath}`;
+  const now = Date.now();
+
+  try {
+    // Upsert artist
+    db.exec(
+      `INSERT OR IGNORE INTO artists (id, name, sort_name, mbz_id, biography, genres, country, type, disambiguation, images, updated_at, enriched_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [artistName, artistName, null, meta.mbzArtistId || null, null, JSON.stringify(meta.genres || []), null, null, null, "[]", now, null],
+    );
+
+    // Check if album already exists
+    const existingAlbum = db.query<{ c: number }>("SELECT COUNT(*) as c FROM albums WHERE id = ?", [albumId]);
+    if (existingAlbum[0].c === 0) {
+      // Insert new album
+      db.exec(
+        `INSERT INTO albums (id, artist_id, name, artist_name, album_artist, release_year, mbz_id, mbz_release_group_id, genres, images, song_count, duration, updated_at, enriched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [albumId, artistName, albumName, artistName, meta.albumArtistName || artistName, meta.releaseYear || null, meta.mbzReleaseGroupId || null, meta.mbzReleaseGroupId || null, JSON.stringify(meta.genres || []), "[]", 1, song.duration || 0, now, null],
+      );
+    }
+
+    // Upsert track
+    db.exec(
+      `INSERT OR REPLACE INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, genre, mbz_recording_id, mbz_track_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [trackId, albumId, relPath, song.name, artistName, meta.albumName || null, meta.trackNumber || null, meta.discNumber || null, song.duration || null, (meta.genres || []).join(", ") || null, meta.mbzRecordingId || null, null],
+    );
+
+    db.flushSave();
+    useStatusStore.getState().addMessage(
+      `"${song.name}" added to local library`,
+      "success",
+      "Library",
+    );
+  } catch (err) {
+    console.warn("[download-queue] failed to add to library DB:", err);
+  }
+}
+
 export async function processTask(task: DownloadTask): Promise<void> {
   const platform = getDownloadPlatform();
   const store = useDownloadStore.getState();
   const folder = getDownloadFolder(task.song);
   if (!folder) {
     throw new Error("No download folder configured for this origin");
+  }
+
+  // Resolve canonical MusicBrainz metadata early (needed for path computation)
+  const meta = await resolveMbMetadata(task.song);
+
+  // Check if file already exists on disk — skip download if present
+  const expectedPath = computeExpectedFilePath(folder, meta, task.song.name);
+  try {
+    const exists = await platform.fileExists(expectedPath);
+    if (exists) {
+      console.log(`[download-queue] file already exists, skipping: ${expectedPath}`);
+      store.updateTask(task.id, {
+        audioPath: expectedPath,
+        status: DownloadStatus.COMPLETED,
+        progress: 100,
+        stepLabel: "Already downloaded",
+        completedAt: Date.now(),
+      });
+      useStatusStore.getState().addMessage(
+        `"${task.song.name}" already exists locally`,
+        "info",
+        "Download",
+      );
+      addDownloadedTrackToLibrary(expectedPath, task.song, meta);
+      return;
+    }
+  } catch {
+    console.warn(`[download-queue] fileExists check failed for ${expectedPath}, proceeding with download`);
   }
 
   // Step 1: Search YouTube
@@ -282,9 +393,6 @@ export async function processTask(task: DownloadTask): Promise<void> {
     throw new Error("No YouTube match found for this song");
   }
   store.updateTask(task.id, { videoId: match.videoId, progress: 10 });
-
-  // Resolve canonical MusicBrainz metadata
-  const meta = await resolveMbMetadata(task.song);
 
   // Step 2: Download MP3
   store.updateTask(task.id, {
@@ -312,6 +420,7 @@ export async function processTask(task: DownloadTask): Promise<void> {
   const coverBytes = await resolveCoverBytes(task.song, match.videoId, meta.artistName, meta.albumName);
   if (!coverBytes) {
     complete(store, task.id);
+    addDownloadedTrackToLibrary(audioPath, task.song, meta);
     return;
   }
   store.updateTask(task.id, { progress: 70 });
@@ -328,6 +437,7 @@ export async function processTask(task: DownloadTask): Promise<void> {
   });
   if (!coverPath) {
     complete(store, task.id);
+    addDownloadedTrackToLibrary(audioPath, task.song, meta);
     return;
   }
   store.updateTask(task.id, { coverPath, progress: 85 });
@@ -353,6 +463,9 @@ export async function processTask(task: DownloadTask): Promise<void> {
           genres: meta.genres,
           mbzRecordingId: meta.mbzRecordingId,
           mbzArtistId: meta.mbzArtistId,
+          youtubeVideoId: match.videoId,
+          youtubeVideoTitle: match.title,
+          youtubeChannelName: match.channelName,
         },
       });
     } catch (err) {
@@ -361,4 +474,5 @@ export async function processTask(task: DownloadTask): Promise<void> {
   }
 
   complete(store, task.id);
+  addDownloadedTrackToLibrary(audioPath, task.song, meta);
 }

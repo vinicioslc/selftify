@@ -103,7 +103,7 @@ Desktop implementation uses ffmpeg with programmatically computed parameters (no
 | Download folder full | yt-dlp/ffmpeg fails → FAILED with error propagated |
 | No download folder configured | Task → FAILED immediately on enqueue |
 | Song already in queue | enqueueSong is a no-op (dedup by song.id) |
-| Song already downloaded | Current behavior: no check. Future: optional skip if audioPath already exists |
+| Song already downloaded | `processTask` computes expected path via `computeExpectedFilePath()`, calls `platform.fileExists()`. If exists → task marked COMPLETED immediately with `audioPath` set. Status message: "\"<song>\" already exists locally". No download. |
 
 ## Error States
 
@@ -157,3 +157,66 @@ The `DownloadPlatform` interface (`download-platform.ts`) abstracts platform dif
 6. **`getReleaseDetail`** (`musicbrainz-client.ts`): `inc` atualizado para incluir `media`.
 
 7. **`musicbrainz-types.ts`**: `position` adicionado ao tipo `media`.
+
+### Entry 2: File existence check before download
+
+**Date**: 2026-06-08
+
+**Problem**: Ao clicar em download de um vídeo já baixado, o processo inteiro (search → download → cover → embed) era executado novamente, resultando em download duplicado e sobrescrita do arquivo.
+
+**Changes**:
+
+1. **`computeExpectedFilePath`** (`download-queue.ts`):
+   - Nova função que replica a lógica de path do handler `yt:download-mp3` no main process
+   - Usa metadados MB (artistName, albumName, trackNumber) + songName para montar o caminho
+   - Formato: `<downloadFolder>/<Artist>/<Album>/<NN> - <Title>.mp3` (com álbum) ou `<downloadFolder>/<Artist>/<Title> (Single)/<Title>.mp3` (sem álbum)
+
+2. **`processTask`** (`download-queue.ts`):
+   - `resolveMbMetadata()` movido para antes da busca YouTube (necessário para path)
+   - Nova etapa de verificação: computa path esperado → `platform.fileExists()` → se existir, marca COMPLETED e retorna
+   - Se fileExists falhar (erro), loga warning e prossegue com download normal
+   - Task completada via skip tem `audioPath` preenchido com o path do arquivo existente
+   - `stepLabel: "Already downloaded"` no lugar de "Completed"
+
+3. **Status message**: Quando o arquivo já existe, uma mensagem de status `info` é publicada: `"<song>" already exists locally`.
+
+4. **Specs**: `download-queue.md`, `download-queue.api.md`, `download-queue.ui.md` atualizadas para refletir o novo comportamento.
+
+### Entry 3: YouTube source embedded as MP3 tags
+
+**Date**: 2026-06-08
+
+**Problem**: After downloading, there was no way to know which YouTube video a downloaded MP3 came from. The video ID and title were ephemeral — lost after the download completed. Users in the Song Info panel had no reference to the original YouTube source.
+
+**Changes**:
+
+1. **`yt:embed-artwork`** (`electron/main.ts`):
+   - `EmbedArtworkRequest.metadata` ganha `youtubeVideoId` e `youtubeVideoTitle`
+   - ffmpeg agora escreve tags TXXX: `YOUTUBE_TITLE` (título do vídeo) e `YOUTUBE_URL` (link `https://music.youtube.com/watch?v=<id>`)
+   - Tags escritas mesmo se `youtubeVideoTitle` estiver vazio (apenas URL)
+
+2. **`local:parse-file`** (`electron/main.ts`):
+   - Extrai TXXX `YOUTUBE_TITLE` e `YOUTUBE_URL` dos `native` tags do `music-metadata`
+   - Retorna `youtubeVideoTitle: string | null` e `youtubeVideoUrl: string | null`
+
+3. **`youtube-download-service.ts`**:
+   - `searchAndRank()` agora retorna `channelName?: string` (do `video.uploader`)
+
+4. **`download-queue.ts`**:
+   - `processTask()` passa `youtubeVideoId: match.videoId`, `youtubeVideoTitle: match.title` e `youtubeChannelName: match.channelName` para `platform.embedCover()` metadata
+
+5. **Tipos** (`domain-types.ts`, `local-database-types.ts`):
+   - `Song` ganha `youtubeVideoId?: string`, `youtubeVideoTitle?: string`, `youtubeChannelName?: string`
+   - `DbSong` ganha `youtube_video_id`, `youtube_video_title`, `youtube_video_channel` (todos `string | null`)
+
+6. **Pipeline de dados**:
+   - `local-indexer.ts`: mapeia `parsed.youtubeVideoTitle/Url/Channel` → `meta.youtube_video_title/id/channel`
+   - `dto.ts`: mapeia `row.youtube_video_id/title/channel` → `Song.youtubeVideoId/Title/ChannelName`
+   - Dexie armazena campos extras sem necessidade de migration
+
+7. **UI** (`song-info-content.tsx`):
+   - Nova seção "YouTube Source" na metadata, exibindo: título do vídeo, nome do canal, link externo
+   - Visível apenas quando `song.youtubeVideoTitle` está presente
+   - Canal exibido como `@channel` ou "by Channel Name"
+
+7. **Specs**: `download-queue.md`, `download-queue.api.md`, `download-queue.ui.md` atualizadas.

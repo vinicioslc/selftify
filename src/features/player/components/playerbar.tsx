@@ -9,11 +9,12 @@ type PlayerbarProps = {
   currentView?: string;
   onNavigate?: (view: any) => void;
   onGoBack?: () => void;
+  onOpenQueue?: () => void;
   onNavigateAlbum?: (album: Album) => void;
   onNavigateArtist?: (artist: AlbumArtist) => void;
 };
 
-export function PlayerBar({ currentView, onNavigate, onGoBack, onNavigateAlbum, onNavigateArtist }: PlayerbarProps) {
+export function PlayerBar({ currentView, onNavigate, onGoBack, onOpenQueue, onNavigateAlbum, onNavigateArtist }: PlayerbarProps) {
   const { currentTrack } = usePlayerStore();
   const { sidebarCollapsed } = useSettingsStore();
 
@@ -32,7 +33,7 @@ export function PlayerBar({ currentView, onNavigate, onGoBack, onNavigateAlbum, 
         )}
       </div>
       <div className="playerbar-section right">
-        <RightControls currentView={currentView} onNavigate={onNavigate} onGoBack={onGoBack} onNavigateAlbum={onNavigateAlbum} onNavigateArtist={onNavigateArtist} />
+        <RightControls onOpenQueue={onOpenQueue} onNavigateAlbum={onNavigateAlbum} onNavigateArtist={onNavigateArtist} />
       </div>
     </div>
   );

@@ -4,9 +4,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import "./styles/globals.css";
 
-// Wipe stale caches on version mismatch (fire-and-forget)
-import("./services/image-store").then((m) => m.checkCacheVersion());
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

@@ -127,10 +127,12 @@ describe("processTask", () => {
         outputDir: "/music/downloads/artist/album",
       }),
     );
-    expect(mockEmbedCover).toHaveBeenCalledWith({
-      audioPath: "/music/downloads/artist/album/song.mp3",
-      coverPath: "/music/downloads/artist/album/cover.jpg",
-    });
+    expect(mockEmbedCover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audioPath: "/music/downloads/artist/album/song.mp3",
+        coverPath: "/music/downloads/artist/album/cover.jpg",
+      }),
+    );
 
     const updated = useDownloadStore.getState().tasks.find((t) => t.id === "task-1");
     expect(updated?.status).toBe(DownloadStatus.COMPLETED);

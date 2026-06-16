@@ -1,5 +1,6 @@
 import { OriginType } from "../types/domain-types";
-import type { LocalScanStatus } from "../stores/local-library.store";
+
+export type LocalScanStatus = "idle" | "scanning" | "paused" | "done" | "error";
 
 export const SCAN_STATUS_LABEL: Record<LocalScanStatus, string> = {
   idle: "Ready",

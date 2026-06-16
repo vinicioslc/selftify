@@ -1,3 +1,8 @@
+export type MusicBrainzContext = {
+  artistName: string;
+  artistMbid?: string;
+};
+
 export type MusicBrainzResponse<T> = {
   created: string;
   count: number;

@@ -55,6 +55,18 @@ export interface ElectronWindowControlsApi {
   onMaximizeChange(callback: (maximized: boolean) => void): () => void;
 }
 
+export interface ElectronImageCacheApi {
+  store: (hash: string, buffer: number[], format: string, meta?: Record<string, unknown>) => Promise<void>;
+  get: (hash: string) => Promise<any>;
+  getBySourceUrl: (url: string) => Promise<any>;
+  find: (query: Record<string, unknown>) => Promise<any[]>;
+  clear: () => Promise<void>;
+}
+
+export interface ElectronLocalApi {
+  parseFile: (filePath: string) => Promise<any>;
+}
+
 export interface ElectronApi {
   mpv: ElectronMpvApi;
   db: ElectronDbApi;
@@ -63,6 +75,13 @@ export interface ElectronApi {
   settings: ElectronSettingsApi;
   yt: ElectronYtApi;
   windowControls: ElectronWindowControlsApi;
+  imageFetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) => Promise<{ status: number; headers: Record<string, string>; body: number[] }>;
+  imageCache: ElectronImageCacheApi;
+  local: ElectronLocalApi;
+  artworkSearch: (provider: string, input: any) => Promise<any[]>;
+  wikiSearch: (query: string) => Promise<string | null>;
+  onCookiesInvalid: (callback: () => void) => () => void;
+  onDownloadProgress: (callback: (event: { taskId: string; percent: number; step: string }) => void) => () => void;
 }
 
 declare global {

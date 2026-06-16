@@ -61,6 +61,55 @@ interface DownloadStore {
 - `retryTask`: reset to PENDING, clear error/audioPath/coverPath → call `processNext()`
 - `processNext`: find first PENDING task → set as `activeTaskId` → call `processTask(task)` → on completion/rejection, clear `activeTaskId` → call itself again
 
+## File Existence Check
+
+### `computeExpectedFilePath`
+
+Computed in the orchestrator (`download-queue.ts`) before any download happens. Replicates the same path logic used by the `yt:download-mp3` IPC handler:
+
+```typescript
+function computeExpectedFilePath(
+  folder: string,
+  meta: MbMetadata,
+  songName: string,
+): string {
+  const safeArtist = (meta.artistName || "Unknown").replace(/[<>:"/\\|?*]/g, '_');
+  const safeTitle = (songName || "Unknown").replace(/[<>:"/\\|?*]/g, '_');
+  const prefix = meta.trackNumber
+    ? `${String(meta.trackNumber).padStart(2, '0')} - `
+    : '';
+  let albumDir: string;
+  if (meta.albumName) {
+    const safeAlbum = meta.albumName.replace(/[<>:"/\\|?*]/g, '_');
+    albumDir = safeAlbum;
+  } else {
+    albumDir = `${safeTitle} (Single)`;
+  }
+  const filename = `${prefix}${safeTitle}`;
+  return `${folder}/${safeArtist}/${albumDir}/${filename}.mp3`;
+}
+```
+
+### `processTask` — updated flow
+
+```
+1. Get download folder
+2. Resolve MB metadata (moved up — needed for path)
+3. Compute expected file path via computeExpectedFilePath()
+4. Check existence via platform.fileExists()
+   ├─ If exists → mark COMPLETED, set audioPath, stepLabel "Already downloaded"
+   │              publish status message, RETURN early
+   └─ If not → continue with download pipeline
+5. Search YouTube (searchAndRank)
+6. Download MP3 (yt:download-mp3)
+7. Resolve cover (resolveCoverBytes)
+8. Process cover (yt:process-cover)
+9. Embed cover (yt:embed-artwork)
+10. Mark COMPLETED
+```
+
+When the file already exists, the task is marked COMPLETED instantly (no IPC calls beyond `fileExists`). The `audioPath` is set to the existing file path.
+
 ## Platform Abstraction — `src/services/download-platform.ts`
 
 ```typescript
@@ -321,6 +370,9 @@ function detectImageFormat(bytes: number[]): string | null {
     genres?: string[];
     mbzRecordingId?: string;
     mbzArtistId?: string;
+    youtubeVideoId?: string;        // YouTube video ID (source)
+    youtubeVideoTitle?: string;     // YouTube video title (source)
+    youtubeChannelName?: string;    // YouTube channel name (uploader)
   };
 }
 ```
@@ -360,6 +412,16 @@ ytQueue.register('yt:embed-artwork', async (payload: unknown) => {
   }
   if (meta?.mbzArtistId) {
     ffmpegArgs.push('-metadata', `musicbrainz_artistid=${meta.mbzArtistId}`);
+  }
+
+  // YouTube source info — stored as custom TXXX frames
+  if (meta?.youtubeVideoId) {
+    const ytUrl = `https://music.youtube.com/watch?v=${meta.youtubeVideoId}`;
+    ffmpegArgs.push('-metadata', `TXXX=YOUTUBE_TITLE=${meta.youtubeVideoTitle || ''}`);
+    ffmpegArgs.push('-metadata', `TXXX=YOUTUBE_URL=${ytUrl}`);
+    if (meta.youtubeChannelName) {
+      ffmpegArgs.push('-metadata', `TXXX=YOUTUBE_CHANNEL=${meta.youtubeChannelName}`);
+    }
   }
 
   await execFfmpeg(ffmpegArgs);
@@ -748,6 +810,9 @@ Parses audio file metadata in the Electron main process (Node.js). Avoids Vite b
   mbzAlbumId?: string;
   mbzReleaseGroupId?: string;
   mbzArtistId?: string;
+  youtubeVideoTitle?: string | null;   // from TXXX:YOUTUBE_TITLE
+  youtubeVideoUrl?: string | null;     // from TXXX:YOUTUBE_URL
+  youtubeChannelName?: string | null;  // from TXXX:YOUTUBE_CHANNEL
   picture?: { data: number[]; format: string } | null;
   error?: string;            // set if parsing failed
 }

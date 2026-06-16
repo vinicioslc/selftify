@@ -83,8 +83,78 @@ export function isCaptureStreamSupported(): boolean {
 }
 
 export function connectMediaElement(audio: HTMLAudioElement): void {
-  if (audioCtx) return;
-  buildPipeline(audio);
+  if (!audioCtx) {
+    buildPipeline(audio);
+    return;
+  }
+
+  // Already have an AudioContext — if the same element, nothing to do
+  if (audio === currentAudio) return;
+
+  // Different audio element (e.g. switching from stream to local): reconnect
+  sourceNode?.disconnect();
+  analyserNode?.disconnect();
+
+  if ("captureStream" in audio) {
+    try {
+      const stream = (audio as any).captureStream();
+      if (stream && stream.getAudioTracks().length > 0) {
+        sourceNode = audioCtx.createMediaStreamSource(stream);
+        const zeroGain = audioCtx.createGain();
+        zeroGain.gain.value = 0;
+        sourceNode.connect(analyserNode!);
+        analyserNode!.connect(zeroGain);
+        zeroGain.connect(audioCtx.destination);
+        _usingCaptureStream = true;
+        currentAudio = audio;
+        return;
+      }
+    } catch (err) {
+      console.warn("[audio-engine] connectMediaElement captureStream failed:", err);
+    }
+  }
+
+  sourceNode = audioCtx.createMediaElementSource(audio);
+  sourceNode.connect(analyserNode!);
+  analyserNode!.connect(audioCtx.destination);
+  _usingCaptureStream = false;
+  currentAudio = audio;
+}
+
+/**
+ * Connect a streaming audio element to the analyser using captureStream().
+ * Unlike connectMediaElement (which uses createMediaElementSource and breaks
+ * CORS for cross-origin YouTube streams), this captures the element's output
+ * as a MediaStream and routes it through the analyser for visualizers.
+ */
+export function connectStreamAudio(audio: HTMLAudioElement): void {
+  if (!audioCtx) {
+    audioCtx = new AudioContext();
+    audioCtx.addEventListener("statechange", onStateChange);
+    analyserNode = audioCtx.createAnalyser();
+    analyserNode.fftSize = 256;
+  }
+
+  sourceNode?.disconnect();
+  analyserNode?.disconnect();
+
+  if ("captureStream" in audio) {
+    try {
+      const stream = (audio as any).captureStream();
+      if (stream && stream.getAudioTracks().length > 0) {
+        sourceNode = audioCtx.createMediaStreamSource(stream);
+        sourceNode.connect(analyserNode!);
+        _usingCaptureStream = true;
+        currentAudio = audio;
+        if (!isLoopRunning) {
+          isLoopRunning = true;
+          rafId = requestAnimationFrame(loop);
+        }
+      }
+    } catch (err) {
+      console.warn("[audio-engine] connectStreamAudio captureStream failed:", err);
+    }
+  }
 }
 
 export function resumeContext(): Promise<void> {

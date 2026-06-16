@@ -17,7 +17,9 @@ export function createElectronPlatformService(): PlatformService {
     },
 
     async readFile(path) {
-      return api()?.fs?.readFile(path) ?? null;
+      const result = await api()?.fs?.readFile(path);
+      if (!result) return null;
+      return result instanceof Uint8Array ? result : new Uint8Array(result);
     },
 
     async readDirectory(path): Promise<DirEntry[]> {

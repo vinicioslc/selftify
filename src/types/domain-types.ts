@@ -55,6 +55,9 @@ export type Song = {
   mbzArtistId?: string;
   mbzReleaseGroupId?: string;
   mbzAlbumId?: string;
+  youtubeVideoId?: string;
+  youtubeVideoTitle?: string;
+  youtubeChannelName?: string;
 };
 
 export type Album = {
@@ -70,6 +73,7 @@ export type Album = {
   genres?: string[];
   mbzId?: string;
   mbzReleaseGroupId?: string;
+  mbzArtistId?: string;
 };
 
 export type AlbumArtist = {
@@ -111,12 +115,24 @@ export type Origin = {
   enableOnlineSearch?: boolean;
   musicBrainzToken?: string;
   youtubeMusicHeaders?: string;
+  organizeOnScan?: boolean;
+  organizeDryRun?: boolean;
 };
 
 export type PlayQueueAddOptions = {
   type: "now" | "next" | "last" | "shuffle";
   byStartIndex?: boolean;
   startIndex?: number;
+};
+
+export type StreamSourceCandidate = {
+  type: "local";
+  song: Song;
+  filePath: string;
+  bitrate?: number;
+  sampleRate?: number;
+  fileSize?: number;
+  fileExtension?: string;
 };
 
 export enum DownloadStatus {

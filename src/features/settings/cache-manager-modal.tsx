@@ -5,7 +5,10 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Trash2, Loader2 } from "lucide-react";
-import { getAllSearchCacheEntries, deleteSearchCache, clearSearchCache, getAllMbzYtMappings, deleteMbzYtMapping, clearAllMbzYtMappings, type CacheEntry, type MbzYtMapping } from "../../services/search-cache";
+import type { CacheEntry } from "../../services/sqlite-db/sqlite-db-search-store";
+import { getAllSavedMbzYtMappings, deleteSavedMbzYtMapping, clearAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
+import type { MbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
+import { getAllSearchCacheEntries, deleteSearchCache, clearSearchCache } from "../../services/sqlite-db/sqlite-db-search-store";
 
 export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [searchEntries, setSearchEntries] = useState<CacheEntry[]>([]);
@@ -14,7 +17,7 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
 
   async function refresh() {
     setLoading(true);
-    const [se, mp] = await Promise.all([getAllSearchCacheEntries(), getAllMbzYtMappings()]);
+    const [se, mp] = await Promise.all([getAllSearchCacheEntries(), getAllSavedMbzYtMappings()]);
     setSearchEntries(se);
     setMappings(mp);
     setLoading(false);
@@ -68,7 +71,7 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
                       </div>
                       <div className="space-y-1">
                         {entries.map((e) => {
-                          const songCount = JSON.parse(e.songs || "[]").length;
+                          const songCount = e.songs.length;
                           return (
                             <div key={e.key} className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-1.5 text-xs">
                               <span className="truncate flex-1">{e.query}</span>
@@ -98,13 +101,13 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
               <ScrollArea className="max-h-[50vh]">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm text-muted-foreground">Total: {mappings.length} mappings</span>
-                  <Button variant="ghost" size="sm" onClick={() => { clearAllMbzYtMappings(); refresh(); }}>
+                  <Button variant="ghost" size="sm" onClick={() => { clearAllSavedMbzYtMappings(); refresh(); }}>
                     Clear All
                   </Button>
                 </div>
                 <div className="space-y-1">
                   {mappings.map((m) => {
-                    const first = m.candidates ? (JSON.parse(m.candidates) as any[])?.[0] : null;
+                    const first = Array.isArray(m.candidates) ? m.candidates[0] : null;
                     return (
                     <div key={m.mbzRecordingId} className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-1.5 text-xs">
                       <span className="truncate flex-1">{first?.title || m.songName || m.selectedVideoId}</span>
@@ -112,7 +115,7 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
                       <Badge variant="outline" className="mx-1 shrink-0">{m.selectedType}</Badge>
                       <span className="text-muted-foreground shrink-0">{new Date(m.updatedAt).toLocaleString()}</span>
                       <Button variant="ghost" size="icon" className="h-6 w-6 ml-2 shrink-0"
-                        onClick={() => { deleteMbzYtMapping(m.mbzRecordingId); refresh(); }}>
+                        onClick={() => { deleteSavedMbzYtMapping(m.mbzRecordingId); refresh(); }}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>

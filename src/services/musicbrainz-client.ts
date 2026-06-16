@@ -6,16 +6,8 @@ import type {
   MBReleaseGroup,
   MusicBrainzReleaseGroupResponse,
 } from "./musicbrainz-types";
-import {
-  getCachedMetadata,
-  setCachedMetadata,
-  getCachedSearch,
-  setCachedSearch,
-  hashSearchQuery,
-} from "./musicbrainz-cache";
-import { getDiskCache, type MusicBrainzContext } from "./musicbrainz-disk-cache";
-// Local image cache removed — fetching cover URLs directly
-
+import type { MusicBrainzContext } from "./musicbrainz-types";
+import { getCachedQuery, setCachedQuery, hashQuery } from "./sqlite-db/sqlite-db-query";
 import { useAuthStore } from "../stores/auth.store";
 import { OriginType } from "../types/domain-types";
 
@@ -25,6 +17,17 @@ const RATE_LIMIT_MS = 1200;
 const APP_NAME = "Selftify/1.0.0";
 
 let lastMbRequestAt = 0;
+
+function hashSearchQuery(params: Record<string, unknown>): string {
+  const sorted = Object.keys(params).sort().map((k) => `${k}:${JSON.stringify(params[k])}`).join("|");
+  let hash = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const chr = sorted.charCodeAt(i);
+    hash = ((hash << 5) - hash) + chr;
+    hash |= 0;
+  }
+  return "q_" + Math.abs(hash).toString(36);
+}
 
 async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
@@ -47,6 +50,22 @@ async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Re
     await new Promise((r) => setTimeout(r, minGap - elapsed));
   }
   lastMbRequestAt = Date.now();
+
+  const electronApi = (window as any).electronApi;
+  if (electronApi?.mbz?.fetch) {
+    try {
+      const result = await electronApi.mbz.fetch(url, Object.fromEntries(headers.entries()));
+      const body = Array.isArray(result.body) ? new Uint8Array(result.body) : result.body;
+      return new Response(body, {
+        status: result.status,
+        statusText: result.statusText,
+        headers: result.headers,
+      });
+    } catch (err) {
+      console.warn("[mb-client] IPC fetch failed, falling back to direct fetch:", err);
+    }
+  }
+
   return fetch(url, { ...init, headers });
 }
 
@@ -71,6 +90,28 @@ export type MusicBrainzSearchOpts = {
   rawQuery?: string;
 };
 
+function getLibraryRoot(): string | undefined {
+  const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
+  return origin?.folderPath || undefined;
+}
+
+async function getSqliteDbCached<T>(cacheKey: string): Promise<T | null> {
+  const libraryRoot = getLibraryRoot();
+  if (!libraryRoot) return null;
+  const cached = await getCachedQuery(libraryRoot, "musicbrainz", cacheKey);
+  if (cached?.raw?.data) {
+    return cached.raw.data as T;
+  }
+  return null;
+}
+
+async function setSqliteDbCached(cacheKey: string, data: unknown): Promise<void> {
+  const libraryRoot = getLibraryRoot();
+  if (!libraryRoot) return;
+  const originId = useAuthStore.getState().currentOrigin?.id || "mb";
+  await setCachedQuery(libraryRoot, "musicbrainz", cacheKey, { songs: [], albums: [], albumArtists: [] }, originId, { data });
+}
+
 export async function searchRecordings(
   artist: string,
   recording: string,
@@ -81,14 +122,14 @@ export async function searchRecordings(
   const offset = opts.offset ?? 0;
   const cacheKey = hashSearchQuery({ type: "recording", rawQuery: opts.rawQuery, artist, recording, limit, offset, inc: "releases+artist-credits" });
 
-  const cached = await getCachedSearch<MusicBrainzResponse<MBRecording>>(cacheKey);
+  const cached = await getSqliteDbCached<MusicBrainzResponse<MBRecording>>(cacheKey);
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBRecording>>(
     `/recording/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json&inc=releases+artist-credits`,
   );
 
-  await setCachedSearch(cacheKey, result);
+  await setSqliteDbCached(cacheKey, result);
   return result;
 }
 
@@ -102,14 +143,14 @@ export async function searchReleases(
   const offset = opts.offset ?? 0;
   const cacheKey = hashSearchQuery({ type: "release", rawQuery: opts.rawQuery, artist, release, limit, offset });
 
-  const cached = await getCachedSearch<MusicBrainzResponse<MBRelease>>(cacheKey);
+  const cached = await getSqliteDbCached<MusicBrainzResponse<MBRelease>>(cacheKey);
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBRelease>>(
     `/release/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json&inc=release-groups`,
   );
 
-  await setCachedSearch(cacheKey, result);
+  await setSqliteDbCached(cacheKey, result);
   return result;
 }
 
@@ -122,14 +163,14 @@ export async function searchArtists(
   const offset = opts.offset ?? 0;
   const cacheKey = hashSearchQuery({ type: "artist", rawQuery: opts.rawQuery, artist, limit, offset });
 
-  const cached = await getCachedSearch<MusicBrainzResponse<MBArtist>>(cacheKey);
+  const cached = await getSqliteDbCached<MusicBrainzResponse<MBArtist>>(cacheKey);
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBArtist>>(
     `/artist/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json`,
   );
 
-  await setCachedSearch(cacheKey, result);
+  await setSqliteDbCached(cacheKey, result);
   return result;
 }
 
@@ -147,27 +188,18 @@ export async function getCachedCoverUrl(releaseMbid: string): Promise<string | n
 
 export async function getReleaseDetail(
   releaseMbid: string,
-  ctx?: MusicBrainzContext,
+  _ctx?: MusicBrainzContext,
 ): Promise<MBRelease | null> {
   const cacheKey = `rel-${releaseMbid}`;
-  const libraryRoot = ctx ? getLibraryRoot() : undefined;
 
-  if (libraryRoot && ctx) {
-    const r = await getDiskCache(libraryRoot).get<MBRelease>(ctx.artistName, cacheKey, ctx.artistMbid);
-    if (r) return r;
-  }
-
-  const cached = await getCachedMetadata<MBRelease>(cacheKey);
+  const cached = await getSqliteDbCached<MBRelease>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBRelease>(
       `/release/${releaseMbid}?fmt=json&inc=artist-credits+recordings+media`,
     );
-    await setCachedMetadata(cacheKey, result);
-    if (libraryRoot && ctx) {
-      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
-    }
+    await setSqliteDbCached(cacheKey, result);
     return result;
   } catch (err) {
     console.warn("[mb-client] getReleaseDetail failed:", err);
@@ -177,17 +209,11 @@ export async function getReleaseDetail(
 
 export async function getReleaseByReleaseGroup(
   rgId: string,
-  ctx?: MusicBrainzContext,
+  _ctx?: MusicBrainzContext,
 ): Promise<MBRelease | null> {
   const cacheKey = `rel-rg-${rgId}`;
-  const libraryRoot = ctx ? getLibraryRoot() : undefined;
 
-  if (libraryRoot && ctx) {
-    const r = await getDiskCache(libraryRoot).get<MBRelease>(ctx.artistName, cacheKey, ctx.artistMbid);
-    if (r) return r;
-  }
-
-  const cached = await getCachedMetadata<MBRelease>(cacheKey);
+  const cached = await getSqliteDbCached<MBRelease>(cacheKey);
   if (cached) return cached;
 
   try {
@@ -196,10 +222,7 @@ export async function getReleaseByReleaseGroup(
     );
     const release = result.releases?.[0] ?? null;
     if (release) {
-      await setCachedMetadata(cacheKey, release);
-      if (libraryRoot && ctx) {
-        await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, release, ctx.artistMbid);
-      }
+      await setSqliteDbCached(cacheKey, release);
     }
     return release;
   } catch (err) {
@@ -210,27 +233,18 @@ export async function getReleaseByReleaseGroup(
 
 export async function getRecordingDetail(
   recordingMbid: string,
-  ctx?: MusicBrainzContext,
+  _ctx?: MusicBrainzContext,
 ): Promise<MBRecording | null> {
   const cacheKey = `rec-${recordingMbid}`;
-  const libraryRoot = ctx ? getLibraryRoot() : undefined;
 
-  if (libraryRoot && ctx) {
-    const r = await getDiskCache(libraryRoot).get<MBRelease>(ctx.artistName, cacheKey, ctx.artistMbid);
-    if (r) return r;
-  }
-
-  const cached = await getCachedMetadata<MBRecording>(cacheKey);
+  const cached = await getSqliteDbCached<MBRecording>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBRecording>(
       `/recording/${recordingMbid}?fmt=json&inc=artist-credits+releases`,
     );
-    await setCachedMetadata(cacheKey, result);
-    if (libraryRoot && ctx) {
-      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
-    }
+    await setSqliteDbCached(cacheKey, result);
     return result;
   } catch (err) {
     console.warn("[mb-client] getRecordingDetail failed:", err);
@@ -242,27 +256,20 @@ export async function getArtistReleaseGroups(
   artistMbid: string,
   limit = 50,
   offset = 0,
-  ctx?: MusicBrainzContext,
+  _ctx?: MusicBrainzContext,
 ): Promise<{ groups: MBReleaseGroup[]; total: number }> {
   const cacheKey = `rg-art-${artistMbid}-${limit}-${offset}`;
-  const libraryRoot = ctx ? getLibraryRoot() : undefined;
 
-  if (libraryRoot && ctx) {
-    const r = await getDiskCache(libraryRoot).get<MusicBrainzReleaseGroupResponse>(ctx.artistName, cacheKey, ctx.artistMbid);
-    if (r) return { groups: r["release-groups"] ?? [], total: r.count ?? 0 };
+  const cached = await getSqliteDbCached<MusicBrainzReleaseGroupResponse>(cacheKey);
+  if (cached) {
+    return { groups: cached["release-groups"] ?? [], total: cached.count ?? 0 };
   }
-
-  const cached = await getCachedMetadata<MusicBrainzReleaseGroupResponse>(cacheKey);
-  if (cached) return { groups: cached["release-groups"] ?? [], total: cached.count ?? 0 };
 
   try {
     const result = await apiGet<MusicBrainzReleaseGroupResponse>(
       `/release-group?artist=${artistMbid}&fmt=json&limit=${limit}&offset=${offset}`,
     );
-    await setCachedMetadata(cacheKey, result);
-    if (libraryRoot && ctx) {
-      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
-    }
+    await setSqliteDbCached(cacheKey, result);
     return { groups: result["release-groups"] ?? [], total: result.count ?? 0 };
   } catch (err) {
     console.warn("[mb-client] getArtistReleaseGroups failed:", err);
@@ -272,35 +279,21 @@ export async function getArtistReleaseGroups(
 
 export async function getArtistDetail(
   artistMbid: string,
-  ctx?: MusicBrainzContext,
+  _ctx?: MusicBrainzContext,
 ): Promise<MBArtist | null> {
   const cacheKey = `art-${artistMbid}`;
-  const libraryRoot = ctx ? getLibraryRoot() : undefined;
 
-  if (libraryRoot && ctx) {
-    const r = await getDiskCache(libraryRoot).get<MBArtist>(ctx.artistName, cacheKey, ctx.artistMbid);
-    if (r) return r;
-  }
-
-  const cached = await getCachedMetadata<MBArtist>(cacheKey);
+  const cached = await getSqliteDbCached<MBArtist>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBArtist>(
       `/artist/${artistMbid}?fmt=json&inc=tags`,
     );
-    await setCachedMetadata(cacheKey, result);
-    if (libraryRoot && ctx) {
-      await getDiskCache(libraryRoot).set(ctx.artistName, cacheKey, result, ctx.artistMbid);
-    }
+    await setSqliteDbCached(cacheKey, result);
     return result;
   } catch (err) {
     console.warn("[mb-client] getArtistDetail failed:", err);
     return null;
   }
-}
-
-function getLibraryRoot(): string | undefined {
-  const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
-  return origin?.folderPath || undefined;
 }

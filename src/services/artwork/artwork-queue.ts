@@ -8,7 +8,7 @@ class ArtworkQueue {
   private queues = new Map<string, QueueTask<any>[]>();
   private processing = new Map<string, boolean>();
   private lastRequest = new Map<string, number>();
-  private controller = new AbortController();
+  private cancelTokens = new Map<string, AbortController>();
 
   enqueue<T>(
     provider: string,
@@ -20,10 +20,11 @@ class ArtworkQueue {
       this.queues.get(provider)!.push({
         resolve,
         reject,
-        fn: () => fn(this.controller.signal),
+        fn: () => fn(this.cancelTokens.get(provider)!.signal),
       });
 
       if (!this.processing.get(provider)) {
+        this.cancelTokens.set(provider, new AbortController());
         this.processNext(provider, paceMs);
       }
     });
@@ -34,12 +35,24 @@ class ArtworkQueue {
     const queue = this.queues.get(provider)!;
 
     while (queue.length > 0) {
-      const task = queue.shift()!;
+      const signal = this.cancelTokens.get(provider)?.signal;
+      if (signal?.aborted) break;
 
       const now = Date.now();
       const last = this.lastRequest.get(provider) || 0;
       const wait = Math.max(0, paceMs - (now - last));
-      if (wait > 0) await this.delay(wait);
+      if (wait > 0) {
+        await this.delay(wait);
+        if (signal?.aborted) break;
+      } else {
+        // Always yield so clearPending can cancel before execution
+        await this.delay(0);
+        if (signal?.aborted) break;
+      }
+
+      if (queue.length === 0) break;
+
+      const task = queue.shift()!;
 
       try {
         this.lastRequest.set(provider, Date.now());
@@ -53,12 +66,12 @@ class ArtworkQueue {
     this.processing.set(provider, false);
   }
 
-  abort() {
-    this.controller.abort();
-    this.controller = new AbortController();
-  }
-
   clearPending(provider: string) {
+    const token = this.cancelTokens.get(provider);
+    if (token) {
+      token.abort();
+      this.cancelTokens.delete(provider);
+    }
     const queue = this.queues.get(provider);
     if (queue) {
       for (const task of queue) {
@@ -66,6 +79,7 @@ class ArtworkQueue {
       }
       queue.length = 0;
     }
+    this.processing.set(provider, false);
   }
 
   private delay(ms: number) {

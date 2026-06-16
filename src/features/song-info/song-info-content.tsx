@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import type { Song, Origin, Album, AlbumArtist } from "../../types/domain-types";
-import { useAuthStore } from "../../stores/auth.store";
-import { getMbzYtMapping, setMbzYtMapping, type MbzYtMapping, type CandidateData, type StreamSourceCandidate } from "../../services/search-cache";
-import { researchSong, fetchCustomVideoInfo, searchAndRankAll } from "../../services/youtube-download-service";
+import type { Song, Album, AlbumArtist } from "../../types/domain-types";
+import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
+import type { CandidateData, MbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
+import type { StreamSourceCandidate } from "../../types/domain-types";
+import { researchSong, fetchCustomVideoInfo } from "../../services/youtube-download-service";
 import { findLocalCandidates } from "../../services/stream-resolver";
-import type { YoutubeSearchScoredVideo } from "../../services/youtube-ranking";
-import { useArtistImage } from "../../hooks/use-artist-image";
+import { useLazyArtistImage } from "../../hooks/use-artist-image";
 import { CoverImage } from "../../components/ui/art-image";
 import { ArtImage } from "../../components/ui/art-image";
 import { Badge } from "../../components/ui/badge";
@@ -13,10 +13,11 @@ import { Button } from "../../components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { AlbumEmptySvg, ArtistEmptySvg } from "../../components/ui/empty-image-svg";
 import { cn, formatDuration } from "../../lib/utils";
-import { Loader2, ExternalLink, Copy, Check, Search } from "lucide-react";
+import { Loader2, ExternalLink, Copy, Check, Search, FolderOpen } from "lucide-react";
 import { artworkResolver } from "../../services/artwork/artwork-resolver";
+import { ARTWORK_PROVIDER_META } from "../../services/artwork/providers/meta";
 import type { ArtworkCandidate } from "../../services/artwork/providers/types";
-import { fetchImageAsBlobUrl } from "../../services/image-cache";
+import { fetchImageAsBlobUrl } from "../../services/image-fetch";
 import { storeImage, md5Hash } from "../../services/image-store";
 
 type Props = {
@@ -54,7 +55,7 @@ function CopyableId({ label, id }: { label: string; id: string }) {
 }
 
 export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Props) {
-  const artistImageUrl = useArtistImage(song.mbzArtistId, song.artistName);
+  const { imageUrl: artistImageUrl, triggerRemote: triggerArtistImage } = useLazyArtistImage(song.mbzArtistId, song.artistName);
   const [mapping, setMapping] = useState<MbzYtMapping | null>(null);
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<CandidateData[]>([]);
@@ -72,15 +73,6 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
   const [activeCoverProvider, setActiveCoverProvider] = useState<string | null>(null);
   const [coverError, setCoverError] = useState<string | null>(null);
 
-  const origins = useAuthStore((s) => s.origins);
-  const [originResults, setOriginResults] = useState<Record<string, { scored: YoutubeSearchScoredVideo[]; selectedIndex: number } | null>>({});
-  const [originLoading, setOriginLoading] = useState<Record<string, boolean>>({});
-
-  const PROVIDER_LABELS: Record<string, string> = {
-    itunes: "iTunes",
-    deezer: "Deezer",
-  };
-
   useEffect(() => {
     if (!song.mbzRecordingId) return;
     loadData();
@@ -90,13 +82,13 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     if (!song.mbzRecordingId) return;
     setLoading(true);
 
-    const localCands = await findLocalCandidates(song.mbzRecordingId, song.originId);
+    const localCands = await findLocalCandidates(song.mbzRecordingId, song.originId, song.name, song.artistName);
     setLocalCandidates(localCands);
 
-    const m = await getMbzYtMapping(song.mbzRecordingId);
+    const m = await getSavedMbzYtMapping(song.mbzRecordingId);
     setMapping(m);
     if (m) {
-      const raw = JSON.parse(m.candidates || "[]") as Partial<CandidateData>[];
+      const raw = (m.candidates || []) as Partial<CandidateData>[];
       const parsed: CandidateData[] = raw.map((c) => ({
         score: 0, keywordScore: 0, diff: 0, titleMatch: false, artistMatch: false,
         albumMatch: false, artistOnChannel: false, exactDuration: false, closestDuration: false,
@@ -106,7 +98,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
         source: (c.source === "custom" || c.source === "ranking" ? c.source : "ranking"),
       }));
       setCandidates(parsed);
-      setSelectedId(m.selectedVideoId);
+      setSelectedId(m.selectedVideoId ?? null);
       setSelectedLocalSongId(m.localSongId ?? null);
     } else {
       setCandidates([]);
@@ -121,7 +113,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     setSelectedLocalSongId(null);
     if (!song.mbzRecordingId || !mapping) return;
     const updated = { ...mapping, selectedVideoId: videoId, selectedType: "manual" as const, selectedSource: "youtube" as const, localSongId: undefined, updatedAt: Date.now() };
-    await setMbzYtMapping(updated);
+    await setSavedMbzYtMapping(updated);
     setMapping(updated);
   }
 
@@ -147,11 +139,11 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
       selectedType: "manual",
       selectedSource: "local",
       localSongId,
-      candidates: "[]",
+      candidates: [],
       createdAt: now,
       updatedAt: now,
     };
-    await setMbzYtMapping(updated);
+    await setSavedMbzYtMapping(updated);
     setMapping(updated);
   }
 
@@ -184,13 +176,13 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
           albumImageUrl: song.imageUrl,
           selectedVideoId: newCand.videoId,
           selectedType: "custom",
-          candidates: JSON.stringify(updatedCands),
+          candidates: updatedCands,
           customVideoId: newCand.videoId,
           customVideoUrl: customUrl.trim(),
           createdAt: mapping?.createdAt || now,
           updatedAt: now,
         };
-        await setMbzYtMapping(updated);
+        await setSavedMbzYtMapping(updated);
         setMapping(updated);
       }
       setCustomUrl("");
@@ -199,22 +191,10 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     }
   }
 
-  async function handleFetchOrigin(origin: Origin) {
-    setOriginLoading((prev) => ({ ...prev, [origin.id]: true }));
-    try {
-      const result = await searchAndRankAll(song, origin.youtubeMusicHeaders);
-      setOriginResults((prev) => ({ ...prev, [origin.id]: result }));
-    } catch (err) {
-      console.warn("[SongInfoContent] origin fetch failed:", origin.name, err);
-      setOriginResults((prev) => ({ ...prev, [origin.id]: null }));
-    } finally {
-      setOriginLoading((prev) => ({ ...prev, [origin.id]: false }));
-    }
-  }
-
   async function handleFetchProvider(providerName: string) {
     setCoverLoading((prev) => ({ ...prev, [providerName]: true }));
     setCoverError(null);
+    console.log(`[SongInfoContent] fetching from provider: "${providerName}" song="${song.name}" artist="${song.artistName}"`);
     try {
       const items = await artworkResolver.resolveFromProvider(providerName, {
         artist: song.artistName,
@@ -222,6 +202,12 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
         title: song.name,
         durationMs: song.duration ? song.duration * 1000 : undefined,
       });
+      console.log(`[SongInfoContent] "${providerName}" resolved ${items.length} candidate(s)`);
+      if (items.length === 0) {
+        setCoverError(`No results from ${ARTWORK_PROVIDER_META[providerName]?.label || providerName}`);
+        setCoverResults((prev) => ({ ...prev, [providerName]: [] }));
+        return;
+      }
       const candidatesWithBlobs = await Promise.all(
         items.map(async (cand) => ({
           ...cand,
@@ -229,7 +215,9 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
         }))
       );
       setCoverResults((prev) => ({ ...prev, [providerName]: candidatesWithBlobs }));
-    } catch {
+    } catch (err) {
+      console.error(`[SongInfoContent] "${providerName}" fetch error:`, err);
+      setCoverError(`Failed to search ${ARTWORK_PROVIDER_META[providerName]?.label || providerName}`);
       setCoverResults((prev) => ({ ...prev, [providerName]: [] }));
     } finally {
       setCoverLoading((prev) => ({ ...prev, [providerName]: false }));
@@ -316,6 +304,8 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
             fallback={song.artistName.charAt(0)}
             emptySvg={<ArtistEmptySvg />}
             className="h-20 w-20 rounded-full shrink-0"
+            lazy={!artistImageUrl}
+            onLazyLoad={triggerArtistImage}
           />
           <span className="text-[10px] text-muted-foreground truncate max-w-20 text-center">
             {song.artistName}
@@ -351,6 +341,14 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
             </div>
           )}
         </div>
+        {song.path && (
+          <div className="border-t border-border pt-1.5 mt-1.5 flex items-center gap-1.5 text-xs">
+            <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="text-muted-foreground truncate" title={song.path}>
+              {song.path.split("/").slice(0, -1).join("/") || song.path}
+            </span>
+          </div>
+        )}
         <div className="border-t border-border pt-1.5 mt-1.5 space-y-1">
           {song.mbzRecordingId && <CopyableId label="MB Recording" id={song.mbzRecordingId} />}
           {song.mbzArtistId && (
@@ -370,6 +368,29 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
           )}
           {song.mbzTrackId && <CopyableId label="MB Track" id={song.mbzTrackId} />}
         </div>
+
+        {song.youtubeVideoTitle && (
+          <div className="border-t border-border pt-1.5 mt-1.5 space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">YouTube Source</p>
+            <p className="flex items-center gap-1.5 text-xs">
+              <span className="text-foreground truncate">{song.youtubeVideoTitle}</span>
+              {song.youtubeVideoId && (
+                <a
+                  href={`https://music.youtube.com/watch?v=${song.youtubeVideoId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-muted-foreground hover:text-foreground shrink-0 transition-colors"
+                  title="Open in YouTube Music"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </p>
+            {song.youtubeChannelName && (
+              <p className="text-xs text-muted-foreground">by {song.youtubeChannelName}</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Tabs ── */}
@@ -378,9 +399,6 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
           <TabsList className="w-full">
             <TabsTrigger value="sources" className="flex-1 text-xs">Sources</TabsTrigger>
             <TabsTrigger value="covers" className="flex-1 text-xs">Covers</TabsTrigger>
-            {origins.length > 0 && (
-              <TabsTrigger value="origins" className="flex-1 text-xs">Origins</TabsTrigger>
-            )}
           </TabsList>
 
           {/* ── Sources Tab ── */}
@@ -391,11 +409,25 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
               </div>
             ) : (
               <>
-                {/* Current selection */}
-                {selectedCand && (
+                {/* Current source indicator */}
+                {selectedLocalSongId ? (
+                  <div className="rounded-lg border border-green-500/40 bg-green-500/10 p-3 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-green-600 dark:text-green-400">
+                        Playing from local file
+                      </p>
+                      <Badge variant="outline" className="text-[10px] border-green-500/30 text-green-600 dark:text-green-400">
+                        Local
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {localCandidates.find((lc) => lc.song.id === selectedLocalSongId)?.filePath || "Local file"}
+                    </p>
+                  </div>
+                ) : selectedCand ? (
                   <div className="rounded-lg border border-accent bg-accent/20 p-3 space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-foreground">Current selection</p>
+                      <p className="text-xs font-medium text-foreground">Playing from YouTube</p>
                       <Badge variant="outline" className="text-[10px]">
                         {mapping?.selectedType === "custom" ? "Custom" : mapping?.selectedType === "manual" ? "Manual" : "Auto"}
                       </Badge>
@@ -416,7 +448,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
                       </div>
                     </div>
                   </div>
-                )}
+                ) : null}
 
                 {/* YouTube candidates */}
                 <div className="space-y-1">
@@ -557,7 +589,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
               {artworkResolver.getProviderNames().map((name) => {
                 const candidates = coverResults[name] || [];
                 const loading = coverLoading[name];
-                const label = PROVIDER_LABELS[name] || name;
+                const label = ARTWORK_PROVIDER_META[name]?.label || name;
                 const hasResults = candidates.length > 0;
                 const isActive = activeCoverProvider === name;
 
@@ -623,58 +655,6 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
               })}
             </div>
           </TabsContent>
-
-          {/* ── Origins Tab ── */}
-          {origins.length > 0 && (
-            <TabsContent value="origins" className="space-y-1.5">
-              {origins.map((origin) => {
-                const isCurrent = song.originId === origin.id;
-                const result = originResults[origin.id];
-                const loading = originLoading[origin.id];
-                const hasYtCookies = !!origin.youtubeMusicHeaders;
-                return (
-                  <div
-                    key={origin.id}
-                    className={cn(
-                      "flex items-center gap-2 rounded-md border p-2",
-                      isCurrent ? "border-accent/50 bg-accent/10" : "border-border/40",
-                    )}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-medium truncate">{origin.name}</span>
-                        {isCurrent && (
-                          <span className="text-[9px] text-muted-foreground bg-muted px-1 rounded">current</span>
-                        )}
-                        <Badge variant="outline" className="text-[9px] px-1 h-4">
-                          {origin.type}
-                        </Badge>
-                      </div>
-                      {result && result.scored.length > 0 && (
-                        <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                          {result.scored[0].video.title} ({result.scored[0].breakdown.score.toFixed(1)})
-                        </p>
-                      )}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-[10px] shrink-0"
-                      onClick={() => handleFetchOrigin(origin)}
-                      disabled={loading || !hasYtCookies}
-                      title={!hasYtCookies ? "No YouTube cookies configured" : `Search YouTube with ${origin.name}`}
-                    >
-                      {loading ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Search className="h-3 w-3" />
-                      )}
-                    </Button>
-                  </div>
-                );
-              })}
-            </TabsContent>
-          )}
         </Tabs>
       )}
     </div>

@@ -2,6 +2,7 @@ import { usePlayerStore } from "../../stores/player.store";
 import { useState, useRef } from "react";
 import { PlayerStatus } from "../../types/domain-types";
 import type { Album, AlbumArtist } from "../../types/domain-types";
+import { buildArtistNav, buildAlbumNav } from "../../lib/build-navigation";
 import { Button } from "../../components/ui/button";
 import { CoverImage } from "../../components/ui/art-image";
 import { Slider } from "../../components/ui/slider";
@@ -84,14 +85,8 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist, onClose }: N
               className="cursor-pointer text-xl font-bold text-foreground hover:underline"
               onClick={() => {
                 if (currentTrack.albumName) {
-                  onNavigateAlbum?.({
-                    id: currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName.toLowerCase().replace(/\s+/g, "-")}`,
-                    originId: currentTrack.originId,
-                    originType: currentTrack.originType,
-                    name: currentTrack.albumName,
-                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
-                    imageUrl: currentTrack.imageUrl || null,
-                  });
+                  const nav = buildAlbumNav(currentTrack);
+                  if (nav) onNavigateAlbum?.(nav);
                 }
               }}
             >
@@ -99,16 +94,7 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist, onClose }: N
             </h1>
             <span
               className="cursor-pointer text-base text-muted-foreground hover:text-foreground hover:underline"
-              onClick={() => {
-                onNavigateArtist?.({
-                  id: `artist-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}`,
-                  originId: currentTrack.originId,
-                  originType: currentTrack.originType,
-                  name: currentTrack.artistName,
-                  imageUrl: currentTrack.imageUrl || null,
-                  mbz: currentTrack.mbzArtistId,
-                });
-              }}
+              onClick={() => onNavigateArtist?.(buildArtistNav(currentTrack))}
             >
               {currentTrack.artistName}
             </span>
@@ -116,16 +102,8 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist, onClose }: N
               <span
                 className="cursor-pointer text-sm text-muted-foreground/60 hover:text-foreground hover:underline"
                 onClick={() => {
-                  const albumName = currentTrack.albumName;
-                  if (!albumName) return;
-                  onNavigateAlbum?.({
-                    id: currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${albumName.toLowerCase().replace(/\s+/g, "-")}`,
-                    originId: currentTrack.originId,
-                    originType: currentTrack.originType,
-                    name: albumName,
-                    albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
-                    imageUrl: currentTrack.imageUrl || null,
-                  });
+                  const nav = buildAlbumNav(currentTrack);
+                  if (nav) onNavigateAlbum?.(nav);
                 }}
               >
                 {currentTrack.albumName}
@@ -248,41 +226,48 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist, onClose }: N
                     src={track.imageUrl}
                     alt={track.name}
                     fallback={track.name.charAt(0)}
-                    className="h-10 w-10"
+                    className="h-10 w-10 shrink-0 rounded-md"
                   />
                   <div className="min-w-0 flex-1">
-                    <span
-                      className="cursor-pointer truncate text-sm font-medium text-foreground hover:underline"
-                      onClick={() => {
-                        if (track.albumName) {
-                          onNavigateAlbum?.({
-                            id: track.albumId || `album-${(track.albumArtistName || track.artistName).toLowerCase().replace(/\s+/g, "-")}-${track.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                    <p className="truncate text-sm font-medium">{track.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      <span
+                        className="cursor-pointer hover:text-foreground hover:underline"
+                        onClick={() => {
+                          onNavigateArtist?.({
+                            id: `artist-${track.artistName.toLowerCase().replace(/\s+/g, "-")}`,
                             originId: track.originId,
                             originType: track.originType,
-                            name: track.albumName,
-                            albumArtistName: track.albumArtistName || track.artistName,
+                            name: track.artistName,
                             imageUrl: track.imageUrl || null,
+                            mbz: track.mbzArtistId,
                           });
-                        }
-                      }}
-                    >
-                      {track.name}
-                    </span>
-                    <span
-                      className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
-                      onClick={() => {
-                        onNavigateArtist?.({
-                          id: `artist-${track.artistName.toLowerCase().replace(/\s+/g, "-")}`,
-                          originId: track.originId,
-                          originType: track.originType,
-                          name: track.artistName,
-                          imageUrl: track.imageUrl || null,
-                          mbz: track.mbzArtistId,
-                        });
-                      }}
-                    >
-                      {track.artistName}
-                    </span>
+                        }}
+                      >
+                        {track.artistName}
+                      </span>
+                      {track.albumName && (
+                        <>
+                          {" \u00b7 "}
+                          <span
+                            className="cursor-pointer hover:text-foreground hover:underline"
+                            onClick={() => {
+                              const albumName = track.albumName as string;
+                              onNavigateAlbum?.({
+                                id: track.albumId || `album-${(track.albumArtistName || track.artistName).toLowerCase().replace(/\s+/g, "-")}-${albumName.toLowerCase().replace(/\s+/g, "-")}`,
+                                originId: track.originId,
+                                originType: track.originType,
+                                name: albumName,
+                                albumArtistName: track.albumArtistName || track.artistName,
+                                imageUrl: track.imageUrl || null,
+                              });
+                            }}
+                          >
+                            {track.albumName}
+                          </span>
+                        </>
+                      )}
+                    </p>
                   </div>
                   <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
                     {formatDuration(track.duration)}

@@ -8,15 +8,15 @@ import {
   renamePlaylist,
   deletePlaylist,
 } from "../../services/playlist-service";
-import { getSongByMbid } from "../../services/local-database";
-import { dbSongToSong } from "../../services/dto";
+import { getSongByMbid } from "../../api/local/local-queries";
+import { OriginType } from "../../types/domain-types";
 import type { Album, AlbumArtist, Playlist, Song } from "../../types/domain-types";
+import { sqliteDbTrackToSong } from "../../services/sqlite-db/sqlite-db-resolver";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import { CoverImage } from "../../components/ui/art-image";
-import { DataTable, type ColumnDef } from "../shared/data-table";
-import { formatDuration } from "../../lib/utils";
+import { DataTable } from "../shared/data-table";
+import { songColumns } from "../shared/song-columns";
 import { ArrowLeft, Play, Trash2, Pencil, X, Check } from "lucide-react";
 import { useState as useStateFn } from "react";
 
@@ -47,7 +47,7 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
       }
       const dbSongs = (await Promise.all(mbids.map((mbid) => getSongByMbid(mbid)))).filter(Boolean);
       const originId = currentOrigin?.id || playlist.originId;
-      const mapped = dbSongs.map((s) => dbSongToSong(s!, originId));
+      const mapped: Song[] = dbSongs.map((s) => sqliteDbTrackToSong(s!, originId, OriginType.LOCAL));
       setSongs(mapped);
       setSongCount(mapped.length);
     } catch (err) {
@@ -97,56 +97,36 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
     setQueue([song], { type: "now" });
   }
 
-  const columns: ColumnDef<Song>[] = [
-    {
-      id: "cover",
-      label: "",
-      width: "44px",
-      render: (song) => (
-        <CoverImage
-          src={song.imageUrl || undefined}
-          alt={song.name}
-          fallback={song.name.charAt(0)}
-          className="h-9 w-9 rounded object-cover"
-        />
-      ),
-    },
-    {
-      id: "titleArtist",
-      label: "Title & Artist",
-      sortable: true,
-      sortValue: (s) => `${s.name} ${s.artistName}`,
-      render: (song) => (
-        <div>
-          <p className="truncate text-sm font-medium">{song.name}</p>
-          <p className="truncate text-xs text-muted-foreground">{song.artistName}</p>
-        </div>
-      ),
-    },
-    {
-      id: "album",
-      label: "Album",
-      sortable: true,
-      sortValue: (s) => s.albumName ?? "",
-      render: (song) => (
-        <span className="truncate text-sm text-muted-foreground">{song.albumName || "—"}</span>
-      ),
-    },
-    {
-      id: "duration",
-      label: "⏱",
-      width: "64px",
-      sortable: true,
-      sortValue: (s) => s.duration ?? 0,
-      render: (song) => (
-        <span className="text-sm text-muted-foreground">{formatDuration(song.duration)}</span>
-      ),
-    },
+  const handleNavArtist = useCallback((song: Song) => {
+    onNavigateArtist?.({
+      id: `artist-${song.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+      originId: song.originId,
+      originType: song.originType,
+      name: song.artistName,
+      imageUrl: song.imageUrl || null,
+      mbz: song.mbzArtistId,
+    });
+  }, [onNavigateArtist]);
+
+  const handleNavAlbum = useCallback((song: Song) => {
+    if (!song.albumName) return;
+    onNavigateAlbum?.({
+      id: song.albumId || `album-${song.artistName.toLowerCase().replace(/\s+/g, "-")}-${song.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+      originId: song.originId,
+      originType: song.originType,
+      name: song.albumName,
+      albumArtistName: song.albumArtistName || song.artistName,
+      imageUrl: song.imageUrl || null,
+    });
+  }, [onNavigateAlbum]);
+
+  const columns = [
+    ...songColumns({ onNavigateArtist: handleNavArtist, onNavigateAlbum: handleNavAlbum }),
     {
       id: "remove",
       label: "",
       width: "40px",
-      render: (song) => (
+      render: (song: Song) => (
         <Button
           variant="ghost"
           size="icon"

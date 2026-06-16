@@ -1,5 +1,5 @@
 import { platformFetch } from "../platform-fetch";
-import { fetchImageAsBlobUrl } from "../image-cache";
+import { fetchImageAsBlobUrl } from "../image-fetch";
 import { useSettingsStore } from "../../stores/settings.store";
 
 export type CoverResult = {
@@ -131,6 +131,26 @@ export async function findCoverFromDeezer(
 export async function resolveAlbumCover(
   input: ResolveCoverInput,
 ): Promise<CoverResult> {
+  // 0. Try local embedded covers first (SQLite)
+  try {
+    const { initDatabase, isReady } = await import("../../services/db/database");
+    const { findAlbumByName } = await import("../../services/db/repositories/album-repo");
+    const { sqliteDbImageToObjectUrl } = await import("../sqlite-db/sqlite-db-image");
+    const { useAuthStore } = await import("../../stores/auth.store");
+    const { OriginType } = await import("../../types/domain-types");
+    const root = useAuthStore.getState().origins.find((o: any) => o.type === OriginType.LOCAL)?.folderPath;
+    if (root) {
+      if (!isReady()) await initDatabase(root);
+      const meta = findAlbumByName(input.artist, input.album);
+      if (meta?.images?.[0]?.url) {
+        const imgUrl = await sqliteDbImageToObjectUrl(root, meta.images[0].url);
+        if (imgUrl) return { provider: "local-embedded", url: imgUrl };
+      }
+    }
+  } catch {
+    // SQLite not available
+  }
+
   const isEnabled = (name: string) => useSettingsStore.getState().isArtworkProviderEnabled(name);
 
   type ProviderDef = { name: string; fn: () => Promise<CoverResult | null> };

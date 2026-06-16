@@ -1,33 +1,18 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { MusicBrainzCacheTtl } from "../services/musicbrainz-disk-cache";
 
 export type VisualizerType = "butterchurn" | "audiomotion" | "none";
-
-export type KeywordWeight = {
-  term: string;
-  weight: number;
-};
 
 export type RankingWeights = {
   title: number;
   artist: number;
   album: number;
   duration: number;
-  artistOnChannel: number;
-  keywords: KeywordWeight[];
 };
-
-export const DEFAULT_KEYWORDS: KeywordWeight[] = [
-  { term: "CD Audio", weight: 1.0 },
-];
 
 export type ArtworkProviderSetting = {
   enabled: boolean;
   paceMs: number;
-  apiKey?: string;
-  apiSecret?: string;
-  token?: string;
 };
 
 export type ArtworkProviders = Record<string, ArtworkProviderSetting>;
@@ -38,9 +23,6 @@ export const DEFAULT_ARTWORK_PROVIDERS: ArtworkProviders = {
   musicbrainz_release_group: { enabled: true, paceMs: 1000 },
   itunes: { enabled: false, paceMs: 500 },
   deezer: { enabled: false, paceMs: 500 },
-  spotify: { enabled: false, paceMs: 1000, apiKey: "", apiSecret: "" },
-  discogs: { enabled: false, paceMs: 1000, token: "" },
-  fanart_tv: { enabled: false, paceMs: 500, apiKey: "" },
 };
 
 type SettingsState = {
@@ -49,7 +31,8 @@ type SettingsState = {
   visualizerEnabled: boolean;
   audioApi: "webaudio" | "htmlaudio";
   crossfadeEnabled: boolean;
-  crossfadeDuration: number;
+  fadeInDuration: number;
+  fadeOutDuration: number;
   transitionMixingEnabled: boolean;
   reconnectionEnabled: boolean;
   sidebarCollapsed: boolean;
@@ -63,7 +46,6 @@ type SettingsState = {
   searchTimeoutMs: number;
   streamTimeoutMs: number;
   cacheTtlMinutes: number;
-  musicbrainzCacheTtl: MusicBrainzCacheTtl;
   rankingWeights: RankingWeights;
   artworkProviders: ArtworkProviders;
 
@@ -72,7 +54,8 @@ type SettingsState = {
   setVisualizerEnabled: (enabled: boolean) => void;
   setAudioApi: (api: "webaudio" | "htmlaudio") => void;
   setCrossfadeEnabled: (enabled: boolean) => void;
-  setCrossfadeDuration: (duration: number) => void;
+  setFadeInDuration: (duration: number) => void;
+  setFadeOutDuration: (duration: number) => void;
   setTransitionMixingEnabled: (enabled: boolean) => void;
   setReconnectionEnabled: (enabled: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -86,11 +69,7 @@ type SettingsState = {
   setSearchTimeoutMs: (ms: number) => void;
   setStreamTimeoutMs: (ms: number) => void;
   setCacheTtlMinutes: (min: number) => void;
-  setMusicbrainzCacheTtl: (ttl: MusicBrainzCacheTtl) => void;
   setRankingWeights: (weights: RankingWeights) => void;
-  addRankingKeyword: (keyword: KeywordWeight) => void;
-  removeRankingKeyword: (term: string) => void;
-  updateRankingKeyword: (term: string, updates: Partial<KeywordWeight>) => void;
   toggleSidebar: () => void;
   isArtworkProviderEnabled: (name: string) => boolean;
   getArtworkPaceMs: (name: string) => number;
@@ -105,7 +84,8 @@ export const useSettingsStore = create<SettingsState>()(
       visualizerEnabled: false,
       audioApi: "webaudio",
       crossfadeEnabled: false,
-      crossfadeDuration: 3,
+      fadeInDuration: 3,
+      fadeOutDuration: 3,
       transitionMixingEnabled: false,
       reconnectionEnabled: true,
       sidebarCollapsed: false,
@@ -119,8 +99,7 @@ export const useSettingsStore = create<SettingsState>()(
       searchTimeoutMs: 60000,
       streamTimeoutMs: 60000,
       cacheTtlMinutes: 60,
-      musicbrainzCacheTtl: "30min",
-      rankingWeights: { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, keywords: [...DEFAULT_KEYWORDS] },
+      rankingWeights: { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5 },
       artworkProviders: { ...DEFAULT_ARTWORK_PROVIDERS },
 
       setTheme: (theme) => set({ theme }),
@@ -128,7 +107,8 @@ export const useSettingsStore = create<SettingsState>()(
       setVisualizerEnabled: (visualizerEnabled) => set({ visualizerEnabled }),
       setAudioApi: (audioApi) => set({ audioApi }),
       setCrossfadeEnabled: (crossfadeEnabled) => set({ crossfadeEnabled }),
-      setCrossfadeDuration: (crossfadeDuration) => set({ crossfadeDuration }),
+      setFadeInDuration: (fadeInDuration) => set({ fadeInDuration }),
+      setFadeOutDuration: (fadeOutDuration) => set({ fadeOutDuration }),
       setTransitionMixingEnabled: (transitionMixingEnabled) => set({ transitionMixingEnabled }),
       setReconnectionEnabled: (reconnectionEnabled) => set({ reconnectionEnabled }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
@@ -142,38 +122,7 @@ export const useSettingsStore = create<SettingsState>()(
       setSearchTimeoutMs: (searchTimeoutMs) => set({ searchTimeoutMs }),
       setStreamTimeoutMs: (streamTimeoutMs) => set({ streamTimeoutMs }),
       setCacheTtlMinutes: (cacheTtlMinutes) => set({ cacheTtlMinutes }),
-      setMusicbrainzCacheTtl: (musicbrainzCacheTtl) => set({ musicbrainzCacheTtl }),
-      setRankingWeights: (rankingWeights) =>
-        set((state) => ({
-          rankingWeights: {
-            ...{ title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, keywords: [] },
-            ...state.rankingWeights,
-            ...rankingWeights,
-          },
-        })),
-      addRankingKeyword: (keyword) =>
-        set((state) => ({
-          rankingWeights: {
-            ...state.rankingWeights,
-            keywords: [...state.rankingWeights.keywords, keyword],
-          },
-        })),
-      removeRankingKeyword: (term) =>
-        set((state) => ({
-          rankingWeights: {
-            ...state.rankingWeights,
-            keywords: state.rankingWeights.keywords.filter((k) => k.term !== term),
-          },
-        })),
-      updateRankingKeyword: (term, updates) =>
-        set((state) => ({
-          rankingWeights: {
-            ...state.rankingWeights,
-            keywords: state.rankingWeights.keywords.map((k) =>
-              k.term === term ? { ...k, ...updates } : k,
-            ),
-          },
-        })),
+      setRankingWeights: (rankingWeights) => set({ rankingWeights }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       isArtworkProviderEnabled: (name) => get().artworkProviders[name]?.enabled ?? true,
       getArtworkPaceMs: (name) => get().artworkProviders[name]?.paceMs ?? 1000,

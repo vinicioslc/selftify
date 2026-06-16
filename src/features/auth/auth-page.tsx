@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuthStore } from "../../stores/auth.store";
-import { OriginType } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
+import { buildLocalOrigin } from "../../lib/build-navigation";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
 import { Switch } from "../../components/ui/switch";
@@ -52,16 +52,7 @@ export function AuthPage({ onConnected }: AuthPageProps) {
         return;
       }
 
-      const origin = {
-        id: crypto.randomUUID(),
-        name: form.folderPath.split("/").filter(Boolean).pop() || "Local Files",
-        type: OriginType.LOCAL,
-        folderPath: form.folderPath,
-        downloadFolder: form.downloadFolder || form.folderPath,
-        enableOnlineSearch: form.enableOnlineSearch,
-        musicBrainzToken: form.musicBrainzToken || undefined,
-        youtubeMusicHeaders: form.youtubeMusicHeaders || undefined,
-      };
+      const origin = buildLocalOrigin(form);
       addOrigin(origin);
       setCurrentOrigin(origin);
 

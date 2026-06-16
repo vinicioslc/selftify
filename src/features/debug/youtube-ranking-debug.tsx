@@ -1,13 +1,24 @@
-import { useRankingDebugStore } from "../../stores/ranking-debug.store";
+import { useState } from "react";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Trash2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
+interface DebugScored {
+  video: { id: string; title: string; uploader: string; duration?: { seconds?: number } | number };
+  breakdown: { score: number; titleMatch: boolean; artistMatch: boolean; albumMatch?: boolean; exactDuration?: boolean; closestDuration?: boolean; keywordScore?: number };
+}
+
+interface DebugEntry {
+  searchQuery: string;
+  duration: number | null;
+  selectedVideoId: string | null;
+  scored: DebugScored[];
+}
+
 export function YoutubeRankingDebug({ onClose }: { onClose?: () => void }) {
-  const { entries, clear } = useRankingDebugStore();
-  console.log("[debug-ui] render: entries:", entries.length);
+  const [entries, setEntries] = useState<DebugEntry[]>([]);
   const latest = entries[entries.length - 1];
   const scored = latest?.scored ?? [];
 
@@ -18,7 +29,7 @@ export function YoutubeRankingDebug({ onClose }: { onClose?: () => void }) {
         <span className="font-semibold text-sm">YT Ranking Debug</span>
         <div className="flex items-center gap-1">
           {entries.length > 0 && (
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={clear} title="Clear">
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEntries([])} title="Clear">
               <Trash2 className="h-3 w-3" />
             </Button>
           )}
@@ -87,9 +98,9 @@ export function YoutubeRankingDebug({ onClose }: { onClose?: () => void }) {
                     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
                       <span>T:{booleanToIcon(item.breakdown.titleMatch)}</span>
                       <span>A:{booleanToIcon(item.breakdown.artistMatch)}</span>
-                      <span>Al:{booleanToIcon(item.breakdown.albumMatch)}</span>
-                      <span>D:{booleanToIcon(item.breakdown.exactDuration)}</span>
-                      <span>~D:{booleanToIcon(item.breakdown.closestDuration)}</span>
+                      <span>Al:{booleanToIcon(item.breakdown.albumMatch ?? false)}</span>
+                      <span>D:{booleanToIcon(item.breakdown.exactDuration ?? false)}</span>
+                      <span>~D:{booleanToIcon(item.breakdown.closestDuration ?? false)}</span>
                       {item.video.duration && (
                         <span>⏱{typeof item.video.duration === "number" ? item.video.duration : (item.video.duration as any).seconds ?? "?"}s</span>
                       )}

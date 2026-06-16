@@ -1,15 +1,5 @@
-import { emitCoverUpdate } from "./cover-event-bus";
-
-const DB_NAME = "selftify-images-v2";
-const DB_VERSION = 3;
-const CACHE_VERSION_KEY = "selftify-cache-version";
-const CACHE_VERSION = 3;
-const STORE = "images";
-const INDEX_ARTIST = "by_artist";
-const INDEX_ALBUM = "by_album";
-const INDEX_MBZ = "by_mbz";
-const INDEX_URL = "by_url";
-const INDEX_RG = "by_rg";
+import { sha256Hash, imageRelPath, readSqliteDbImage } from "./sqlite-db/sqlite-db-image";
+import { cacheBlobUrl } from "./image-fetch";
 
 export type ImageRecord = {
   md5: string;
@@ -27,180 +17,94 @@ export type ImageRecord = {
   sourceUrl?: string;
 };
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 export async function md5Hash(buffer: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return bytesToHex(new Uint8Array(digest));
+  return sha256Hash(buffer);
 }
 
-async function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: "md5" });
-        store.createIndex(INDEX_ARTIST, "artistName", { unique: false });
-        store.createIndex(INDEX_ALBUM, "albumName", { unique: false });
-        store.createIndex(INDEX_MBZ, "mbzArtistId", { unique: false });
-        store.createIndex(INDEX_URL, "sourceUrl", { unique: false });
-        store.createIndex(INDEX_RG, "mbzReleaseGroupId", { unique: false });
+export async function storeImage(record: ImageRecord): Promise<string | null> {
+  let relPath: string | null = null;
+  try {
+    const { saveSqliteDbImage } = await import("./sqlite-db/sqlite-db-image");
+    const data = new Uint8Array(record.blob);
+    const category = record.albumName ? "album" as const : "artist" as const;
+    const root = await getLibraryRoot();
+    relPath = await saveSqliteDbImage(root, category, record.md5, data, record.format);
+
+    if (record.albumName && record.artistName && root) {
+      const { upsertCoverCache, ensureDb } = await import("./db/repositories/cover-cache-repo");
+      const dbOk = await ensureDb(root);
+      if (dbOk) {
+        upsertCoverCache(record.artistName, record.albumName, record.md5, record.format, record.sourceUrl);
       }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+    }
+  } catch {}
+  cacheBlobUrl(record.sourceUrl || record.md5, recordToBlobUrl(record));
+  return relPath;
 }
 
-async function getDb(): Promise<IDBDatabase> {
-  return openDb();
-}
-
-export async function storeImage(record: ImageRecord): Promise<void> {
-  const db = await getDb();
-  const existing = await new Promise<ImageRecord | undefined>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).get(record.md5);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  if (existing) return;
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put(record);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  emitCoverUpdate(record.artistName, record.albumName, record.mbzArtistId, record.mbzReleaseGroupId, record.mbzReleaseId);
-}
-
-export async function updateImageMeta(
-  md5: string,
-  meta: Partial<Pick<ImageRecord, "artistName" | "albumName" | "mbzArtistId" | "mbzReleaseGroupId" | "mbzReleaseId">>,
-): Promise<void> {
-  const db = await getDb();
-  const existing = await new Promise<ImageRecord | undefined>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).get(md5);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  if (!existing) return;
-  const updated: ImageRecord = { ...existing, ...meta };
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put(updated);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function getImageByMd5(hash: string): Promise<ImageRecord | null> {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).get(hash);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function getImageBySourceUrl(url: string): Promise<ImageRecord | null> {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const index = tx.objectStore(STORE).index(INDEX_URL);
-    const req = index.get(url);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function getImageByArtist(artistName: string): Promise<ImageRecord | null> {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const index = tx.objectStore(STORE).index(INDEX_ARTIST);
-    const req = index.get(artistName);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function getImageByAlbum(albumName: string): Promise<ImageRecord | null> {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const index = tx.objectStore(STORE).index(INDEX_ALBUM);
-    const req = index.get(albumName);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function findImages(
-  query: Partial<Pick<ImageRecord, "artistName" | "albumName" | "mbzArtistId" | "mbzReleaseGroupId" | "mbzReleaseId">>,
-): Promise<ImageRecord[]> {
-  const db = await getDb();
-  const results: ImageRecord[] = [];
-  const tx = db.transaction(STORE, "readonly");
-  const store = tx.objectStore(STORE);
-
-  return new Promise((resolve, reject) => {
-    const req = store.openCursor();
-    req.onsuccess = () => {
-      const cursor = req.result;
-      if (cursor) {
-        const record = cursor.value as ImageRecord;
-        let match = true;
-        for (const [key, val] of Object.entries(query)) {
-          if (record[key as keyof ImageRecord] !== val) {
-            match = false;
-            break;
-          }
-        }
-        if (match) results.push(record);
-        cursor.continue();
-      } else {
-        resolve(results);
-      }
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function recordToBlobUrl(record: ImageRecord): Promise<string> {
+export function recordToBlobUrl(record: ImageRecord): string {
   const blob = new Blob([record.blob], { type: record.format });
   return URL.createObjectURL(blob);
 }
 
-export async function getBlobUrlByMd5(hash: string): Promise<string | null> {
-  const record = await getImageByMd5(hash);
-  if (!record) return null;
-  return recordToBlobUrl(record);
+export async function updateImageMeta(_hash?: string, _meta?: Record<string, unknown>): Promise<void> {
+  // No-op: metadata stored in SQLite, not in separate image index
+}
+
+export async function getImageByMd5(_md5?: string): Promise<ImageRecord | null> {
+  return null;
+}
+
+export async function getImageBySourceUrl(_sourceUrl?: string): Promise<ImageRecord | null> {
+  return null;
+}
+
+export async function findImages(query?: Record<string, string>): Promise<ImageRecord[]> {
+  if (!query || !query.artistName) return [];
+
+  try {
+    const root = await getLibraryRoot();
+    if (!root) return [];
+
+    const { findCoverCache, ensureDb } = await import("./db/repositories/cover-cache-repo");
+    const dbOk = await ensureDb(root);
+    if (!dbOk) return [];
+
+    const albumName = query.albumName || "";
+    const cached = findCoverCache(query.artistName, albumName);
+    if (!cached) return [];
+
+    const relPath = imageRelPath(cached.hash, cached.format, "album");
+    const data = await readSqliteDbImage(root, relPath);
+    if (!data) return [];
+
+    const record: ImageRecord = {
+      md5: cached.hash,
+      blob: data.buffer as ArrayBuffer,
+      format: cached.format,
+      size: data.byteLength,
+      createdAt: cached.created_at,
+      artistName: cached.artist_name,
+      albumName: cached.album_name,
+      sourceUrl: cached.source_url || undefined,
+    };
+
+    return [record];
+  } catch {
+    return [];
+  }
 }
 
 export async function clearImageStore(): Promise<void> {
-  const db = await getDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).clear();
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  // No-op: images stored in .selftify/images/ on filesystem
 }
 
 export async function checkCacheVersion(): Promise<void> {
-  const stored = localStorage.getItem(CACHE_VERSION_KEY);
-  if (stored !== String(CACHE_VERSION)) {
-    try {
-      await clearImageStore();
-    } catch (err) {
-      console.warn("[image-store] Failed to clear store on version change:", err);
-    }
-    localStorage.setItem(CACHE_VERSION_KEY, String(CACHE_VERSION));
-  }
+  // No-op
+}
+
+async function getLibraryRoot(): Promise<string> {
+  const { useAuthStore } = await import("../stores/auth.store");
+  const { OriginType } = await import("../types/domain-types");
+  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath || "";
 }

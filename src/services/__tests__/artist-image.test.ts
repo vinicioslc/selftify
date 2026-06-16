@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock only the external modules — test the real logic of artist-image.ts
-vi.mock("../image-cache", () => ({
+vi.mock("../image-fetch", () => ({
   fetchImageAsBlobUrl: vi.fn((url: string) => {
     if (url.startsWith("https://upload.wikimedia.org/") || url.startsWith("https://commons.wikimedia.org/")) {
       const filename = url.split("/").pop() || "image";
@@ -205,9 +205,11 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
 describe("fetchArtistImage — cache sem request repetido", () => {
   it("usa cache do Wikipedia em chamadas subsequentes (sem platformFetch duplicado)", async () => {
     let callCount = 0;
+    let wikiCallCount = 0;
     (platformFetch as any).mockImplementation((url: string) => {
       callCount++;
       if (url.includes("en.wikipedia.org/w/api.php")) {
+        wikiCallCount++;
         return Promise.resolve(mockJsonResponse({
           query: {
             pages: {
@@ -228,11 +230,11 @@ describe("fetchArtistImage — cache sem request repetido", () => {
     // Primeira chamada — faz fetch real
     const first = await fetchArtistImage("CacheTest");
     expect(first).toMatch(/^blob:/);
-    expect(callCount).toBe(1);
+    expect(wikiCallCount).toBe(1);
 
-    // Segunda chamada com mesmo nome — usa cache, não chama platformFetch
+    // Segunda chamada com mesmo nome — usa cache, não chama Wikipedia
     const second = await fetchArtistImage("CacheTest");
     expect(second).toMatch(/^blob:/);
-    expect(callCount).toBe(1); // não incrementou
+    expect(wikiCallCount).toBe(1); // Wikipedia não foi chamado de novo
   });
 });

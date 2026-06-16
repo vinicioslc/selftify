@@ -29,6 +29,9 @@ type ElectronApi = {
         genres?: string[];
         mbzRecordingId?: string;
         mbzArtistId?: string;
+        youtubeVideoId?: string;
+        youtubeVideoTitle?: string;
+        youtubeChannelName?: string;
       };
     }) => Promise<void>;
   };
@@ -79,6 +82,9 @@ export interface DownloadPlatform {
       genres?: string[];
       mbzRecordingId?: string;
       mbzArtistId?: string;
+      youtubeVideoId?: string;
+      youtubeVideoTitle?: string;
+      youtubeChannelName?: string;
     };
   }): Promise<void>;
 
@@ -124,22 +130,7 @@ class ElectronDownloadPlatform implements DownloadPlatform {
     return api.yt.processCover({ imageData: params.imageData, outputDir: params.outputDir });
   }
 
-  async embedCover(params: {
-    audioPath: string;
-    coverPath: string;
-    metadata?: {
-      title: string;
-      artist: string;
-      album?: string;
-      albumArtist?: string;
-      trackNumber?: number;
-      discNumber?: number;
-      releaseYear?: number;
-      genres?: string[];
-      mbzRecordingId?: string;
-      mbzArtistId?: string;
-    };
-  }): Promise<void> {
+  async embedCover(params: Parameters<DownloadPlatform['embedCover']>[0]): Promise<void> {
     const api = getElectronApi();
     if (!api) return;
     await api.yt.embedArtwork(params);

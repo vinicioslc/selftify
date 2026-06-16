@@ -91,15 +91,15 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
   },
 
   previous: () => {
-    const { queue, currentTrack, positionMs } = get();
+    const { queue, currentTrack, setSeek } = get();
     if (!currentTrack || queue.length === 0) return;
-    if (positionMs > 3000) {
-      set({ seek: 0, positionMs: 0 });
-      return;
-    }
     const currentIndex = queue.findIndex((t) => t.queueId === currentTrack.queueId);
     if (currentIndex > 0) {
-      set({ currentTrack: queue[currentIndex - 1], seek: 0, positionMs: 0 });
+      set({ currentTrack: queue[currentIndex - 1], positionMs: 0 });
+      setSeek(0);
+    } else {
+      setSeek(0);
+      set({ positionMs: 0 });
     }
   },
 

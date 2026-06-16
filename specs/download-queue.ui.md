@@ -20,6 +20,7 @@ type DownloadButtonProps = {
 - **In queue**: Clock icon with tooltip "In queue — N ahead". Disabled.
 - **In progress**: Spinning loader with tooltip "Downloading...". Disabled.
 - **Completed**: CheckCircle icon with tooltip "Downloaded". Disabled.
+- **Already exists**: Same as Completed — CheckCircle icon with tooltip "Downloaded". The task is marked COMPLETED immediately after `enqueueSong` + `processTask` detects the file on disk, without any download pipeline. The `audioPath` is set to the existing file path.
 - **Failed**: AlertCircle icon with tooltip "Failed — click to retry". On click, calls `retryTask`.
 - **Hidden**: Not rendered if song has `path` (already local). Only shown for online songs.
 
@@ -128,8 +129,11 @@ A dialog/panel showing all download tasks with progress.
 | processing-cover | Processing cover image... |
 | embedding-cover | Embedding into MP3... |
 | completed | Completed |
+| completed (skip) | Already downloaded |
 | failed | Error: <message> |
 | cancelled | Cancelled |
+
+When a task is enqueued but the file already exists on disk, the task shows "Already downloaded" immediately (bypassing all download steps). The DownloadButton shows a checkmark (`CheckCircle2`) with tooltip "Downloaded", identical to a completed task.
 
 **Progress bar:**
 - Color: `--primary` (blue) when active, `--destructive` (red) when failed, `--success` (green) when completed
@@ -211,6 +215,28 @@ When right-clicking a song in search or library results, the context menu includ
 2. Partial audio file deleted via IPC `fs:delete-file`
 3. Task moves to Cancelled section
 4. "Clear Completed" removes all Completed + Cancelled tasks from list
+
+### 6. Song Info — YouTube Source Display
+
+When a downloaded song is viewed in the Song Info panel (`SongInfoContent`), the metadata section shows the original YouTube source:
+
+```
+Title:          Bohemian Rhapsody
+Artist:         Queen
+Album:          A Night at the Opera
+Duration:       5:55
+YouTube Source: Bohemian Rhapsody (Official Video)
+                by Queen Official
+                🔗 https://music.youtube.com/watch?v=fJ9rUzIMcZQ
+```
+
+- Visible only when `song.youtubeVideoTitle` is present
+- Shows: video title, channel name (if available), link icon
+- Title and channel link to the YouTube video (opens externally)
+- Icon: `ExternalLink` (Lucide) next to the YouTube title
+- Placement: in the metadata `<div>`, after the MusicBrainz IDs section, styled like other `CopyableId` rows
+
+**Data source**: The YouTube video ID, title, and channel name are embedded as ID3v2 TXXX frames (`YOUTUBE_TITLE`, `YOUTUBE_URL`, `YOUTUBE_CHANNEL`) during the download `yt:embed-artwork` step. `searchAndRank()` returns `channelName` from `video.uploader`. When the file is re-scanned by the local indexer, `local:parse-file` extracts these tags and populates `DbSong.youtube_video_id` / `youtube_video_title` / `youtube_video_channel`, which flows through the DTO to `Song.youtubeVideoId` / `youtubeVideoTitle` / `youtubeChannelName`.
 
 ### Color/Loading Conventions
 

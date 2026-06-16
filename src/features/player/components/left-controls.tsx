@@ -5,6 +5,7 @@ import { Button } from "../../../components/ui/button";
 import { ChevronUp, AudioLines, Sparkles, BarChart3 } from "lucide-react";
 import type { VisualizerType } from "../../../stores/settings.store";
 import type { Album, AlbumArtist } from "../../../types/domain-types";
+import { buildArtistNav, buildAlbumNav } from "../../../lib/build-navigation";
 
 export function LeftControls({ onNavigate, onNavigateAlbum, onNavigateArtist }: { onNavigate?: (view: any) => void; onNavigateAlbum?: (album: Album) => void; onNavigateArtist?: (artist: AlbumArtist) => void }) {
   const { currentTrack } = usePlayerStore();
@@ -66,14 +67,8 @@ export function LeftControls({ onNavigate, onNavigateAlbum, onNavigateArtist }: 
           className="truncate text-sm font-medium text-foreground hover:underline text-left"
           onClick={() => {
             if (currentTrack.albumName) {
-              onNavigateAlbum?.({
-                id: currentTrack.albumId || `album-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}-${currentTrack.albumName.toLowerCase().replace(/\s+/g, "-")}`,
-                originId: currentTrack.originId,
-                originType: currentTrack.originType,
-                name: currentTrack.albumName,
-                albumArtistName: currentTrack.albumArtistName || currentTrack.artistName,
-                imageUrl: currentTrack.imageUrl || null,
-              });
+              const nav = buildAlbumNav(currentTrack);
+              if (nav) onNavigateAlbum?.(nav);
             }
           }}
         >
@@ -81,16 +76,7 @@ export function LeftControls({ onNavigate, onNavigateAlbum, onNavigateArtist }: 
         </button>
         <span
           className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
-          onClick={() => {
-            onNavigateArtist?.({
-              id: `artist-${currentTrack.artistName.toLowerCase().replace(/\s+/g, "-")}`,
-              originId: currentTrack.originId,
-              originType: currentTrack.originType,
-              name: currentTrack.artistName,
-              imageUrl: currentTrack.imageUrl || null,
-              mbz: currentTrack.mbzArtistId,
-            });
-          }}
+          onClick={() => onNavigateArtist?.(buildArtistNav(currentTrack))}
         >
           {currentTrack.artistName}
         </span>

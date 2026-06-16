@@ -80,11 +80,11 @@ export function PlaylistListPage({ onNavigatePlaylist, onNavigateAlbum, onNaviga
       const { getPlaylistSongIds } = await import("../../services/playlist-service");
       const mbids = await getPlaylistSongIds(playlist.id);
       if (mbids.length === 0) return;
-      const { getSongByMbid } = await import("../../services/local-database");
-      const { dbSongToSong } = await import("../../services/dto");
+      const { getSongByMbid } = await import("../../api/local/local-queries");
+      const { sqliteDbTrackToSong } = await import("../../services/sqlite-db/sqlite-db-resolver");
       const songs = (await Promise.all(mbids.map((mbid) => getSongByMbid(mbid))))
         .filter(Boolean)
-        .map((s) => dbSongToSong(s!, currentOrigin!.id));
+        .map((track) => sqliteDbTrackToSong(track!, currentOrigin!.id, "local" as any));
       if (songs.length === 0) return;
       setQueue(songs, { type: "now" });
       useStatusStore.getState().addMessage(`Playing "${playlist.name}"`, "info", "Playlist");

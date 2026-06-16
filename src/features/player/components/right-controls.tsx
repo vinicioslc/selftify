@@ -5,6 +5,7 @@ import { Button } from "../../../components/ui/button";
 import { Slider } from "../../../components/ui/slider";
 import { MusicInfoPopover } from "./music-info-popover";
 import { Badge } from "../../../components/ui/badge";
+import { cn } from "../../../lib/utils";
 import {
   Volume2,
   VolumeX,
@@ -18,14 +19,12 @@ import type { Album, AlbumArtist } from "../../../types/domain-types";
 import { DownloadStatus } from "../../../types/domain-types";
 
 type RightControlsProps = {
-  currentView?: string;
-  onNavigate?: (view: any) => void;
-  onGoBack?: () => void;
+  onOpenQueue?: () => void;
   onNavigateAlbum?: (album: Album) => void;
   onNavigateArtist?: (artist: AlbumArtist) => void;
 };
 
-export function RightControls({ currentView, onNavigate, onGoBack, onNavigateAlbum, onNavigateArtist }: RightControlsProps) {
+export function RightControls({ onOpenQueue, onNavigateAlbum, onNavigateArtist }: RightControlsProps) {
   const { volume, setVolume, toggleFullScreen, queue, currentTrack } = usePlayerStore();
   const enqueueSong = useDownloadStore((s) => s.enqueueSong);
   const setPanelOpen = useDownloadStore((s) => s.setPanelOpen);
@@ -44,13 +43,16 @@ export function RightControls({ currentView, onNavigate, onGoBack, onNavigateAlb
   return (
     <div className="flex h-full items-center gap-1 px-2" onWheel={handleVolumeWheel}>
       {/* Download current track */}
-      {currentTrack && !currentTrack.path && (
+      {currentTrack && (
         <Button
-          variant="ghost"
+          variant={currentTrack.path ? "default" : "outline"}
           size="icon"
-          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          className={cn(
+            "h-8 w-8",
+            !currentTrack.path && "text-muted-foreground"
+          )}
           onClick={() => enqueueSong(currentTrack)}
-          title="Download current track"
+          title={currentTrack.path ? "Local file — click to re-download" : "Download current track"}
         >
           <Download className="h-4 w-4" />
         </Button>
@@ -89,14 +91,8 @@ export function RightControls({ currentView, onNavigate, onGoBack, onNavigateAlb
         variant="ghost"
         size="icon"
         className={`h-8 w-8 ${queue.length > 0 ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
-        onClick={() => {
-          if (currentView === "now-playing" && onGoBack) {
-            onGoBack();
-          } else {
-            onNavigate?.("now-playing");
-          }
-        }}
-        title={currentView === "now-playing" ? "Close queue" : "Show queue"}
+        onClick={() => onOpenQueue?.()}
+        title="Show queue"
       >
         <ListMusic className="h-4 w-4" />
       </Button>

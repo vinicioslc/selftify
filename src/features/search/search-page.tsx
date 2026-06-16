@@ -8,25 +8,27 @@ import type { AppView } from "../../types/types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardDescription, CardTitle } from "../../components/ui/card";
-import { ArtImage } from "../../components/ui/art-image";
+import { ArtImage, CoverImage } from "../../components/ui/art-image";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Badge } from "../../components/ui/badge";
-import { Search, Play, Plus, Loader2, FolderOpen, Globe, Music, Database, Trash2 } from "lucide-react";
+import { CachedBadge } from "../../components/ui/cached-badge";
+import { Search, Play, Plus, Loader2, FolderOpen, Globe, Music, Trash2 } from "lucide-react";
 import { searchAndRankAll, getSavedSelectedVideoId } from "../../services/youtube-download-service";
 import { DownloadButton } from "../download/download-button";
 import { resolveSong, resolveSongs } from "../../services/stream-resolver";
 import { searchYouTubePure } from "../../services/youtube-pure-search";
 import type { YoutubeSearchScoredVideo } from "../../services/youtube-ranking";
-import { getSearchCache, setSearchCache, pruneExpiredCache, getMbzYtMapping, setMbzYtMapping, type CandidateData } from "../../services/search-cache";
+import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
+import type { CandidateData } from "../../services/sqlite-db/sqlite-db-types";
 import { useSettingsStore } from "../../stores/settings.store";
-import { useRankingDebugStore } from "../../stores/ranking-debug.store";
 import { searchMusicBrainz } from "../../services/search-service";
-import { getCachedResult, setCachedResult, getPendingRequest, setPendingRequest } from "../../services/memory-cache";
 import { DataTable, type ColumnDef } from "../shared/data-table";
+import { songTitleColumn, sourceBadgeColumn } from "../shared/song-columns";
 import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
 import { SongInfoDialog } from "../song-info/song-info-dialog";
-import { AlbumEmptySvg, ArtistEmptySvg, SongEmptySvg } from "../../components/ui/empty-image-svg";
+import { AlbumEmptySvg, ArtistEmptySvg } from "../../components/ui/empty-image-svg";
 import { useArtistImage } from "../../hooks/use-artist-image";
+import { useCover } from "../../hooks/use-cover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,10 +37,50 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { cn, formatDuration } from "../../lib/utils";
-import { getSongCount } from "../../services/local-database";
+import { buildArtistNav, buildAlbumNav } from "../../lib/build-navigation";
 import { moveSongToTrash } from "../../services/move-to-trash";
 
 type SearchMode = "local" | "musicbrainz" | "youtube";
+
+function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavigate?: (artist: AlbumArtist) => void }) {
+  const imageUrl = useArtistImage(artist.mbz, artist.name);
+  return (
+    <div
+      className="flex cursor-pointer flex-col items-center gap-2 transition-opacity hover:opacity-80"
+      onClick={() => onNavigate?.(artist)}
+    >
+      <ArtImage
+        src={imageUrl}
+        alt={artist.name}
+        fallback={artist.name.charAt(0)}
+        emptySvg={<ArtistEmptySvg />}
+        className="h-20 w-20 rounded-md"
+      />
+      <p className="max-w-20 truncate text-center text-xs font-medium">{artist.name}</p>
+    </div>
+  );
+}
+
+function MbSongImageCell({ song }: { song: Song }) {
+  const { coverUrl, loading, triggerRemote } = useCover({
+    artistName: song.artistName,
+    albumName: song.albumName,
+    mbzArtistId: song.mbzArtistId,
+    mbzReleaseGroupId: song.mbzReleaseGroupId,
+    mbzReleaseId: song.mbzAlbumId,
+  }, { deferRemote: true });
+  const finalUrl = coverUrl || song.imageUrl;
+  return (
+    <CoverImage
+      src={finalUrl}
+      alt={song.name}
+      fallback={song.name.charAt(0)}
+      className="h-10 w-10 shrink-0 rounded-md"
+      lazy={!finalUrl}
+      onLazyLoad={triggerRemote}
+    />
+  );
+}
 
 interface SearchPageProps {
   initialQuery?: string;
@@ -97,38 +139,45 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
   useEffect(() => () => { /* cleanup */ }, []);
 
+  const resultCache = useMemo(() => new Map<string, unknown>(), []);
+  const pendingCache = useMemo(() => new Map<string, Promise<unknown>>(), []);
+
+  function cacheKey(provider: string, q: string): string {
+    return `${provider}:${q.toLowerCase().trim()}`;
+  }
+
   /** Shared helper: try memory cache → try pending promise → fetch */
   async function doSearch<T>(
     provider: string,
     q: string,
     fetchFn: () => Promise<T>,
   ): Promise<T> {
-    // 1. Memory cache hit?
-    const cached = getCachedResult<T>(provider, q);
-    if (cached) return cached;
+    const key = cacheKey(provider, q);
 
-    // 2. Already in-flight for this exact query?
-    const pending = getPendingRequest<T>(provider, q);
-    if (pending) return pending;
+    const cached = resultCache.get(key) as T | undefined;
+    if (cached !== undefined) return cached;
 
-    // 3. Fresh request — store promise, cache result on completion
+    const inFlight = pendingCache.get(key) as Promise<T> | undefined;
+    if (inFlight) return inFlight;
+
     const promise = fetchFn();
-    setPendingRequest(provider, q, promise);
+    pendingCache.set(key, promise);
     try {
       const data = await promise;
-      setCachedResult(provider, q, data);
+      resultCache.set(key, data);
       return data;
     } catch (err) {
-      // Don't cache failed results — will retry next time
       throw err;
+    } finally {
+      pendingCache.delete(key);
     }
   }
 
   async function handleSearchInternal(q: string, mode: SearchMode) {
     if (!q.trim() || !currentOrigin) return;
     const addMsg = useStatusStore.getState().addMessage;
-    const cacheTtl = useSettingsStore.getState().cacheTtlMinutes * 60 * 1000;
-    pruneExpiredCache(cacheTtl);
+    const { getSearchCache, setSearchCache } = await import("../../services/sqlite-db/sqlite-db-search-store");
+
 
     setLoading(true);
     setSearchError(null);
@@ -137,14 +186,24 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       setMbResults(null);
       setYtResults({ songs: [], hasMore: false, offset: 0 });
       addMsg("Searching local files...", "info", "Search");
-        const localCacheHit = !!getCachedResult<SearchResults>("local", q);
         try {
+          // Check FSDB cache first
+          const sqliteDbCached = await getSearchCache("local", q);
+          if (sqliteDbCached) {
+            setLocalResults(sqliteDbCached.songs);
+            setIsCached(true);
+            addMsg(`Found ${sqliteDbCached.songs.length} song${sqliteDbCached.songs.length !== 1 ? "s" : ""} in local files (cached)`, "info", "Search");
+            setLoading(false);
+            return;
+          }
+
           const results = await doSearch<SearchResults>("local", q, async () => {
             const ctrl = await getController();
             return (await ctrl.search(q, 20)) ?? { songs: [], albums: [], albumArtists: [] };
           });
+          await setSearchCache("local", q, results).catch(() => {});
           setLocalResults(results.songs);
-          setIsCached(localCacheHit);
+          setIsCached(false);
           addMsg(`Found ${results.songs.length} song${results.songs.length !== 1 ? "s" : ""} in local files`, results.songs.length > 0 ? "success" : "info", "Search");
       } catch (err) {
         console.error("Search error:", err);
@@ -161,8 +220,35 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       setYtResults({ songs: [], hasMore: false, offset: 0 });
 
       try {
-        // 1. Memory cache hit — restore results
-        const cachedMb = getCachedResult<SearchResults>("musicbrainz", q);
+
+        // 1. FSDB cache hit — restore results
+        const sqliteDbCached = await getSearchCache("musicbrainz", q);
+        if (sqliteDbCached) {
+          let resolved = sqliteDbCached;
+          const needsResolve = resolved.songs.length > 0 && !resolved.songs[0].imageUrl?.startsWith("blob:");
+          if (needsResolve || resolved.albumArtists.some((a) => !a.imageUrl)) {
+            try {
+              const ctrl = await getController();
+              if (needsResolve) {
+                const withImages = await ctrl.populateSongImages(resolved.songs);
+                resolved = { ...resolved, songs: withImages };
+              }
+              if (resolved.albumArtists.length > 0) {
+                const withArtistImages = await ctrl.populateArtistImages(resolved.albumArtists);
+                resolved = { ...resolved, albumArtists: withArtistImages };
+              }
+            } catch {
+              // non-critical
+            }
+          }
+          setMbResults(resolved);
+          setIsCached(true);
+          setLoading(false);
+          return;
+        }
+
+        // 2. Memory cache hit — restore results
+        const cachedMb = resultCache.get(cacheKey("musicbrainz", q)) as SearchResults | undefined;
         if (cachedMb) {
           let resolved = cachedMb;
           const needsResolve = resolved.songs.length > 0 && !resolved.songs[0].imageUrl?.startsWith("blob:");
@@ -189,7 +275,8 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
         // 2. No cache — do fresh search. Use pending-request dedup so a
         //    duplicate click doesn't fire a second API call.
-        const pending = getPendingRequest<SearchResults>("musicbrainz", q);
+        const mbKey = cacheKey("musicbrainz", q);
+        const pending = pendingCache.get(mbKey) as Promise<SearchResults> | undefined;
         let mbRaw: SearchResults;
 
         if (pending) {
@@ -198,14 +285,11 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
           addMsg("Searching MusicBrainz...", "info", "Search");
 
           const promise = searchMusicBrainz(q, 20, currentOrigin.id);
-          setPendingRequest("musicbrainz", q, promise);
+          pendingCache.set(mbKey, promise);
           mbRaw = await promise;
-          setCachedResult("musicbrainz", q, mbRaw);
+          resultCache.set(mbKey, mbRaw);
 
-          // Persist to IndexedDB so results survive page refresh
-          if (mbRaw.songs.length > 0 || mbRaw.albums.length > 0 || mbRaw.albumArtists.length > 0) {
-            setSearchCache("musicbrainz", q, mbRaw).catch(() => {});
-          }
+          // Results cached in-memory; no client-side persistence needed
         }
 
         // Resolve images through centralized pipeline
@@ -227,6 +311,8 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
         setIsCached(false);
         setMbResults(mbRaw);
+        // Save to persistent FSDB cache
+        setSearchCache("musicbrainz", q, mbRaw).catch(() => {});
       } catch (err) {
         console.error("Search error:", err);
         setSearchError("Search failed. Please try again.");
@@ -242,7 +328,18 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     setLocalResults([]);
     setMbResults(null);
     try {
-      const cachedYt = getCachedResult<{ songs: Song[]; hasMore: boolean }>("youtube", q);
+
+      // 1. FSDB cache hit
+      const sqliteDbCached = await getSearchCache("youtube", q);
+      if (sqliteDbCached) {
+        setYtResults({ songs: sqliteDbCached.songs, hasMore: false, offset: 20 });
+        setIsCached(true);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Memory cache hit
+      const cachedYt = resultCache.get(cacheKey("youtube", q)) as { songs: Song[]; hasMore: boolean } | undefined;
       if (cachedYt) {
         setYtResults({ songs: cachedYt.songs, hasMore: cachedYt.hasMore, offset: 20 });
         setIsCached(true);
@@ -259,10 +356,9 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
       setIsCached(false);
       setYtResults({ songs: ytRaw.songs, hasMore: ytRaw.hasMore, offset: 20 });
+      setSearchCache("youtube", q, { songs: ytRaw.songs, albums: [], albumArtists: [] }).catch(() => {});
 
-      if (ytRaw.songs.length > 0) {
-        setSearchCache("youtube-pure", q, { songs: ytRaw.songs, albums: [], albumArtists: [] }).catch(() => {});
-      }
+      // Results cached in-memory; no client-side persistence needed
     } catch (err) {
       console.error("Search error:", err);
       setSearchError("Search failed. Please try again.");
@@ -360,9 +456,9 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     });
     // Persist to IndexedDB so subsequent plays use this selection
     if (song.mbzRecordingId) {
-      getMbzYtMapping(song.mbzRecordingId).then((saved) => {
+      getSavedMbzYtMapping(song.mbzRecordingId).then((saved) => {
         if (saved) {
-          setMbzYtMapping({ ...saved, selectedVideoId: videoId, selectedType: "manual", updatedAt: Date.now() });
+          setSavedMbzYtMapping({ ...saved, selectedVideoId: videoId, selectedType: "manual", updatedAt: Date.now() });
         }
       });
     }
@@ -384,13 +480,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       if (url) log(`yt:stream-url OK → url length=${url.length}`, "Audio stream ready ✓");
       else log("yt:stream-url returned null", "Stream resolution failed");
       if (url) {
-        useRankingDebugStore.getState().pushEntry({
-          query: `${song.artistName} ${song.name} ${song.albumName ?? ""}`.trim(),
-          searchQuery: videoId,
-          videos: [{ id: videoId, title: song.name, uploader: song.artistName }],
-          scored: [], selectedVideoId: videoId,
-          duration: song.duration, timestamp: Date.now(),
-        });
+        console.debug("[search-page] stream URL resolved", { videoId, song: song.name });
       }
       return url;
     } catch (e) { log(`yt:stream-url error: ${e}`); return null; }
@@ -452,98 +542,122 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   const [contextMenuSong, setContextMenuSong] = useState<Song | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const songColumns = useMemo(
+  const handleNavArtist = useCallback((song: Song) => {
+    onNavigateArtist?.(buildArtistNav(song));
+  }, [onNavigateArtist]);
+
+  const handleNavAlbum = useCallback((song: Song) => {
+    const nav = buildAlbumNav(song);
+    if (nav) onNavigateAlbum?.(nav);
+  }, [onNavigateAlbum]);
+
+  const searchColumns = useMemo(
     (): ColumnDef<Song>[] => [
+      sourceBadgeColumn(),
+      songTitleColumn({ onNavigateArtist: handleNavArtist, onNavigateAlbum: handleNavAlbum }),
       {
-        id: "cover",
-        label: "",
-        width: "2.5rem",
-        sortable: false,
-        render: (song) => (
-          <div className="relative">
-            <ArtImage
-              src={song.imageUrl}
-              alt={song.name}
-              fallback={song.name.charAt(0)}
-              emptySvg={<SongEmptySvg />}
-              className="h-8 w-8 rounded"
-            />
+        id: "duration",
+        label: "Duration",
+        width: "5rem",
+        sortable: true,
+        sortValue: (s) => s.duration ?? 0,
+        render: (song, _, isSelected) => (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {song.duration ? formatDuration(song.duration) : "--:--"}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "h-7 w-7 transition-opacity",
+                isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+              )}
+              onClick={(e) => {
+                e.stopPropagation();
+                playSong(song);
+              }}
+              disabled={downloadingId === song.id}
+            >
+              {downloadingId === song.id ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Play className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
         ),
       },
       {
-        id: "source",
+        id: "download",
         label: "",
-        width: "1.5rem",
+        width: "2rem",
         sortable: false,
-        render: (song) =>
-          song.id.startsWith("ytpure-") ? (
-            <svg className="h-3.5 w-3.5 text-red-500" viewBox="0 0 24 24" fill="currentColor" aria-label="YouTube">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-            </svg>
-          ) : (
-            <span className="text-[10px] font-bold text-purple-500" title="MusicBrainz">MB</span>
-          ),
+        render: (song) => (
+          <DownloadButton song={song} variant="icon" size="sm" />
+        ),
       },
+      {
+        id: "addToPlaylist",
+        label: "",
+        width: "2rem",
+        sortable: false,
+        render: (song) => (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAddToPlaylistSong(song);
+            }}
+            title="Add to playlist"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        ),
+      },
+    ],
+    [handleNavArtist, handleNavAlbum, downloadingId],
+  );
+
+  const mbSongColumns = useMemo(
+    (): ColumnDef<Song>[] => [
+      sourceBadgeColumn(),
       {
         id: "title",
         label: "Title",
-        width: "1fr",
+        defaultVisible: true,
+        width: "1.5fr",
         sortable: true,
         sortValue: (s) => s.name,
         render: (song) => (
-          <span className="truncate text-sm font-medium">{song.name}</span>
+          <div className="flex min-w-0 items-center gap-3">
+            <MbSongImageCell song={song} />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{song.name}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                <span
+                  className="cursor-pointer hover:text-foreground hover:underline"
+                  onClick={(e) => { e.stopPropagation(); handleNavArtist(song); }}
+                >
+                  {song.artistName}
+                </span>
+                {song.albumName && (
+                  <>
+                    {" \u00b7 "}
+                    <span
+                      className="cursor-pointer hover:text-foreground hover:underline"
+                      onClick={(e) => { e.stopPropagation(); handleNavAlbum(song); }}
+                    >
+                      {song.albumName}
+                    </span>
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
         ),
-      },
-      {
-        id: "artist",
-        label: "Artist",
-        sortable: true,
-        sortValue: (s) => s.artistName,
-        render: (song) => (
-          <span
-            className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
-              onClick={(e) => {
-                  e.stopPropagation();
-                  onNavigateArtist?.({
-                    id: song.artistId || `artist-${song.artistName.toLowerCase().replace(/\s+/g, "-")}`,
-                    originId: song.originId,
-                    originType: song.originType,
-                    name: song.artistName,
-                    imageUrl: song.imageUrl || null,
-                    mbz: song.mbzArtistId,
-                  });
-                }}
-          >
-            {song.artistName}
-          </span>
-        ),
-      },
-      {
-        id: "album",
-        label: "Album",
-        sortable: true,
-        sortValue: (s) => s.albumName || "",
-        render: (song) =>
-          song.albumName ? (
-            <span
-              className="cursor-pointer truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
-              onClick={(e) => {
-                e.stopPropagation();
-                const album: Album = {
-                  id: song.albumId || `album-${song.artistName.toLowerCase().replace(/\s+/g, "-")}-${song.albumName!.toLowerCase().replace(/\s+/g, "-")}`,
-                  originId: song.originId,
-                  originType: song.originType,
-                  name: song.albumName!,
-                  albumArtistName: song.albumArtistName || song.artistName,
-                  imageUrl: song.imageUrl || null,
-                };
-                onNavigateAlbum?.(album);
-              }}
-            >
-              {song.albumName}
-            </span>
-          ) : null,
       },
       {
         id: "duration",
@@ -608,7 +722,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
         ),
       },
     ],
-    [onNavigateAlbum, onNavigateArtist, downloadingId],
+    [handleNavArtist, handleNavAlbum, downloadingId],
   );
 
   const renderMbExpanded = useCallback(
@@ -809,7 +923,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
               </div>
               <DataTable
                 data={localResults}
-                columns={songColumns}
+                columns={searchColumns}
                 getRowId={(s) => s.id}
                 selectedId={selectedSongId}
                 onSelectedIdChange={setSelectedSongId}
@@ -843,7 +957,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
               </div>
               <DataTable
                 data={ytResults.songs}
-                columns={songColumns}
+                columns={searchColumns}
                 getRowId={(s) => s.id}
                 selectedId={selectedSongId}
                 onSelectedIdChange={setSelectedSongId}
@@ -876,20 +990,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
                 <h2 className="text-lg font-semibold">Artists</h2>
                 <div className="flex flex-wrap gap-4">
                   {mbResults.albumArtists.map((artist) => (
-                    <div
-                      key={artist.id}
-                      className="flex cursor-pointer flex-col items-center gap-2 transition-opacity hover:opacity-80"
-                      onClick={() => onNavigateArtist?.(artist)}
-                    >
-                      <ArtImage
-                        src={artist.imageUrl}
-                        alt={artist.name}
-                        fallback={artist.name.charAt(0)}
-                        emptySvg={<ArtistEmptySvg />}
-                        className="h-20 w-20 rounded-md"
-                      />
-                      <p className="max-w-20 truncate text-center text-xs font-medium">{artist.name}</p>
-                    </div>
+                    <SearchArtistCard key={artist.id} artist={artist} onNavigate={onNavigateArtist} />
                   ))}
                 </div>
               </section>
@@ -944,7 +1045,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
                 </div>
                 <DataTable
                   data={mbResults.songs}
-                  columns={songColumns}
+                  columns={mbSongColumns}
                   getRowId={(s) => s.id}
                   selectedId={selectedSongId}
                   onSelectedIdChange={setSelectedSongId}
@@ -970,14 +1071,17 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
           </div>
         )}
 
-        {isCached && !loading && (
-          <div className="absolute right-4 top-2 z-10">
-            <Badge variant="secondary" className="gap-1 text-[10px]">
-              <Database className="h-3 w-3" />
-              Cached
-            </Badge>
-          </div>
-        )}
+        <CachedBadge
+          visible={isCached && !loading}
+          onClear={async () => {
+            const key = `${searchMode}:${query.trim().toLowerCase().replace(/\s+/g, " ")}`;
+            const { deleteSearchCache } = await import("../../services/sqlite-db/sqlite-db-search-store");
+            await deleteSearchCache(key).catch(() => {});
+            resultCache.delete(cacheKey(searchMode, query));
+            setIsCached(false);
+            useStatusStore.getState().addMessage(`Search cache cleared for "${query}"`, "info", "Search");
+          }}
+        />
       </ScrollArea>
 
       {/* Add to Playlist Dialog */}

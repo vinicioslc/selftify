@@ -14,10 +14,13 @@ const mockSetMbzYtMapping = vi.fn();
 const mockDeleteMbzYtMapping = vi.fn();
 const mockRecordRanking = vi.fn();
 
-vi.mock("../search-cache", () => ({
+vi.mock("../sqlite-db/sqlite-db-mappings", () => ({
   getMbzYtMapping: (...args: any[]) => mockGetMbzYtMapping(...args),
   setMbzYtMapping: (...args: any[]) => mockSetMbzYtMapping(...args),
   deleteMbzYtMapping: (...args: any[]) => mockDeleteMbzYtMapping(...args),
+}));
+
+vi.mock("../sqlite-db/sqlite-db-ranking-log", () => ({
   recordRanking: (...args: any[]) => mockRecordRanking(...args),
 }));
 
@@ -37,8 +40,8 @@ vi.mock("../../stores/settings.store", () => ({
 vi.mock("../../stores/auth.store", () => ({
   useAuthStore: {
     getState: () => ({
-      currentOrigin: { youtubeMusicHeaders: null },
-      origins: [],
+      currentOrigin: { youtubeMusicHeaders: null, type: "local" },
+      origins: [{ id: "test", type: "local", folderPath: "/tmp/selftify-test", name: "Test" }],
     }),
   },
 }));
@@ -51,13 +54,6 @@ vi.mock("../../stores/status.store", () => ({
   },
 }));
 
-vi.mock("../../stores/ranking-debug.store", () => ({
-  useRankingDebugStore: {
-    getState: () => ({
-      pushEntry: vi.fn(),
-    }),
-  },
-}));
 
 import {
   searchAndRank,
@@ -144,14 +140,14 @@ describe("youtube-download-service", () => {
       ]);
 
       const result = await searchAndRank(makeSong());
-      expect(result).toEqual({ videoId: "v1", title: "Test Song" });
+      expect(result).toEqual({ videoId: "v1", title: "Test Song", channelName: "Artist" });
     });
 
     it("should use cached mapping if available", async () => {
       const song = makeSong({ mbzRecordingId: "mbz-rec-1" });
       mockGetMbzYtMapping.mockResolvedValue({
         selectedVideoId: "cached-vid",
-        candidates: JSON.stringify([
+        candidates: [
           {
             videoId: "cached-vid",
             title: "Cached Song",
@@ -164,13 +160,55 @@ describe("youtube-download-service", () => {
             closestDuration: false,
             keywordScore: 0,
             diff: 10,
-            source: "ranking",
+            source: "ranking" as const,
           },
-        ]),
+        ],
       });
 
       const result = await searchAndRank(song);
       expect(result?.videoId).toBe("cached-vid");
+      expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    it("should handle cached candidates with null score gracefully", async () => {
+      const song = makeSong({ mbzRecordingId: "mbz-null-score" });
+      mockGetMbzYtMapping.mockResolvedValue({
+        selectedVideoId: "vid-1",
+        candidates: [
+          {
+            videoId: "vid-1",
+            title: "Song Title",
+            uploader: "Artist",
+            score: 0,
+            titleMatch: true,
+            artistMatch: false,
+            albumMatch: false,
+            exactDuration: false,
+            closestDuration: false,
+            keywordScore: 0,
+            diff: 10,
+            source: "ranking" as const,
+          },
+          {
+            videoId: "vid-2",
+            title: "Other Video",
+            uploader: "Someone",
+            score: 0,
+            titleMatch: false,
+            artistMatch: false,
+            albumMatch: false,
+            exactDuration: false,
+            closestDuration: false,
+            keywordScore: 0,
+            diff: 20,
+            source: "ranking" as const,
+          },
+        ],
+      });
+
+      const result = await searchAndRank(song);
+      expect(result).not.toBeNull();
+      expect(result?.videoId).toBe("vid-1");
       expect(mockSearch).not.toHaveBeenCalled();
     });
 
@@ -190,7 +228,9 @@ describe("youtube-download-service", () => {
 
       await searchAndRank(song);
 
-      expect(mockSetMbzYtMapping).toHaveBeenCalledWith(
+      expect(mockSetMbzYtMapping).toHaveBeenCalled();
+      const setCallArgs = mockSetMbzYtMapping.mock.calls[0];
+      expect(setCallArgs[1]).toEqual(
         expect.objectContaining({
           mbzRecordingId: "mbz-rec-1",
           selectedVideoId: "v1",
@@ -240,7 +280,9 @@ describe("youtube-download-service", () => {
       mockSearch.mockResolvedValue([]);
 
       await researchSong(song);
-      expect(mockDeleteMbzYtMapping).toHaveBeenCalledWith("mbz-rec-1");
+      expect(mockDeleteMbzYtMapping).toHaveBeenCalled();
+      const callArgs = mockDeleteMbzYtMapping.mock.calls[0];
+      expect(callArgs[1]).toBe("mbz-rec-1");
     });
 
     it("should not try to delete mapping if no mbzRecordingId", async () => {

@@ -1,16 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { usePlayerStore } from "../../stores/player.store";
 import { useSettingsStore } from "../../stores/settings.store";
+import { useAuthStore } from "../../stores/auth.store";
+import { useStatusStore } from "../../stores/status.store";
 import { OriginType, type AlbumArtist, type Album } from "../../types/domain-types";
-import type { MusicBrainzContext } from "../../services/musicbrainz-disk-cache";
+import type { MusicBrainzContext } from "../../services/musicbrainz-types";
 import { getController } from "../../api/controller";
 import { CoverImage } from "../../components/ui/art-image";
 import { ArtImage } from "../../components/ui/art-image";
+import { cn } from "../../lib/utils";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
 import { ScrollArea } from "../../components/ui/scroll-area";
 
-import { Play, Shuffle, ArrowLeft, Loader2, MoreHorizontal } from "lucide-react";
+import { Play, Shuffle, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
 import { RotatingBlurBackground } from "../shared/rotating-blur-background";
 import { fetchAlbumCover } from "../../services/image-fetch";
 import { fetchArtistImage } from "../../services/artist-image";
@@ -22,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { ArtistImageManager } from "./artist-image-manager";
+import { CachedBadge } from "../../components/ui/cached-badge";
 
 interface ArtistPageProps {
   artist: AlbumArtist;
@@ -36,7 +40,36 @@ type ArtistAlbum = {
   releaseYear?: number;
   hasLocal: boolean;
   primaryType?: string;
+  localSongCount: number;
 };
+
+function fetchAndSetCover(
+  albumId: string,
+  artistName: string,
+  albumName: string,
+  setAlbums: React.Dispatch<React.SetStateAction<ArtistAlbum[]>>,
+  setLoadingAlbumCovers: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  fetchAlbumCover(albumId, undefined, artistName, albumName)
+    .then((url) => {
+      setAlbums((prev) =>
+        prev.map((a) => (a.id === albumId ? { ...a, imageUrl: url || a.imageUrl } : a)),
+      );
+      setLoadingAlbumCovers((prev) => {
+        const next = new Set(prev);
+        next.delete(albumId);
+        return next;
+      });
+    })
+    .catch((err) => {
+      console.error("[artist-page] fetchAlbumCover failed:", albumId, albumName, err);
+      setLoadingAlbumCovers((prev) => {
+        const next = new Set(prev);
+        next.delete(albumId);
+        return next;
+      });
+    });
+}
 
 const PAGE_SIZE = 25;
 
@@ -53,8 +86,18 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   const [loadingAlbumCovers, setLoadingAlbumCovers] = useState<Set<string>>(new Set());
   const [localAlbumNames, setLocalAlbumNames] = useState<Set<string>>(new Set());
   const [imageManagerOpen, setImageManagerOpen] = useState(false);
+  const [mbzLoading, setMbzLoading] = useState(false);
+  const [isArtistCached, setIsArtistCached] = useState(false);
+  const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
   const localAlbumImagesRef = useRef<Map<string, string>>(new Map());
+  const localSongCountsRef = useRef<Map<string, number>>(new Map());
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Reset resolvedMbid when navigating to a different artist
+  useEffect(() => {
+    setResolvedMbid(artist.mbz);
+    setIsArtistCached(false);
+  }, [artist.id]);
 
   // Fetch artist image if not available
   useEffect(() => {
@@ -74,11 +117,170 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
     }
   }, [artist.name, artist.mbz, artist.imageUrl]);
 
+  // Check if artist has cached MusicBrainz data; auto-enrich if not
+  useEffect(() => {
+    if (!artist.name) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+        if (!root) return;
+        const { initDatabase, isReady } = await import("../../services/db/database");
+        const { findArtistByName } = await import("../../services/db/repositories/artist-repo");
+        if (!isReady()) await initDatabase(root);
+        if (!isReady() || cancelled) return;
+        const meta = findArtistByName(artist.name);
+        const cached = meta?.enrichedAt != null;
+        if (!cancelled) setIsArtistCached(cached);
+
+        if (!cached && !cancelled) {
+          const { searchArtists, getArtistDetail } = await import("../../services/musicbrainz-client");
+          const { upsertArtist } = await import("../../services/db/repositories/artist-repo");
+          const addMsg = useStatusStore.getState().addMessage;
+
+          let mbid = artist.mbz;
+          let artistData: any = null;
+
+          if (mbid) {
+            artistData = await getArtistDetail(mbid);
+          }
+          if (!artistData) {
+            const searchRes = await searchArtists(artist.name, { limit: 1 });
+            if (searchRes?.artists?.length) {
+              mbid = searchRes.artists[0].id;
+              artistData = await getArtistDetail(mbid);
+            }
+          }
+          if (!artistData || cancelled) {
+            if (!cancelled) addMsg(`No MusicBrainz match found for ${artist.name}`, "warn", "MusicBrainz");
+            return;
+          }
+
+          const existing = findArtistByName(artist.name);
+          if (!existing || cancelled) return;
+
+          const upsertMeta: import("../../services/sqlite-db/sqlite-db-types").SqliteDbArtistMeta = {
+            $schema: "selftify-artist",
+            version: 1,
+            name: artist.name,
+            sortName: artistData.sortName || existing.sortName || null,
+            mbzId: mbid || existing.mbzId || null,
+            biography: artistData.biography || artistData.wikipedia?.extract || existing.biography || null,
+            genres: artistData.tags ? artistData.tags.map((t: any) => t.name) : existing.genres || [],
+            country: artistData.country || existing.country || null,
+            type: artistData.type || existing.type || null,
+            disambiguation: artistData.disambiguation || existing.disambiguation || null,
+            images: existing.images || [],
+            updatedAt: Date.now(),
+            enrichedAt: Date.now(),
+          };
+          upsertArtist(upsertMeta);
+          if (!cancelled) {
+            setIsArtistCached(true);
+            if (mbid && mbid !== artist.mbz) setResolvedMbid(mbid);
+            addMsg(`MusicBrainz data loaded for ${artist.name}`, "info", "MusicBrainz");
+          }
+        }
+      } catch (err) {
+        console.warn("[artist-page] auto-enrich error:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [artist.name, artist.mbz]);
+
+  async function handleClearArtistCache() {
+    try {
+      const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+      if (!root) return;
+      const { initDatabase, isReady } = await import("../../services/db/database");
+      const { findArtistByName, upsertArtist } = await import("../../services/db/repositories/artist-repo");
+      if (!isReady()) await initDatabase(root);
+      if (!isReady()) return;
+      const meta = findArtistByName(artist.name);
+      if (meta) {
+        meta.enrichedAt = null;
+        meta.biography = null;
+        meta.mbzId = null;
+        meta.genres = [];
+        meta.country = null;
+        meta.type = null;
+        meta.updatedAt = Date.now();
+        upsertArtist(meta);
+      }
+      setIsArtistCached(false);
+      useStatusStore.getState().addMessage(`MusicBrainz cache cleared for ${artist.name}`, "info", "MusicBrainz");
+    } catch {}
+  }
+
   function handleImageSaved(blobUrl: string) {
     if (blobUrl) {
       setArtistImageUrl(blobUrl);
     } else {
       setArtistImageUrl(null);
+    }
+  }
+
+  async function handleFetchMusicBrainz() {
+    const addMsg = useStatusStore.getState().addMessage;
+    setMbzLoading(true);
+    addMsg(`Fetching MusicBrainz data for ${artist.name}\u2026`, "info", "MusicBrainz");
+    try {
+      const { searchArtists, getArtistDetail } = await import("../../services/musicbrainz-client");
+      const { initDatabase, isReady } = await import("../../services/db/database");
+      const { findArtistByName, upsertArtist } = await import("../../services/db/repositories/artist-repo");
+      const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+      if (!root) { addMsg("No local library configured", "warn", "MusicBrainz"); return; }
+      if (!isReady()) await initDatabase(root);
+      if (!isReady()) { addMsg("Database not ready", "warn", "MusicBrainz"); return; }
+
+      let mbid = artist.mbz;
+      let artistData = null;
+
+      if (mbid) {
+        artistData = await getArtistDetail(mbid);
+      }
+      if (!artistData) {
+        const searchRes = await searchArtists(artist.name, { limit: 1 });
+        if (searchRes?.artists?.length && searchRes.artists.length > 0) {
+          const found = searchRes.artists[0];
+          mbid = found.id;
+          artistData = await getArtistDetail(mbid);
+        }
+      }
+      if (!artistData) {
+        addMsg(`No MusicBrainz match found for ${artist.name}`, "warn", "MusicBrainz");
+        return;
+      }
+
+      const existing = findArtistByName(artist.name);
+      if (!existing) {
+        addMsg(`Artist not found in library for ${artist.name}`, "warn", "MusicBrainz");
+        return;
+      }
+
+      const meta = {
+        $schema: "selftify-artist" as const,
+        version: 1 as const,
+        name: artist.name,
+        sortName: (artistData as any).sortName || existing.sortName || null,
+        mbzId: mbid || existing.mbzId || null,
+        biography: (artistData as any).biography || ((artistData as any).wikipedia && (artistData as any).wikipedia.extract) || existing.biography || null,
+        genres: (artistData as any).tags ? (artistData as any).tags.map((t: any) => t.name) : existing.genres || [],
+        country: (artistData as any).country || existing.country || null,
+        type: (artistData as any).type || existing.type || null,
+        disambiguation: (artistData as any).disambiguation || existing.disambiguation || null,
+        images: existing.images || [],
+        updatedAt: Date.now(),
+        enrichedAt: Date.now(),
+      };
+      upsertArtist(meta);
+      setIsArtistCached(true);
+      addMsg(`MusicBrainz data saved for ${artist.name}`, "success", "MusicBrainz");
+    } catch (err) {
+      console.error("[artist-page] MB fetch error:", err);
+      addMsg(`Failed to fetch MusicBrainz data for ${artist.name}`, "danger", "MusicBrainz");
+    } finally {
+      setMbzLoading(false);
     }
   }
 
@@ -92,13 +294,16 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
         const localSongs = await controller.getArtistSongs(artist.name);
         const localNames = new Set<string>();
         const localAlbumImages = new Map<string, string>();
+        const localCounts = new Map<string, number>();
         for (const s of localSongs) {
           if (s.albumName) {
             localNames.add(s.albumName);
+            localCounts.set(s.albumName, (localCounts.get(s.albumName) || 0) + 1);
             if (s.imageUrl) localAlbumImages.set(s.albumName, s.imageUrl);
           }
         }
         localAlbumImagesRef.current = localAlbumImages;
+        localSongCountsRef.current = localCounts;
         if (!cancelled) {
           setLocalAlbumNames(localNames);
           setAlbums([]);
@@ -107,7 +312,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           setTotal(0);
         }
 
-        if (!artist.mbz) {
+        if (!resolvedMbid) {
           if (!cancelled) {
             const localAlbums: ArtistAlbum[] = [];
             const grouped = new Map<string, ArtistAlbum>();
@@ -119,6 +324,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
                   name: key,
                   imageUrl: s.imageUrl,
                   hasLocal: true,
+                  localSongCount: localCounts.get(key) || 0,
                 });
               }
             }
@@ -129,10 +335,10 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
         }
 
         const { getArtistReleaseGroups } = await import("../../services/musicbrainz-client");
-        const mbCtx: MusicBrainzContext | undefined = artist.mbz
-          ? { artistName: artist.name, artistMbid: artist.mbz }
+        const mbCtx: MusicBrainzContext | undefined = resolvedMbid
+          ? { artistName: artist.name, artistMbid: resolvedMbid }
           : undefined;
-        const result = await getArtistReleaseGroups(artist.mbz, PAGE_SIZE, 0, mbCtx);
+        const result = await getArtistReleaseGroups(resolvedMbid!, PAGE_SIZE, 0, mbCtx);
         if (cancelled) return;
         setTotal(result.total);
         if (result.groups.length < PAGE_SIZE) setAllLoaded(true);
@@ -141,7 +347,6 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           const releaseYear = rg["first-release-date"]
             ? parseInt(rg["first-release-date"].slice(0, 4), 10)
             : undefined;
-          // Use local image if available (avoids remote fetch)
           const localImage = rg.title ? localAlbumImages.get(rg.title) ?? null : null;
           return {
             id: rg.id || `rg-${rg.title}`,
@@ -150,6 +355,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
             releaseYear,
             hasLocal: localNames.has(rg.title),
             primaryType: rg["primary-type"],
+            localSongCount: rg.title ? localCounts.get(rg.title) || 0 : 0,
           };
         });
         mapped.sort((a, b) => (b.releaseYear ?? 0) - (a.releaseYear ?? 0));
@@ -162,23 +368,8 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
         setLoadingAlbumCovers(loadingIds);
 
         for (const album of needsCover) {
-          fetchAlbumCover(album.id, undefined, artist.name, album.name).then((url) => {
-            setAlbums((prev) =>
-              prev.map((a) => (a.id === album.id ? { ...a, imageUrl: url || a.imageUrl } : a)),
-            );
-            setLoadingAlbumCovers((prev) => {
-              const next = new Set(prev);
-              next.delete(album.id);
-              return next;
-            });
-          }).catch((err) => {
-            console.error("[artist-page] fetchAlbumCover failed:", album.id, album.name, err);
-            setLoadingAlbumCovers((prev) => {
-              const next = new Set(prev);
-              next.delete(album.id);
-              return next;
-            });
-          });
+          const albumId = album.id;
+          fetchAndSetCover(albumId, artist.name, album.name, setAlbums, setLoadingAlbumCovers);
         }
       } catch (err) {
         console.warn("[artist-page] fetch artist albums error:", err);
@@ -187,17 +378,17 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
       }
     })();
     return () => { cancelled = true; };
-  }, [artist]);
+  }, [artist, resolvedMbid]);
 
   async function loadMore() {
-    if (loadingMore || allLoaded || !artist.mbz) return;
+    if (loadingMore || allLoaded || !resolvedMbid) return;
     setLoadingMore(true);
     try {
       const { getArtistReleaseGroups } = await import("../../services/musicbrainz-client");
-      const mbCtx: MusicBrainzContext | undefined = artist.mbz
-        ? { artistName: artist.name, artistMbid: artist.mbz }
+      const mbCtx: MusicBrainzContext | undefined = resolvedMbid
+        ? { artistName: artist.name, artistMbid: resolvedMbid }
         : undefined;
-      const result = await getArtistReleaseGroups(artist.mbz, PAGE_SIZE, offset, mbCtx);
+      const result = await getArtistReleaseGroups(resolvedMbid, PAGE_SIZE, offset, mbCtx);
       if (result.groups.length < PAGE_SIZE) setAllLoaded(true);
 
       const newAlbums = result.groups.map((rg) => {
@@ -212,6 +403,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           releaseYear,
           hasLocal: localAlbumNames.has(rg.title),
           primaryType: rg["primary-type"],
+          localSongCount: rg.title ? localSongCountsRef.current.get(rg.title) || 0 : 0,
         };
       });
 
@@ -227,23 +419,8 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
       setLoadingAlbumCovers((prev) => new Set([...prev, ...needsCover.map((a) => a.id)]));
 
       for (const album of needsCover) {
-        fetchAlbumCover(album.id, undefined, artist.name, album.name).then((url) => {
-          setAlbums((prev) =>
-            prev.map((a) => (a.id === album.id ? { ...a, imageUrl: url || a.imageUrl } : a)),
-          );
-          setLoadingAlbumCovers((prev) => {
-            const next = new Set(prev);
-            next.delete(album.id);
-            return next;
-          });
-        }).catch((err) => {
-          console.error("[artist-page] loadMore fetchAlbumCover failed:", album.id, album.name, err);
-          setLoadingAlbumCovers((prev) => {
-            const next = new Set(prev);
-            next.delete(album.id);
-            return next;
-          });
-        });
+        const albumId = album.id;
+        fetchAndSetCover(albumId, artist.name, album.name, setAlbums, setLoadingAlbumCovers);
       }
     } catch (err) {
       console.warn("[artist-page] loadMore error:", err);
@@ -255,7 +432,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   // Infinite scroll observer
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || allLoaded || !artist.mbz) return;
+    if (!el || allLoaded || !resolvedMbid) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && !loadingMore) loadMore();
@@ -264,7 +441,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [allLoaded, loadingMore, artist.mbz]);
+  }, [allLoaded, loadingMore, resolvedMbid]);
 
   function albumToAlbumObj(a: ArtistAlbum): Album {
     return {
@@ -288,7 +465,10 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           {items.map((album) => (
             <div
               key={album.id}
-              className="group cursor-pointer"
+              className={cn(
+                "group cursor-pointer",
+                !album.hasLocal && "opacity-60 transition-opacity hover:opacity-100",
+              )}
               onClick={() => onNavigateAlbum(albumToAlbumObj(album))}
             >
               <div className="relative">
@@ -299,6 +479,19 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
                   emptySvg={<AlbumEmptySvg />}
                   className="h-44 w-full md:h-52"
                 />
+                {!album.hasLocal ? (
+                  <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
+                    <span className="text-xs font-medium text-white drop-shadow">
+                      No local songs
+                    </span>
+                  </div>
+                ) : album.localSongCount > 0 ? (
+                  <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/30 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
+                    <span className="text-xs font-medium text-white drop-shadow">
+                      {album.localSongCount} {album.localSongCount === 1 ? "song" : "songs"}
+                    </span>
+                  </div>
+                ) : null}
               </div>
               <div className="px-0.5 pt-2">
                 <p className="truncate text-sm font-medium">{album.name}</p>
@@ -327,11 +520,6 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           animationsEnabled={animationsEnabled}
           status={"paused"}
         />
-        <div className="relative z-10 border-b border-border px-4 py-2">
-          <Button variant="ghost" size="sm" onClick={onBack} className="gap-1 text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </Button>
-        </div>
         <div className="relative z-10 flex flex-col gap-6 p-6 md:flex-row md:items-end md:gap-8">
           <CoverImage
             src={artistImageUrl}
@@ -345,6 +533,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Artist</p>
               <div className="flex items-center gap-2">
                 <h1 className="mt-1 text-3xl font-bold text-foreground">{artist.name}</h1>
+                <CachedBadge visible={isArtistCached} onClear={handleClearArtistCache} />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -354,6 +543,10 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
                   <DropdownMenuContent align="start" className="min-w-[180px]">
                     <DropdownMenuItem onClick={() => setImageManagerOpen(true)}>
                       <span className="text-sm">🖼 Manage Artist Image</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleFetchMusicBrainz} disabled={mbzLoading}>
+                      <RefreshCw className={`mr-2 h-4 w-4 ${mbzLoading ? "animate-spin" : ""}`} />
+                      <span className="text-sm">Fetch MusicBrainz</span>
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -394,7 +587,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
             )}
-            {!allLoaded && artist.mbz && <div ref={sentinelRef} className="h-1" />}
+            {!allLoaded && resolvedMbid && <div ref={sentinelRef} className="h-1" />}
           </>
         )}
       </ScrollArea>

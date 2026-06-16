@@ -2,16 +2,24 @@ import { useEffect, useRef } from "react";
 import { usePlayerStore } from "../../stores/player.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { useAuthStore } from "../../stores/auth.store";
-import { PlayerStatus } from "../../types/domain-types";
+import { PlayerStatus, OriginType } from "../../types/domain-types";
 import { getController } from "../../api/controller";
 import * as electronAudio from "../../services/electron-audio";
 import { fadeVolume, type FadeHandle } from "../../services/audio-engine";
+
+function resolveLocalPath(trackPath: string): string {
+  if (trackPath.startsWith("/")) return trackPath;
+  const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
+  if (origin?.folderPath) return `${origin.folderPath}/${trackPath}`;
+  return trackPath;
+}
 
 export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
   const statusRef = useRef(PlayerStatus.STOPPED);
   const nextRef = useRef<(() => void) | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeHandleRef = useRef<FadeHandle | null>(null);
+  const fadeOutStartedRef = useRef(false);
 
   const {
     currentTrack,
@@ -26,26 +34,64 @@ export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
   } = usePlayerStore();
 
   const currentOrigin = useAuthStore((s) => s.currentOrigin);
-  const { transitionMixingEnabled, crossfadeDuration } = useSettingsStore();
+  const { crossfadeEnabled, fadeInDuration, fadeOutDuration } = useSettingsStore();
 
   statusRef.current = status;
   nextRef.current = next;
 
-  // Progress polling
+  // Progress polling + fade-out detection
   useEffect(() => {
     pollRef.current = setInterval(async () => {
       try {
         const pos = await electronAudio.getPosition();
         setPositionMs(pos * 1000);
-
         const dur = await electronAudio.getDuration();
-        if (dur > 1 && pos >= dur - 0.5) {
-          nextRef.current?.();
+
+        if (dur > 1) {
+          const remaining = dur - pos;
+          const { crossfadeEnabled: cf, fadeOutDuration: fo } = useSettingsStore.getState();
+          const { volume: vol } = usePlayerStore.getState();
+
+          // Fade-out: trigger when within fadeOutDuration of ending
+          if (
+            cf &&
+            fo > 0 &&
+            remaining <= fo &&
+            remaining > 0 &&
+            !fadeOutStartedRef.current &&
+            statusRef.current === PlayerStatus.PLAYING
+          ) {
+            fadeOutStartedRef.current = true;
+            const currentVol = vol;
+            const steps = Math.max(2, Math.floor(remaining * 20));
+            const stepDur = (remaining / steps) * 1000;
+            let step = 0;
+
+            const iv = setInterval(() => {
+              step++;
+              const progress = Math.min(step / steps, 1);
+              const eased = progress < 0.5
+                ? 2 * progress * progress
+                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+              const fadeVol = currentVol * (1 - eased);
+              electronAudio.setVolume(fadeVol).catch(() => {});
+
+              if (step >= steps) {
+                clearInterval(iv);
+                electronAudio.setVolume(0).catch(() => {});
+              }
+            }, stepDur);
+          }
+
+          // End-of-track detection
+          if (remaining <= 0.5) {
+            nextRef.current?.();
+          }
         }
       } catch (err) {
         console.warn("[ipc-audio] poll error:", err);
       }
-    }, 500);
+    }, 200);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
@@ -56,126 +102,14 @@ export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
     if (!currentTrack?.id) return;
     const trackId = currentTrack.id;
     const trackPath = currentTrack.path;
-    const durationSec = crossfadeDuration ?? 3;
+    const fadeInSec = crossfadeEnabled ? (fadeInDuration ?? 3) : 0;
 
-    // Cancel any in-progress fade
     fadeHandleRef.current?.cancel();
+    fadeOutStartedRef.current = false;
 
-    // ── Crossfade mode: fade out current volume, then load, then fade in ──
-    if (transitionMixingEnabled && durationSec > 0) {
-      const crossfadeStart = performance.now();
-      let cancelled = false;
-
-      (async () => {
-        try {
-          // Step 1: Fade out current volume over durationSec
-          const currentVol = volume;
-          await new Promise<void>((resolve) => {
-            // Use setInterval to control mpv volume smoothly (mpv has no RAF)
-            let start: number | null = null;
-            const interval = setInterval(() => {
-              if (cancelled) { clearInterval(interval); resolve(); return; }
-              if (start === null) start = performance.now();
-              const elapsed = (performance.now() - start) / 1000;
-              const progress = Math.min(elapsed / durationSec, 1);
-              const eased = progress < 0.5
-                ? 2 * progress * progress
-                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-              const fadeVol = currentVol * (1 - eased);
-              electronAudio.setVolume(fadeVol).catch(() => {});
-              setTransitionProgress(progress);
-              if (progress >= 1) {
-                clearInterval(interval);
-                resolve();
-              }
-            }, 50);
-          });
-
-          if (cancelled) return;
-
-          // Step 2: Stop old, load new
-          await electronAudio.stopPlayback();
-
-          let url: string | null = null;
-          if (trackPath) {
-            if (trackPath.startsWith("http")) {
-              url = trackPath;
-            } else {
-              try {
-                const { getPlatformService } = await import("../../services/platform/factory");
-                const p = await getPlatformService();
-                const data = await p.readFile(trackPath);
-                if (data) url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer]));
-              } catch (err) {
-                console.warn("[ipc-audio] readFile error:", err);
-              }
-            }
-          }
-          if (!url) {
-            const controller = await getController();
-            url = await controller.getStreamUrl(trackId);
-          }
-          if (!url || cancelled) return;
-
-          setPositionMs(0);
-          setDuration(0);
-          await electronAudio.loadTrack(url);
-
-          if (cancelled) return;
-
-          const dur = await electronAudio.getDuration();
-          setDuration(dur * 1000);
-
-          // Step 3: Fade in volume
-          const fadeInStart = performance.now();
-          await new Promise<void>((resolve) => {
-            let start: number | null = null;
-            const interval = setInterval(() => {
-              if (cancelled) { clearInterval(interval); resolve(); return; }
-              if (start === null) start = performance.now();
-              const elapsed = (performance.now() - start) / 1000;
-              const progress = Math.min(elapsed / durationSec, 1);
-              const eased = progress < 0.5
-                ? 2 * progress * progress
-                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-              const fadeVol = volume * eased;
-              electronAudio.setVolume(fadeVol).catch(() => {});
-              // Update overall progress
-              const totalElapsed = (performance.now() - crossfadeStart) / 1000;
-              const totalDuration = durationSec * 2;
-              setTransitionProgress(Math.min(totalElapsed / totalDuration, 1));
-              if (progress >= 1) {
-                clearInterval(interval);
-                electronAudio.setVolume(volume).catch(() => {});
-                resolve();
-              }
-            }, 50);
-          });
-
-          setTransitionProgress(0);
-
-          const { status: s } = usePlayerStore.getState();
-          if (s !== PlayerStatus.PLAYING) {
-            await electronAudio.pause();
-          }
-        } catch (err) {
-          console.error("[ipc] crossfade load failed:", err);
-          setTransitionProgress(0);
-        }
-      })();
-
-      return () => { cancelled = true; };
-    }
-
-    // ── Non-crossfade: hard-stop ──
-    electronAudio.stopPlayback().catch(() => {});
-
-    let cancelled = false;
-
-    async function loadTrack() {
+    (async () => {
       try {
         let url: string | null = null;
-
         if (trackPath) {
           if (trackPath.startsWith("http")) {
             url = trackPath;
@@ -183,44 +117,68 @@ export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
             try {
               const { getPlatformService } = await import("../../services/platform/factory");
               const p = await getPlatformService();
-              const data = await p.readFile(trackPath);
-              if (data) {
-                url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer]));
-              }
+              const filePath = resolveLocalPath(trackPath);
+              const data = await p.readFile(filePath);
+              if (data) url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer]));
             } catch (err) {
               console.warn("[ipc-audio] readFile error:", err);
             }
           }
         }
-
         if (!url) {
           const controller = await getController();
           url = await controller.getStreamUrl(trackId);
         }
-
-        if (!url || cancelled) return;
+        if (!url) return;
 
         setPositionMs(0);
         setDuration(0);
 
+        // Silence before loading new track (prevent click/pop)
+        await electronAudio.setVolume(0).catch(() => {});
+        await electronAudio.stopPlayback();
         await electronAudio.loadTrack(url);
-
-        if (cancelled) return;
 
         const dur = await electronAudio.getDuration();
         setDuration(dur * 1000);
 
         const { status: s } = usePlayerStore.getState();
+
+        // Fade-in after load
+        if (fadeInSec > 0 && s === PlayerStatus.PLAYING) {
+          setTransitionProgress(0);
+          const fadeStart = performance.now();
+          const iv = setInterval(() => {
+            const elapsed = (performance.now() - fadeStart) / 1000;
+            const progress = Math.min(elapsed / fadeInSec, 1);
+            const eased = progress < 0.5
+              ? 2 * progress * progress
+              : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+            const fadeVol = volume * eased;
+            electronAudio.setVolume(fadeVol).catch(() => {});
+            setTransitionProgress(progress);
+            if (progress >= 1) {
+              clearInterval(iv);
+              electronAudio.setVolume(volume).catch(() => {});
+              setTransitionProgress(0);
+            }
+          }, 50);
+        } else if (fadeInSec <= 0) {
+          await electronAudio.setVolume(volume).catch(() => {});
+        }
+
         if (s !== PlayerStatus.PLAYING) {
           await electronAudio.pause();
         }
       } catch (err) {
         console.error("[ipc] load failed:", err);
       }
-    }
-    loadTrack();
-    return () => { cancelled = true; };
-  }, [currentTrack?.id, setDuration, setPositionMs, currentOrigin?.type, transitionMixingEnabled, crossfadeDuration]);
+    })();
+
+    return () => {
+      fadeHandleRef.current?.cancel();
+    };
+  }, [currentTrack?.id, setDuration, setPositionMs, currentOrigin?.type, crossfadeEnabled, fadeInDuration, volume]);
 
   // Play/pause
   useEffect(() => {
@@ -239,6 +197,7 @@ export function IpcAudioProvider({ children }: { children: React.ReactNode }) {
   // Seek
   useEffect(() => {
     if (seek !== undefined) {
+      fadeOutStartedRef.current = false;
       electronAudio.seek(seek / 1000).catch((err) => console.error("[ipc] seek:", err));
     }
   }, [seekId]);

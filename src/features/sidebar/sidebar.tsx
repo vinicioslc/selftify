@@ -29,6 +29,7 @@ type SidebarProps = {
   onNavigate: (view: AppView) => void;
   onNavigateAlbum?: (album: Album) => void;
   onNavigateArtist?: (artist: AlbumArtist) => void;
+  onOpenSettings?: (tab?: string) => void;
 };
 
 const navItems: { id: string; label: string; icon: any }[] = [
@@ -40,7 +41,7 @@ const navItems: { id: string; label: string; icon: any }[] = [
   { id: "downloads", label: "Downloads", icon: Download },
 ];
 
-export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateArtist }: SidebarProps) {
+export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateArtist, onOpenSettings }: SidebarProps) {
   const { sidebarCollapsed, sidebarWidth, toggleSidebar, setSidebarWidth, sidebarAlbumCollapsed, setSidebarAlbumCollapsed, sidebarShowVisualizer, setSidebarShowVisualizer, visualizerType } = useSettingsStore();
   const setPanelOpen = useDownloadStore((s) => s.setPanelOpen);
   const pendingCount = useDownloadStore((s) => s.tasks.filter(t => t.status === "pending" || t.status === "searching" || t.status === "downloading-audio" || t.status === "getting-cover" || t.status === "processing-cover" || t.status === "embedding-cover").length);
@@ -48,6 +49,8 @@ export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateAr
   function handleNavClick(itemId: string) {
     if (itemId === "downloads") {
       setPanelOpen(true);
+    } else if (itemId === "settings") {
+      onOpenSettings?.();
     } else {
       onNavigate(itemId as AppView);
     }
@@ -152,10 +155,10 @@ export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateAr
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 bg-black/40 text-white"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onNavigate("settings-visualizer");
-                    }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenSettings?.("visualizer");
+                      }}
                   >
                     <Settings className="h-3.5 w-3.5" />
                   </Button>
@@ -174,26 +177,21 @@ export function Sidebar({ currentView, onNavigate, onNavigateAlbum, onNavigateAr
               </Button>
             </div>
 
-            {sidebarShowVisualizer && visualizerType !== "none" ? (
-              <div
-                className="relative w-full overflow-hidden"
-                style={{ aspectRatio: "1/1" }}
-              >
-                <VisualizerContainer force />
-              </div>
-            ) : (
-              <div
-                className="relative w-full overflow-hidden"
-                style={{ aspectRatio: "1/1" }}
-              >
-                <CoverImage
-                  src={currentTrack.imageUrl}
-                  alt={currentTrack.name}
-                  fallback={currentTrack.name.charAt(0)}
-                  className="h-full w-full rounded-none"
-                />
-              </div>
-            )}
+            <div
+              className="relative w-full overflow-hidden"
+              style={{ aspectRatio: "1/1" }}
+            >
+              <VisualizerContainer force>
+                {sidebarShowVisualizer && visualizerType !== "none" ? undefined : (
+                  <CoverImage
+                    src={currentTrack.imageUrl}
+                    alt={currentTrack.name}
+                    fallback={currentTrack.name.charAt(0)}
+                    className="h-full w-full rounded-none"
+                  />
+                )}
+              </VisualizerContainer>
+            </div>
           </div>
         </>
       )}

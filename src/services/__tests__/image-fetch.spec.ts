@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchImageAsBlobUrl, clearImageCaches } from "../image-cache";
-import { fetchCoverArt, fetchAlbumCover } from "../image-fetch";
+import { fetchImageAsBlobUrl, clearImageCaches, fetchCoverArt, fetchAlbumCover } from "../image-fetch";
 
 const blobUrlMap = new Map<string, string>();
 let blobCounter = 0;

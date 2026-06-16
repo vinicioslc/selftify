@@ -1,23 +1,21 @@
-import { useEffect, useMemo, useCallback, useState } from "react";
+import { useEffect, useMemo, useCallback, useState, useRef } from "react";
 import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
-import { useLocalLibraryStore } from "../../stores/local-library.store";
 import { useLocalScan } from "../../hooks/use-local-scan";
 import { useStatusStore } from "../../stores/status.store";
 import { getController } from "../../api/controller";
 import { OriginType, type Song, type Album, type AlbumArtist } from "../../types/domain-types";
-import { getAllSongs, getScanState, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres } from "../../services/local-database";
-import { dbSongToSong } from "../../services/dto";
+import { getAllSongs, getScanState, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres } from "../../api/local/local-queries";
+import { sqliteDbTrackToSong } from "../../services/sqlite-db/sqlite-db-resolver";
 import { SCAN_STATUS_LABEL } from "../../lib/status-labels";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { CoverImage } from "../../components/ui/art-image";
 import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import { formatDuration } from "../../lib/utils";
 import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
-import { DataTable, type ColumnDef } from "../shared/data-table";
+import { DataTable } from "../shared/data-table";
+import { songColumns } from "../shared/song-columns";
 import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
 import { moveSongToTrash } from "../../services/move-to-trash";
 import {
@@ -53,17 +51,14 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   const [contextMenuSong, setContextMenuSong] = useState<Song | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
 
-  const {
-    rootFolder,
-    scanStatus,
-    scanProgress,
-    lastScanned,
-    setRootFolder,
-  } = useLocalLibraryStore();
-
-  const { startScan, pause, resume, rescan, autoScan } = useLocalScan();
+  const { startScan, pause, resume, rescan, status } = useLocalScan();
+  const [rootFolder, setRootFolder] = useState("");
+  const scanStatus = status?.status === "indexing" ? "scanning" : status?.status === "done" ? "done" : status?.status === "paused" ? "paused" : "idle";
+  const scanProgress = { done: status?.progress?.done ?? 0, total: status?.progress?.total ?? 0, currentDir: status?.progress?.currentItem ?? "" };
+  const lastScanned = null;
 
   const isLocalMode = currentOrigin?.type === OriginType.LOCAL;
+  const initialLoadDoneRef = useRef(false);
 
   // ── Data loading ──
 
@@ -77,7 +72,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           setRootFolder(state.root_folder);
           if (state.scan_status === "done") {
             const all = await getAllSongs();
-            const mapped = await Promise.all(all.map((s) => dbSongToSong(s, currentOrigin.id)));
+            const mapped = all.map((track) => sqliteDbTrackToSong(track, currentOrigin.id, OriginType.LOCAL));
             const controller = await getController();
             const withImages = await controller.populateSongImages(mapped);
             setSongs(withImages);
@@ -92,13 +87,14 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           } else {
             setSongs([]);
             setTotalSongs(0);
-            const mappedStatus = state.scan_status === "indexing" ? "scanning" : state.scan_status;
-            useLocalLibraryStore.getState().setScanStatus(mappedStatus as any);
             useStatusStore.getState().addMessage("Local library scan not yet complete", "info", "Library");
           }
         } else {
-          // No scan state in DB — reset store status
-          useLocalLibraryStore.getState().setScanStatus("idle");
+          // No scan state yet — pre-fill root from origin
+          const originPath = currentOrigin?.folderPath;
+          if (originPath && !rootFolder) {
+            setRootFolder(originPath);
+          }
         }
       } else if (searchQuery.trim()) {
         useStatusStore.getState().addMessage(`Searching local files for "${searchQuery}"...`, "info", "Search");
@@ -121,7 +117,15 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
     }
   }, [currentOrigin, isLocalMode, page, searchQuery, setRootFolder]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  // Defer initial load to the scan-completion effect; prevents empty flash
+  // when scan finishes shortly after mount
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true;
+      return;
+    }
+    loadData();
+  }, [loadData]);
 
   // Reload when a local scan completes
   useEffect(() => {
@@ -131,15 +135,12 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanStatus, isLocalMode]);
 
-  // Auto-scan on init / resume interrupted scan
+  // Pre-fill scan input from origin folderPath on mount
   useEffect(() => {
-    if (!isLocalMode || loading) return;
-    (async () => {
-      try { await autoScan(rootFolder); }
-      catch (err) { console.warn("[local-page] autoScan error:", err); }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocalMode, loading, rootFolder]);
+    if (isLocalMode && currentOrigin?.folderPath && !folderPath) {
+      setFolderPath(currentOrigin.folderPath);
+    }
+  }, [isLocalMode, currentOrigin?.folderPath]);
 
   // Reset page on search change
   useEffect(() => { setPage(0); }, [searchQuery]);
@@ -207,6 +208,9 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
     };
     onNavigateArtist?.(artist);
   }
+
+  const handleNavArtist = useCallback((song: Song) => handleArtistClick(song), [handleArtistClick]);
+  const handleNavAlbum = useCallback((song: Song) => handleAlbumClick(song), [handleAlbumClick]);
 
   // ── Formatting helpers ──
 
@@ -492,60 +496,13 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
             )}
 
             <div className="flex-1 overflow-auto px-4 py-2">
-              {(() => {
-                const columns: ColumnDef<Song>[] = [
-                  {
-                    id: "title",
-                    label: "Title",
-                    defaultVisible: true,
-                    width: "1fr",
-                    sortable: true,
-                    sortValue: (s) => s.name,
-                    render: (song) => (
-                      <div className="flex min-w-0 items-center gap-3">
-                        <CoverImage
-                          src={song.imageUrl}
-                          alt={song.name}
-                          fallback={song.name.charAt(0)}
-                          className="h-10 w-10 shrink-0 rounded-md"
-                        />
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">{song.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            <span
-                              className="cursor-pointer hover:text-foreground hover:underline"
-                              onClick={(e) => { e.stopPropagation(); handleArtistClick(song); }}
-                            >
-                              {song.artistName}
-                            </span>
-                            {song.albumName && (
-                              <>
-                                {" \u00b7 "}
-                                <span
-                                  className="cursor-pointer hover:text-foreground hover:underline"
-                                  onClick={(e) => { e.stopPropagation(); handleAlbumClick(song); }}
-                                >
-                                  {song.albumName}
-                                </span>
-                              </>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                    ),
-                  },
-                  {
-                    id: "duration",
-                    label: "Duration",
-                    width: "80px",
-                    sortable: true,
-                    sortValue: (s) => s.duration ?? 0,
-                    render: (song) => (
-                      <span className="text-xs text-muted-foreground">
-                        {song.duration ? formatDuration(Math.round(song.duration)) : "\u2014"}
-                      </span>
-                    ),
-                  },
+              <DataTable
+                data={displaySongs}
+                columns={[
+                  ...songColumns({
+                    onNavigateArtist: handleNavArtist,
+                    onNavigateAlbum: handleNavAlbum,
+                  }),
                   {
                     id: "addToPlaylist",
                     label: "",
@@ -566,27 +523,20 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                       </Button>
                     ),
                   },
-                ];
-
-                return (
-                  <DataTable
-                    data={displaySongs}
-                    columns={columns}
-                    getRowId={(s) => s.id}
-                    selectedId={selectedSongId}
-                    onSelectedIdChange={setSelectedSongId}
-                    onRowDoubleClick={(song) => handlePlayEntry(song)}
-                    onRowContextMenu={(song, e) => {
-                      e.preventDefault();
-                      setContextMenuSong(song);
-                      setContextMenuPos({ x: e.clientX, y: e.clientY });
-                    }}
-                    emptyMessage="No results match your filter."
-                    storageKey="local-songs"
-                    defaultSortColumn="title"
-                  />
-                );
-              })()}
+                ]}
+                getRowId={(s) => s.id}
+                selectedId={selectedSongId}
+                onSelectedIdChange={setSelectedSongId}
+                onRowDoubleClick={(song) => handlePlayEntry(song)}
+                onRowContextMenu={(song, e) => {
+                  e.preventDefault();
+                  setContextMenuSong(song);
+                  setContextMenuPos({ x: e.clientX, y: e.clientY });
+                }}
+                emptyMessage="No results match your filter."
+                storageKey="local-songs"
+                defaultSortColumn="title"
+              />
             </div>
           </TabsContent>
 

@@ -1,5 +1,5 @@
 import type { RankingWeights } from "../stores/settings.store";
-import { recordRanking } from "./search-cache";
+import { recordRanking } from "./sqlite-db/sqlite-db-ranking-log";
 
 export type YoutubeSearchVideo = {
   id: string;
@@ -132,6 +132,5 @@ export async function persistRanking(
     score: winner.breakdown.score,
     scores: JSON.stringify(winner.breakdown),
     candidates: scored.length,
-    createdAt: Date.now(),
   });
 }

@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
-import { fetchImageAsBlobUrl } from "../services/image-cache";
+import { useEffect, useState, useCallback } from "react";
+import { fetchImageAsBlobUrl } from "../services/image-fetch";
 import { findImages, recordToBlobUrl } from "../services/image-store";
-import { electronFindImages, electronRecordToBlobUrl, isElectronImageStore } from "../services/electron-image-store";
 import { platformFetch } from "../services/platform-fetch";
+import { artistImageResolver } from "../services/artist-image/providers/artist-resolver";
+import { useAuthStore } from "../stores/auth.store";
+import { OriginType } from "../types/domain-types";
+import { sqliteDbImageToObjectUrl } from "../services/sqlite-db/sqlite-db-image";
 
 const WIKI_API = "https://en.wikipedia.org/w/api.php";
 const SPARQL_URL = "https://query.wikidata.org/sparql";
@@ -50,7 +53,75 @@ async function queryWikidata(mbid: string): Promise<string | null> {
   }
 }
 
-export function useArtistImage(mbid: string | undefined, name: string): string | null {
+async function resolveArtistImageLocal(name: string): Promise<string | null> {
+  try {
+    const { loadFromArtistDotImg } = await import("../services/dot-img-loader");
+    const dotImgUrl = await loadFromArtistDotImg(name);
+    if (dotImgUrl) return dotImgUrl;
+  } catch {}
+  try {
+    const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+    if (root) {
+      const { initDatabase, isReady } = await import("../services/db/database");
+      const { findArtistByName } = await import("../services/db/repositories/artist-repo");
+      if (!isReady()) await initDatabase(root).catch(() => {});
+      if (isReady()) {
+        const meta = findArtistByName(name);
+        if (meta?.images?.[0]?.url) {
+          const imgUrl = await sqliteDbImageToObjectUrl(root, meta.images[0].url);
+          if (imgUrl) return imgUrl;
+        }
+      }
+    }
+  } catch {}
+  try {
+    const artistNorm = name.toLowerCase().trim();
+    const all = await findImages({ artistName: artistNorm });
+    const saved = all.find((r) => !r.albumName);
+    if (saved && saved.blob.byteLength > 0) {
+      return recordToBlobUrl(saved);
+    }
+  } catch {}
+  return null;
+}
+
+async function resolveArtistImageRemote(mbid: string | undefined, name: string): Promise<string | null> {
+  const sources: Promise<string | null>[] = [];
+
+  if (mbid) {
+    sources.push(
+      queryWikidata(mbid).then(async (imageUrl) => {
+        if (!imageUrl) return null;
+        return fetchImageAsBlobUrl(imageUrl);
+      }),
+    );
+  }
+
+  sources.push(
+    artistImageResolver.searchAll({ artist: name, musicbrainzId: mbid }).then(async (candidates) => {
+      if (candidates.length === 0) return null;
+      return fetchImageAsBlobUrl(candidates[0].url);
+    }),
+  );
+
+  sources.push(
+    queryWikipedia(name).then(async (imageUrl) => {
+      if (!imageUrl) return null;
+      return fetchImageAsBlobUrl(imageUrl);
+    }),
+  );
+
+  const results = await Promise.allSettled(sources);
+
+  for (const r of results) {
+    const val = r.status === "fulfilled" ? r.value : null;
+    if (val) return val;
+  }
+
+  return null;
+}
+
+export function useArtistImage(mbid: string | undefined, name: string, options?: { deferRemote?: boolean }): string | null {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,63 +138,77 @@ export function useArtistImage(mbid: string | undefined, name: string): string |
     let cancelled = false;
 
     async function run() {
-      // 0. Check saved image in store first (artist-only, skip album covers)
-      try {
-        const artistNorm = name.toLowerCase().trim();
-        const isElectron = await isElectronImageStore();
-        const all = isElectron
-          ? await electronFindImages({ artistName: artistNorm })
-          : await findImages({ artistName: artistNorm });
-        const saved = all.find((r) => !r.albumName);
-        if (saved && (saved.blob.byteLength > 0 || isElectron)) {
-          const blobUrl = isElectron ? await electronRecordToBlobUrl(saved) : await recordToBlobUrl(saved);
-          if (blobUrl) {
-            resultCache.set(cacheKey, blobUrl);
-            setUrl(blobUrl);
-            return;
-          }
-        }
-      } catch {
-        // fall through to remote
-      }
-
-      const sources: Promise<string | null>[] = [];
-
-      if (mbid) {
-        sources.push(
-          queryWikidata(mbid).then(async (imageUrl) => {
-            if (!imageUrl) return null;
-            return fetchImageAsBlobUrl(imageUrl);
-          }),
-        );
-      }
-
-      sources.push(
-        queryWikipedia(name).then(async (imageUrl) => {
-          if (!imageUrl) return null;
-          return fetchImageAsBlobUrl(imageUrl);
-        }),
-      );
-
-      const results = await Promise.allSettled(sources);
+      const localUrl = await resolveArtistImageLocal(name);
       if (cancelled) return;
-
-      for (const r of results) {
-        const val = r.status === "fulfilled" ? r.value : null;
-        if (val) {
-          resultCache.set(cacheKey, val);
-          setUrl(val);
-          return;
-        }
+      if (localUrl) {
+        resultCache.set(cacheKey, localUrl);
+        setUrl(localUrl);
+        return;
       }
 
-      resultCache.set(cacheKey, null);
-      setUrl(null);
+      if (options?.deferRemote) {
+        resultCache.set(cacheKey, null);
+        setUrl(null);
+        return;
+      }
+
+      const remoteUrl = await resolveArtistImageRemote(mbid, name);
+      if (cancelled) return;
+      if (remoteUrl) {
+        resultCache.set(cacheKey, remoteUrl);
+        setUrl(remoteUrl);
+      } else {
+        resultCache.set(cacheKey, null);
+        setUrl(null);
+      }
     }
 
     run();
     return () => { cancelled = true; };
-  }, [mbid, name]);
+  }, [mbid, name, options?.deferRemote]);
 
   return url;
+}
+
+export function useLazyArtistImage(mbid: string | undefined, name: string): {
+  imageUrl: string | null;
+  triggerRemote: () => void;
+} {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [triggered, setTriggered] = useState(false);
+
+  useEffect(() => {
+    if (!name) { setImageUrl(null); return; }
+    const cacheKey = mbid || name;
+    const cached = resultCache.get(cacheKey);
+    if (cached !== undefined) {
+      if (cached) setImageUrl(cached);
+      return;
+    }
+    setImageUrl(null);
+    let cancelled = false;
+
+    async function run() {
+      const localUrl = await resolveArtistImageLocal(name);
+      if (!cancelled && localUrl) {
+        resultCache.set(cacheKey, localUrl);
+        setImageUrl(localUrl);
+      }
+    }
+    run();
+    return () => { cancelled = true; };
+  }, [mbid, name]);
+
+  const triggerRemote = useCallback(async () => {
+    if (triggered) return;
+    setTriggered(true);
+    const cacheKey = mbid || name;
+    const remoteUrl = await resolveArtistImageRemote(mbid, name);
+    if (remoteUrl) {
+      resultCache.set(cacheKey, remoteUrl);
+      setImageUrl(remoteUrl);
+    }
+  }, [triggered, mbid, name]);
+
+  return { imageUrl, triggerRemote };
 }

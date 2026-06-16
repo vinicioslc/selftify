@@ -8,7 +8,7 @@ import { WebAudioProvider } from "./features/player/web-audio-provider";
 import { TopBar } from "./features/topbar/topbar";
 import { HomePage } from "./features/home/home-page";
 import { SearchPage } from "./features/search/search-page";
-import { SettingsPage } from "./features/settings/settings-page";
+import { SettingsModal } from "./features/settings/settings-modal";
 import { AuthPage } from "./features/auth/auth-page";
 import { LocalPage } from "./features/local/local-page";
 import { AutoLocalScan } from "./features/local/auto-local-scan";
@@ -23,6 +23,7 @@ import type { AppView } from "./types/types";
 import type { Album, AlbumArtist, Playlist } from "./types/domain-types";
 import { OriginType } from "./types/domain-types";
 import "./styles/layout.css";
+import { QueueModal } from "./features/player/queue-modal";
 import { YoutubeRankingDebug } from "./features/debug/youtube-ranking-debug";
 import { DownloadQueuePanel } from "./features/download/download-queue-panel";
 import { getPlatformService } from "./services/platform/factory";
@@ -59,6 +60,14 @@ export function App() {
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [showCookieToast, setShowCookieToast] = useState(false);
   const [showCookieDialog, setShowCookieDialog] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<string | undefined>(undefined);
+  const [queueOpen, setQueueOpen] = useState(false);
+
+  function handleOpenSettings(tab?: string) {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  }
 
   // Toggle debug panel with Ctrl+Shift+D
   useEffect(() => {
@@ -183,7 +192,7 @@ export function App() {
   function renderView() {
     switch (currentView) {
       case "home":
-        return <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />;
+        return <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={handleOpenSettings} />;
       case "search":
         return (
           <SearchPage
@@ -195,10 +204,6 @@ export function App() {
             onNavigate={navigateTo}
           />
         );
-      case "settings":
-        return <SettingsPage />;
-      case "settings-visualizer":
-        return <SettingsPage initialTab="visualizer" />;
       case "local-albums":
       case "local-artists":
       case "local-songs":
@@ -246,7 +251,7 @@ export function App() {
         return selectedAlbum ? (
           <AlbumPage album={selectedAlbum} onBack={handleBack} onNavigateArtist={handleNavigateArtist} />
         ) : (
-          <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+          <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={handleOpenSettings} />
         );
       case "artist-detail":
         return selectedArtist ? (
@@ -256,10 +261,10 @@ export function App() {
             onNavigateAlbum={handleNavigateAlbum}
           />
         ) : (
-          <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+          <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={handleOpenSettings} />
         );
       default:
-        return <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />;
+        return <HomePage onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={handleOpenSettings} />;
     }
   }
 
@@ -273,7 +278,7 @@ export function App() {
         <TopBar currentView={currentView} onToggleDebug={() => setShowDebugPanel((v) => !v)} />
         <div className={`main-content ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
           <div style={{ gridArea: "sidebar" }}>
-            <Sidebar currentView={currentView} onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+            <Sidebar currentView={currentView} onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={handleOpenSettings} />
           </div>
           <div className="main-content-body">
             <NavBar canGoBack={navHistory.length > 0} canGoForward={navFuture.length > 0} onBack={handleGoBack} onForward={handleGoForward} />
@@ -288,7 +293,7 @@ export function App() {
           </div>
         )}
         <div className="player-area">
-          <PlayerBar currentView={currentView} onNavigate={navigateTo} onGoBack={handleGoBack} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
+          <PlayerBar currentView={currentView} onNavigate={navigateTo} onGoBack={handleGoBack} onOpenQueue={() => setQueueOpen(true)} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
         </div>
         <FullScreenPlayer onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
         <DownloadQueuePanel />
@@ -309,6 +314,19 @@ export function App() {
         <CookieEditDialog
           open={showCookieDialog}
           onOpenChange={setShowCookieDialog}
+        />
+
+        <QueueModal
+          open={queueOpen}
+          onOpenChange={setQueueOpen}
+          onNavigateAlbum={handleNavigateAlbum}
+          onNavigateArtist={handleNavigateArtist}
+        />
+
+        <SettingsModal
+          open={settingsOpen}
+          onOpenChange={(open) => { setSettingsOpen(open); if (!open) setSettingsTab(undefined); }}
+          initialTab={settingsTab}
         />
       </div>
       )}

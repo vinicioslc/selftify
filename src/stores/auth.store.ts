@@ -13,6 +13,8 @@ function migrateOrigin(old: any): Origin {
     enableOnlineSearch: old.enableOnlineSearch ?? old.useMusicBrainz ?? false,
     musicBrainzToken: old.musicBrainzToken,
     youtubeMusicHeaders: old.youtubeMusicHeaders || undefined,
+    organizeOnScan: old.organizeOnScan ?? false,
+    organizeDryRun: old.organizeDryRun ?? false,
   };
 }
 

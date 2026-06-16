@@ -1,7 +1,9 @@
 import { findImages, recordToBlobUrl, storeImage as indexDbStoreImage, md5Hash } from "./image-store";
-import { isElectronImageStore, electronFindImages, electronRecordToBlobUrl, electronStoreImage } from "./electron-image-store";
 import { loadFromAlbumDotImg } from "./dot-img-loader";
 import { useSettingsStore } from "../stores/settings.store";
+import { useAuthStore } from "../stores/auth.store";
+import { OriginType } from "../types/domain-types";
+import { sqliteDbImageToObjectUrl } from "./sqlite-db/sqlite-db-image";
 
 export type CoverInput = {
   artistName?: string | null;
@@ -38,27 +40,44 @@ async function cacheToStore(
       mbzReleaseId: meta.mbzReleaseId,
       sourceUrl: blobUrl,
     };
-    if (await isElectronImageStore()) {
-      await electronStoreImage(record);
-    } else {
-      await indexDbStoreImage(record);
-    }
+    await indexDbStoreImage(record);
   } catch {
     // non-critical
   }
 }
 
 async function findFromStore(query: Record<string, string>): Promise<string | null> {
-  const isElectron = await isElectronImageStore();
-  const results = await (isElectron ? electronFindImages(query) : findImages(query));
+  const results = await findImages(query);
   if (results.length === 0) return null;
-  if (isElectron && results[0].blob.byteLength === 0) {
-    const { electronGetImageByMd5 } = await import("./electron-image-store");
-    const full = await electronGetImageByMd5(results[0].md5);
-    if (full && full.blob.byteLength > 0) return electronRecordToBlobUrl(full);
+  if (results[0].blob.byteLength === 0) {
+    const { getImageByMd5 } = await import("./image-store");
+    const full = await getImageByMd5(results[0].md5);
+    if (full && full.blob.byteLength > 0) return recordToBlobUrl(full);
     return null;
   }
   return recordToBlobUrl(results[0]);
+}
+
+function getLibraryRoot(): string | undefined {
+  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+}
+
+async function findSqliteDbAlbumImage(artistName: string, albumName: string): Promise<string | null> {
+  try {
+    const root = getLibraryRoot();
+    if (!root) return null;
+    const { initDatabase, isReady } = await import("../services/db/database");
+    const { findAlbumByName } = await import("../services/db/repositories/album-repo");
+    if (!isReady()) await initDatabase(root).catch(() => {});
+    if (!isReady()) return null;
+    const meta = findAlbumByName(artistName, albumName);
+    if (meta?.images?.[0]?.url) {
+      return sqliteDbImageToObjectUrl(root, meta.images[0].url);
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveCover(input: CoverInput): Promise<CoverResult> {
@@ -78,7 +97,15 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
     }
   }
 
-  // ── Step 2: IndexedDB (embedded tags from scan) ──
+  // ── Step 2: FSDB album images (.selftify/images/album/) ──
+  if (input.artistName && input.albumName) {
+    const sqliteDbUrl = await findSqliteDbAlbumImage(input.artistName, input.albumName);
+    if (sqliteDbUrl) {
+      return { source: "embedded", blobUrl: sqliteDbUrl };
+    }
+  }
+
+  // ── Step 3: IndexedDB (embedded tags from scan) ──
   const artistNorm = input.artistName?.toLowerCase().trim();
   const albumNorm = input.albumName?.toLowerCase().trim();
   const queries: Array<Record<string, string>> = [];
@@ -104,7 +131,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
     if (url) return { source: "embedded", blobUrl: url };
   }
 
-  // ── Step 3: Deezer (remote) ──
+  // ── Step 4: Deezer (remote) ──
   if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("deezer")) {
     try {
       const { findCoverFromDeezer } = await import("./artwork/resolve-cover");
@@ -121,7 +148,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
     }
   }
 
-  // ── Step 4: iTunes (remote) ──
+  // ── Step 5: iTunes (remote) ──
   if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("itunes")) {
     try {
       const { findCoverFromItunes } = await import("./artwork/resolve-cover");
@@ -145,8 +172,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
  * Resolve cover image strictly for a specific album.
  * Never falls back to artist-only or cross-album images.
  */
-export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult> {
-  // ── Step 1: .img/ folder (filesystem) ──
+export async function resolveAlbumCoverLocalOnly(input: CoverInput): Promise<CoverResult> {
   if (input.artistName && input.albumName) {
     try {
       const dotImgUrl = await loadFromAlbumDotImg(input.artistName, input.albumName);
@@ -158,11 +184,16 @@ export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult>
         return { source: "img-folder", blobUrl: dotImgUrl };
       }
     } catch {
-      // .img folder not found
     }
   }
 
-  // ── Step 2: IndexedDB — only album-specific matches ──
+  if (input.artistName && input.albumName) {
+    const sqliteDbUrl = await findSqliteDbAlbumImage(input.artistName, input.albumName);
+    if (sqliteDbUrl) {
+      return { source: "embedded", blobUrl: sqliteDbUrl };
+    }
+  }
+
   const artistNorm = input.artistName?.toLowerCase().trim();
   const albumNorm = input.albumName?.toLowerCase().trim();
 
@@ -179,7 +210,10 @@ export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult>
     if (url) return { source: "embedded", blobUrl: url };
   }
 
-  // ── Step 3: Deezer (remote, requires both artist and album) ──
+  return { source: "none", blobUrl: null };
+}
+
+export async function resolveAlbumCoverRemote(input: CoverInput): Promise<CoverResult> {
   if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("deezer")) {
     try {
       const { findCoverFromDeezer } = await import("./artwork/resolve-cover");
@@ -192,11 +226,9 @@ export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult>
         return { source: "deezer", blobUrl: result.url };
       }
     } catch {
-      // deezer failed
     }
   }
 
-  // ── Step 4: iTunes (remote, requires both artist and album) ──
   if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("itunes")) {
     try {
       const { findCoverFromItunes } = await import("./artwork/resolve-cover");
@@ -209,9 +241,14 @@ export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult>
         return { source: "itunes", blobUrl: result.url };
       }
     } catch {
-      // itunes failed
     }
   }
 
   return { source: "none", blobUrl: null };
+}
+
+export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult> {
+  const local = await resolveAlbumCoverLocalOnly(input);
+  if (local.blobUrl) return local;
+  return resolveAlbumCoverRemote(input);
 }

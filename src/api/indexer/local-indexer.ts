@@ -1,30 +1,23 @@
 import type { Indexer, IndexerStatus } from "./indexer";
 import type { Origin } from "../../types/domain-types";
-import { fileIdFromPath } from "../../stores/local-library.store";
-import {
-  getScanState,
-  updateScanState,
-  batchInsertSongs,
-  getAllPaths,
-  getSongCount,
-  deleteSong,
-  enqueueScan,
-  dequeueScan,
-  getQueueCount,
-  clearQueue,
-  upsertArtist,
-  getArtistByName,
-  getArtistByMbid,
-  type DbSong,
-} from "../../services/local-database";
+import { fileIdFromPath, isAudioFile } from "../../lib/sqlite-db-helpers";
 import { useStatusStore } from "../../stores/status.store";
-import { clearMemoryCache } from "../../services/memory-cache";
-import { storeImage as indexDbStoreImage, md5Hash } from "../../services/image-store";
-import { electronStoreImage, isElectronImageStore } from "../../services/electron-image-store";
-import type { PlatformService, DirEntry } from "../../services/platform/types";
+import { useAuthStore } from "../../stores/auth.store";
+import { OriginType } from "../../types/domain-types";
+import type { DirEntry, PlatformService } from "../../services/platform/types";
+import type { SqliteDbAlbumTrack, SqliteDbAlbumMeta, SqliteDbArtistMeta, SqliteDbImage } from "../../services/sqlite-db/sqlite-db-types";
+import { saveSqliteDbImage, sha256Hash } from "../../services/sqlite-db/sqlite-db-image";
+import { acquireScanLock, releaseScanLock, cachedReadDirectory, cachedExists } from "../../services/sqlite-db/sqlite-db-cache";
+import { getPlatformService } from "../../services/platform/factory";
+import { initDatabase, beginTransaction, commitTransaction, flushSave } from "../../services/db/database";
+import * as configRepo from "../../services/db/repositories/config-repo";
+import * as artistRepo from "../../services/db/repositories/artist-repo";
+import * as albumRepo from "../../services/db/repositories/album-repo";
+import * as trackRepo from "../../services/db/repositories/track-repo";
+import type { OrganizationQueue } from "../../services/organizer/organization-queue";
+import { createOrganizationQueue } from "../../services/organizer/organization-queue";
+import { createFileOrganizer, sanitizeForPath } from "../../services/organizer";
 
-/** Publish a status message to the global TopBar status store.
- *  Safe to call outside React (uses Zustand getState()). */
 function publishStatus(text: string, level: "info" | "success" | "warn" | "danger" = "info", source = "Local Scan") {
   try {
     useStatusStore.getState().addMessage(text, level, source);
@@ -35,19 +28,31 @@ function publishStatus(text: string, level: "info" | "success" | "warn" | "dange
 
 const DIR_BATCH = 10;
 const FILE_BATCH = 5;
-const WATCH_INTERVAL = 15000;
-
-const AUDIO_EXTENSIONS = new Set([
-  ".mp3", ".flac", ".ogg", ".wav", ".m4a", ".aac", ".wma", ".opus", ".aiff", ".alac",
-]);
+const WATCH_INTERVAL = 60000;
 
 const IMAGE_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".webp", ".bmp",
 ]);
 
-function getAudioExt(path: string): string {
-  const i = path.lastIndexOf(".");
-  return i >= 0 ? path.slice(i).toLowerCase() : "";
+interface AccumulatingAlbum {
+  albumDir: string;
+  artistDir: string;
+  name: string;
+  artistName: string;
+  albumArtist: string | null;
+  releaseYear: number | null;
+  genres: Set<string>;
+  tracks: SqliteDbAlbumTrack[];
+  mbzId: string | null;
+  mbzReleaseGroupId: string | null;
+  mbzArtistId: string | null;
+  coverRelPath: string | null;
+}
+
+interface AccumulatingArtist {
+  name: string;
+  genres: Set<string>;
+  mbid: string | null;
 }
 
 export function createLocalIndexer(): Indexer {
@@ -59,18 +64,18 @@ export function createLocalIndexer(): Indexer {
   let watchTimer: ReturnType<typeof setTimeout> | null = null;
   let scannedCount = 0;
   let totalDiscovered = 0;
-  let platform: PlatformService | null = null;
 
-  /** Tracks unique artists seen during this scan, keyed by normalized name → { name, mbid } */
-  const uniqueArtists = new Map<string, { name: string; mbid: string | null }>();
+  let libraryRoot = "";
+  let newFilesPaths: string[] = [];
+  const processedPaths = new Set<string>();
 
-  async function getPlatform(): Promise<PlatformService> {
-    if (!platform) {
-      const { getPlatformService } = await import("../../services/platform/factory");
-      platform = await getPlatformService();
-    }
-    return platform!;
-  }
+  const pendingAlbums = new Map<string, AccumulatingAlbum>();
+  const uniqueArtists = new Map<string, AccumulatingArtist>();
+
+  let organizeOnScan = true;
+  let organizeDryRun = false;
+  let orgQueue: OrganizationQueue | null = null;
+  const sourcePathToTrackMap = new Map<string, SqliteDbAlbumTrack>();
 
   function notify() {
     const s = { ...status, progress: { ...status.progress } };
@@ -83,51 +88,94 @@ export function createLocalIndexer(): Indexer {
     notify();
   }
 
+  function getAlbumKey(artist: string, album: string | null): string {
+    return `${artist.toLowerCase().trim()}|${(album || "").toLowerCase().trim()}`;
+  }
+
+  function getRelativePath(root: string, fullPath: string): string {
+    if (!fullPath.startsWith(root)) return fullPath;
+    return fullPath.slice(root.length).replace(/^\/+/, "");
+  }
+
+  function getArtistAndAlbumDirs(relPath: string): { artistDir: string; albumDir: string | null } {
+    const parts = relPath.split("/").filter(Boolean);
+    if (parts.length >= 2) {
+      const lastIsFile = /\.[\w]+$/.test(parts[parts.length - 1]);
+      if (parts.length === 2 && lastIsFile) {
+        return { artistDir: parts[0], albumDir: null };
+      }
+      return { artistDir: parts[0], albumDir: parts[1] };
+    }
+    return { artistDir: parts[0] || relPath, albumDir: null };
+  }
+
+  function ensureAlbum(artistDir: string, albumDir: string, artistName: string, albumName: string | null): AccumulatingAlbum {
+    const key = getAlbumKey(artistName, albumName);
+    let existing = pendingAlbums.get(key);
+    if (!existing) {
+      existing = {
+        albumDir,
+        artistDir,
+        name: albumName || artistName,
+        artistName,
+        albumArtist: null,
+        releaseYear: null,
+        genres: new Set(),
+        tracks: [],
+        mbzId: null,
+        mbzReleaseGroupId: null,
+        mbzArtistId: null,
+        coverRelPath: null,
+      };
+      pendingAlbums.set(key, existing);
+    }
+    return existing;
+  }
+
   // ── Public API ──
 
   async function start(origin: Origin) {
     const folder = origin.folderPath || "";
     if (!folder) return;
 
+    libraryRoot = folder;
     paused = false;
     aborted = false;
     scanning = false;
     scannedCount = 0;
+    newFilesPaths = [];
+    pendingAlbums.clear();
     uniqueArtists.clear();
+    processedPaths.clear();
+    sourcePathToTrackMap.clear();
 
-    try {
-      await updateScanState({
-        root_folder: folder,
-        scan_status: "scanning",
-        total_files: 0,
-        scanned_files: 0,
-        current_dir: folder,
-        last_scanned_at: null,
-        watcher_enabled: 0,
-      });
-    } catch (err) {
-      console.warn("[indexer] updateScanState error:", err);
-    }
+    organizeOnScan = origin.organizeOnScan !== false;
+    organizeDryRun = origin.organizeDryRun === true;
+    orgQueue = organizeOnScan ? createOrganizationQueue(libraryRoot) : null;
 
     publishStatus("Starting local library scan\u2026", "info");
 
     try {
-      const existingCount = await getSongCount();
+      const locked = await acquireScanLock(libraryRoot);
+      if (!locked) {
+        publishStatus("Scan already in progress", "warn");
+        return;
+      }
+
+      await initDatabase(libraryRoot);
+
+      const existingCount = parseInt(configRepo.getConfig("songCount") || "0", 10);
 
       if (existingCount > 0) {
         await incrementalScan(folder);
       } else {
-        await clearQueue();
         totalDiscovered = 0;
-
-        // Phase 1: discover — walk all directories, count audio files, enqueue everything
         setState({ status: "discovering", progress: { total: 0, done: 0, currentItem: folder } });
         publishStatus("Counting files in music folder\u2026", "info");
 
         totalDiscovered = await discoverAndEnqueue(folder);
 
         if (totalDiscovered > 0) {
-          // Phase 2: indexing — extract metadata with known total
           setState({ status: "indexing", progress: { total: totalDiscovered, done: 0, currentItem: folder } });
           publishStatus(`Found ${totalDiscovered} audio file${totalDiscovered !== 1 ? "s" : ""} \u2014 extracting metadata\u2026`, "info");
           run();
@@ -144,8 +192,6 @@ export function createLocalIndexer(): Indexer {
 
   async function incrementalScan(root: string) {
     try {
-      const p = await getPlatform();
-      const dbPaths = new Set(await getAllPaths());
       const fsPaths = new Set<string>();
       const pending = [root];
       const visited = new Set<string>();
@@ -159,28 +205,23 @@ export function createLocalIndexer(): Indexer {
         setState({ progress: { currentItem: dir } });
 
         let entries: DirEntry[];
-        try { entries = await p.readDirectory(dir); } catch (err) { console.warn("[indexer] readDirectory error:", err); continue; }
+        try { entries = await (await getPlatformService()).readDirectory(dir); } catch (err) { console.warn("[indexer] readDirectory error:", err); continue; }
 
         for (const e of entries) {
           if (!e.name) continue;
           if (e.isDirectory) { if (e.name !== ".trash") pending.push(e.path); continue; }
-          const ext = getAudioExt(e.name);
-          if (!AUDIO_EXTENSIONS.has(ext)) continue;
-          fsPaths.add(e.path);
-          if (!dbPaths.has(e.path)) newFiles.push(e.path);
+          if (isAudioFile(e.name)) {
+            fsPaths.add(e.path);
+            newFiles.push(e.path);
+          }
         }
       }
 
-      for (const dbPath of dbPaths) {
-        if (!fsPaths.has(dbPath)) {
-          await deleteSong(fileIdFromPath(dbPath));
-        }
-      }
+      newFilesPaths = newFiles;
 
       if (newFiles.length > 0) {
-        await enqueueScan(newFiles.map((p) => ({ type: "file", path: p })));
+        totalDiscovered = newFiles.length;
         setState({ status: "indexing", progress: { total: newFiles.length, done: 0, currentItem: "" } });
-        await updateScanState({ scan_status: "indexing", total_files: newFiles.length, scanned_files: 0 });
         run();
       } else {
         await finish();
@@ -210,7 +251,6 @@ export function createLocalIndexer(): Indexer {
     paused = false;
     scanning = false;
     if (watchTimer) clearTimeout(watchTimer);
-    updateScanState({ scan_status: "idle", watcher_enabled: 0 });
     setState({ status: "idle" });
   }
 
@@ -219,11 +259,7 @@ export function createLocalIndexer(): Indexer {
   }
 
   async function startWatcher() {
-    const state = await getScanState();
-    if (state && state.scan_status === "done") {
-      await updateScanState({ watcher_enabled: 1 });
-      scheduleWatch();
-    }
+    scheduleWatch();
   }
 
   function onProgress(callback: (s: IndexerStatus) => void) {
@@ -235,10 +271,7 @@ export function createLocalIndexer(): Indexer {
 
   // ── Scanner engine ──
 
-  /** Walk all directories recursively, count audio files, and enqueue everything.
-   *  Returns total number of audio files found. */
   async function discoverAndEnqueue(root: string): Promise<number> {
-    const p = await getPlatform();
     const pending = [root];
     const visited = new Set<string>();
     const allFileTasks: { type: "file"; path: string }[] = [];
@@ -252,12 +285,12 @@ export function createLocalIndexer(): Indexer {
 
       setState({ progress: { currentItem: dir, done: count } });
       if (visited.size % 20 === 0) {
-        publishStatus(`Scanning ${dir}… (${count} files found)`, "info");
+        publishStatus(`Scanning ${dir}\u2026 (${count} files found)`, "info");
       }
 
       let entries: DirEntry[];
       try {
-        entries = await p.readDirectory(dir);
+        entries = await (await getPlatformService()).readDirectory(dir);
       } catch (err) {
         console.warn("[indexer] discoverAndEnqueue error:", err);
         continue;
@@ -268,17 +301,12 @@ export function createLocalIndexer(): Indexer {
         if (e.isDirectory) {
           if (e.name !== ".img" && e.name !== ".trash") pending.push(e.path);
         } else if (e.isFile) {
-          const ext = getAudioExt(e.name);
-          if (AUDIO_EXTENSIONS.has(ext)) {
+          if (isAudioFile(e.name)) {
             allFileTasks.push({ type: "file", path: e.path });
             count++;
           }
         }
       }
-    }
-
-    if (allFileTasks.length > 0) {
-      await enqueueScan(allFileTasks);
     }
 
     if (count > 0) {
@@ -303,8 +331,7 @@ export function createLocalIndexer(): Indexer {
 
     if (aborted) return;
 
-    const remaining = await getQueueCount();
-    if (remaining === 0) {
+    if (scannedCount >= totalDiscovered) {
       await finish();
     } else if (!paused) {
       setTimeout(run, 0);
@@ -312,172 +339,66 @@ export function createLocalIndexer(): Indexer {
   }
 
   async function processBatch() {
-    let dirs = 0;
     let files = 0;
-    let emptyDequeues = 0;
+    const pending = [libraryRoot];
+    const visited = new Set<string>();
 
-    while (dirs < DIR_BATCH) {
+    while (pending.length > 0 && files < FILE_BATCH) {
       if (aborted || paused) return;
-      const item = await dequeueScan();
-      if (!item) {
-        emptyDequeues++;
-        if (emptyDequeues >= 3) break;
-        continue;
-      }
-      emptyDequeues = 0;
+      const dir = pending.shift()!;
+      if (visited.has(dir)) continue;
+      visited.add(dir);
 
-      if (item.type === "dir") {
-        await processDir(item.path);
-        dirs++;
-      } else if (item.type === "file") {
-        await processFile(item.path);
-        files++;
-      }
+      let entries: DirEntry[];
+      try { entries = await cachedReadDirectory(dir); } catch { continue; }
 
-      if (files > 0 && files % 5 === 0) {
-        await new Promise((r) => setTimeout(r, 0));
-      }
-      if (files >= FILE_BATCH) break;
-    }
-  }
-
-  async function processDir(dirPath: string) {
-    if (aborted) return;
-    setState({ progress: { currentItem: dirPath } });
-
-    try {
-      const p = await getPlatform();
-      const entries = await p.readDirectory(dirPath);
-      const subdirs: string[] = [];
-      const audioFiles: string[] = [];
-
-      let imgDirPath: string | null = null;
-
-      for (const entry of entries) {
-        if (aborted) return;
-        if (!entry.name) continue;
-        if (entry.isDirectory) {
-          if (entry.name === ".img") {
-            imgDirPath = entry.path;
-          } else if (entry.name !== ".trash") {
-            subdirs.push(entry.path);
-          }
-        } else if (entry.isFile) {
-          const ext = getAudioExt(entry.name);
-          if (AUDIO_EXTENSIONS.has(ext)) {
-            audioFiles.push(entry.path);
+      for (const e of entries) {
+        if (!e.name || aborted) continue;
+        if (e.isDirectory) {
+          if (e.name !== ".img" && e.name !== ".trash" && e.name !== ".selftify") pending.push(e.path);
+        } else if (isAudioFile(e.name)) {
+          if (!processedPaths.has(e.path)) {
+            processedPaths.add(e.path);
+            await processFile(e.path);
+            files++;
+            if (files >= FILE_BATCH) break;
           }
         }
       }
-
-      // Process .img directory for cover art
-      if (imgDirPath) {
-        const scanState = await getScanState();
-        const rootFolder = scanState?.root_folder || "";
-        const relPath = rootFolder ? dirPath.replace(rootFolder, "").replace(/^\/+/, "") : "";
-        const pathParts = relPath.split("/").filter(Boolean);
-        const artistName = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
-        const albumName = pathParts.length >= 1 ? pathParts[pathParts.length - 1] : null;
-        try {
-          const imgEntries = await p.readDirectory(imgDirPath);
-          for (const imgEntry of imgEntries) {
-            if (!imgEntry.isFile) continue;
-            const ext = getAudioExt(imgEntry.name);
-            if (IMAGE_EXTENSIONS.has(ext)) {
-              try {
-                const imgData = await p.readFile(imgEntry.path);
-                if (imgData && imgData.length > 0) {
-                  const hash = await md5Hash(imgData.buffer as ArrayBuffer);
-                  const record = {
-                    md5: hash,
-                    blob: imgData.buffer as ArrayBuffer,
-                    format: ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg",
-                    size: imgData.length,
-                    createdAt: Date.now(),
-                    sourceUrl: `local://${relPath}/.img/${imgEntry.name}`,
-                    artistName: artistName?.toLowerCase().trim() || undefined,
-                    albumName: albumName?.toLowerCase().trim() || undefined,
-                  };
-                  if (await isElectronImageStore()) {
-                    await electronStoreImage(record);
-                  } else {
-                    await indexDbStoreImage(record);
-                  }
-                  publishStatus(`Cached cover: ${relPath}/.img/${imgEntry.name}`, "info");
-                }
-              } catch (imgErr) {
-                console.warn(`[indexer] error caching .img file ${imgEntry.path}:`, imgErr);
-              }
-            }
-          }
-        } catch (dirErr) {
-          console.warn(`[indexer] error reading .img dir ${imgDirPath}:`, dirErr);
-        }
-      }
-
-      // If this dir has audio files directly, it's likely an album folder
-      if (audioFiles.length > 0) {
-        const scanState = await getScanState();
-        const rootFolder = scanState?.root_folder || "";
-        const relPath = rootFolder ? dirPath.replace(rootFolder, "").replace(/^\/+/, "") : "";
-        const pathParts = relPath.split("/").filter(Boolean);
-        // Common layout: …/Artist/Album/ or just …/Album/
-        if (pathParts.length >= 2) {
-          const artistGuess = pathParts[pathParts.length - 2];
-          const albumGuess = pathParts[pathParts.length - 1];
-          publishStatus(`Indexing ${artistGuess} album list…`, "info");
-        }
-      }
-
-      const batch: { type: string; path: string }[] = [];
-      for (const d of subdirs) batch.push({ type: "dir", path: d });
-      for (const f of audioFiles) batch.push({ type: "file", path: f });
-      if (batch.length > 0) await enqueueScan(batch);
-
-      scannedCount++;
-      await updateScanState({ scanned_files: scannedCount, current_dir: dirPath });
-    } catch (err: any) {
-      console.warn(`[indexer] error reading dir ${dirPath}:`, err?.message || err);
     }
   }
 
   async function processFile(filePath: string) {
     if (aborted) return;
     try {
-      const p = await getPlatform();
+      const { getPlatformService } = await import("../../services/platform/factory");
+      const p = await getPlatformService();
       const data = await p.readFile(filePath);
-      if (!data) {
-        console.warn(`[indexer] could not read file ${filePath}`);
-        return;
-      }
+      if (!data) return;
+
+      const relPath = getRelativePath(libraryRoot, filePath);
+      const { artistDir, albumDir } = getArtistAndAlbumDirs(relPath);
+      const fileName = filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Unknown";
 
       let meta: {
-        name: string; artist_name: string; album_name: string | null;
-        album_artist: string | null; track_number: number | null; disc_number: number | null;
-        duration: number | null; bitrate: number | null; sample_rate: number | null;
-        genre: string | null; year: number | null; file_size: number;
-        file_extension: string; last_modified: number | null;
-        mbz_recording_id: string | null; mbz_track_id: string | null;
-        mbz_album_id: string | null; mbz_release_group_id: string | null;
-        mbz_artist_id: string | null;
-      } = undefined as any;
+        name: string | null; artist: string | null; album: string | null;
+        albumArtist: string | null; trackNumber: number | null; discNumber: number | null;
+        duration: number | null; genre: string | null; year: number | null;
+        mbzRecordingId: string | null; mbzTrackId: string | null;
+        mbzAlbumId: string | null; mbzReleaseGroupId: string | null; mbzArtistId: string | null;
+        picture: { data: number[]; format: string } | null;
+      } | null = null;
 
-      // Try to parse metadata via IPC (main process) or fallback to renderer-side music-metadata
       try {
         const api = (window as any).electronApi;
-        let parsed: any = null;
-
         if (api?.local?.parseFile) {
-          parsed = await Promise.race([
+          const parsed = await Promise.race([
             api.local.parseFile(filePath),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error("electronApi.parseFile timeout")), 30000)
             ),
           ]);
-          if (parsed?.error) {
-            console.warn(`[indexer] parse error for ${filePath}: ${parsed.error}`);
-            parsed = null;
-          }
+          if (parsed && !parsed.error) meta = parsed;
         } else {
           const mm = await import("music-metadata");
           const mmResult = await Promise.race([
@@ -494,15 +415,14 @@ export function createLocalIndexer(): Indexer {
               const pic = c.picture[0];
               picture = {
                 data: Array.from(new Uint8Array(pic.data.buffer, pic.data.byteOffset, pic.data.byteLength)),
-                format: pic.format || 'image/jpeg',
+                format: pic.format || "image/jpeg",
               };
             }
-            parsed = {
+            meta = {
               name: c.title || null, artist: c.artist || c.albumartist || null,
               album: c.album || null, albumArtist: c.albumartist || null,
               trackNumber: c.track?.no || null, discNumber: c.disk?.no || null,
               duration: f.duration ? f.duration * 1000 : null,
-              bitrate: f.bitrate || null, sampleRate: f.sampleRate || null,
               genre: c.genre?.[0] || null, year: c.year || null,
               mbzRecordingId: c.musicbrainz_recordingid || null,
               mbzTrackId: c.musicbrainz_trackid || null,
@@ -513,126 +433,60 @@ export function createLocalIndexer(): Indexer {
             };
           }
         }
+      } catch { }
 
-        if (parsed) {
-          meta = {
-            name: parsed.name || filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Unknown",
-            artist_name: parsed.artist || parsed.albumArtist || "Unknown Artist",
-            album_name: parsed.album || null,
-            album_artist: parsed.albumArtist || null,
-            track_number: parsed.trackNumber || null,
-            disc_number: parsed.discNumber || null,
-            duration: parsed.duration || null,
-            bitrate: parsed.bitrate || null,
-            sample_rate: parsed.sampleRate || null,
-            genre: parsed.genre || null,
-            year: parsed.year || null,
-            file_size: data.byteLength || data.length,
-            file_extension: filePath.split(".").pop()?.toLowerCase() || "",
-            last_modified: null,
-            mbz_recording_id: parsed.mbzRecordingId || null,
-            mbz_track_id: parsed.mbzTrackId || null,
-            mbz_album_id: parsed.mbzAlbumId || null,
-            mbz_release_group_id: parsed.mbzReleaseGroupId || null,
-            mbz_artist_id: parsed.mbzArtistId || null,
-          };
+      const artistName = meta?.artist || artistDir || "Unknown Artist";
+      const albumName = meta?.album || albumDir || null;
+      const trackName = meta?.name || fileName;
 
-          // Store embedded cover art
-          if (parsed.picture && parsed.picture.data && parsed.picture.data.length > 0) {
-            try {
-              const buf = new Uint8Array(parsed.picture.data).buffer;
-              const hash = await md5Hash(buf);
-              const artistNorm = parsed.artist?.toLowerCase().trim();
-              const albumNorm = parsed.album?.toLowerCase().trim();
-              const record = {
-                md5: hash, blob: buf,
-                format: parsed.picture.format || "image/jpeg",
-                size: buf.byteLength, createdAt: Date.now(),
-                sourceUrl: `local://${filePath}`,
-                artistName: artistNorm || undefined,
-                albumName: albumNorm || undefined,
-                mbzArtistId: meta.mbz_artist_id || undefined,
-                mbzReleaseGroupId: meta.mbz_release_group_id || undefined,
-              };
-              if (await isElectronImageStore()) {
-                await electronStoreImage(record);
-              } else {
-                await indexDbStoreImage(record);
-              }
-            } catch (picErr) {
-              console.error("[indexer] Failed to store embedded cover:", picErr);
-            }
-            if (meta.album_name) {
-              publishStatus(`Indexing ${meta.artist_name} – ${meta.album_name} image…`, "info");
-            }
-          }
+      const album = ensureAlbum(artistDir, albumDir || artistDir, artistName, albumName);
+      if (meta?.albumArtist) album.albumArtist = meta.albumArtist;
+      if (meta?.year) album.releaseYear = meta.year;
+      if (meta?.genre) album.genres.add(meta.genre);
+      if (meta?.mbzAlbumId) album.mbzId = meta.mbzAlbumId;
+      if (meta?.mbzReleaseGroupId) album.mbzReleaseGroupId = meta.mbzReleaseGroupId;
+      if (meta?.mbzArtistId) album.mbzArtistId = meta.mbzArtistId;
 
-          // Track artist for MusicBrainz enrichment
-          if (meta.artist_name && meta.artist_name !== "Unknown Artist") {
-            const key = meta.artist_name.toLowerCase().trim();
-            if (!uniqueArtists.has(key)) {
-              uniqueArtists.set(key, { name: meta.artist_name, mbid: meta.mbz_artist_id || null });
-            } else if (meta.mbz_artist_id) {
-              const existing = uniqueArtists.get(key)!;
-              if (!existing.mbid) existing.mbid = meta.mbz_artist_id;
-            }
-          }
-        }
-      } catch {
-        // Parse threw — meta stays undefined, handled below
-      }
-
-      // Ensure meta is always assigned
-      if (!meta) {
-        const fileName = filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Unknown";
-        const scanState = await getScanState();
-        const rootFolder = scanState?.root_folder || "";
-        const relPath = rootFolder ? filePath.replace(rootFolder, "").replace(/^\/+/, "") : "";
-        const relParts = relPath ? relPath.split("/").filter(Boolean) : [];
-
-        let artist = "Unknown Artist";
-        let album: string | null = null;
-        if (relParts.length >= 3) { artist = relParts[relParts.length - 3]; album = relParts[relParts.length - 2]; }
-        else if (relParts.length === 2) { album = relParts[1]; artist = relParts[0]; }
-        else if (relParts.length === 1) { artist = relParts[0]; }
-
-        meta = {
-          name: fileName, artist_name: artist, album_name: album,
-          album_artist: null, track_number: null, disc_number: null,
-          duration: null, bitrate: null, sample_rate: null,
-          genre: null, year: null,
-          file_size: data.byteLength || data.length,
-          file_extension: filePath.split(".").pop()?.toLowerCase() || "",
-          last_modified: null,
-          mbz_recording_id: null, mbz_track_id: null,
-          mbz_album_id: null, mbz_release_group_id: null, mbz_artist_id: null,
-        };
-
-        if (artist && artist !== "Unknown Artist") {
-          const key = artist.toLowerCase().trim();
-          if (!uniqueArtists.has(key)) {
-            uniqueArtists.set(key, { name: artist, mbid: null });
-          }
-        }
-      }
-
-      const song: Omit<DbSong, "updated_at"> = {
-        id: fileIdFromPath(filePath), path: filePath, name: meta.name,
-        artist_name: meta.artist_name, album_name: meta.album_name,
-        album_artist: meta.album_artist, track_number: meta.track_number,
-        disc_number: meta.disc_number, duration: meta.duration,
-        bitrate: meta.bitrate, sample_rate: meta.sample_rate,
-        genre: meta.genre, year: meta.year, file_size: meta.file_size,
-        file_extension: meta.file_extension, last_modified: meta.last_modified,
-        added_at: Date.now(),
-        mbz_recording_id: meta.mbz_recording_id,
-        mbz_track_id: meta.mbz_track_id,
-        mbz_album_id: meta.mbz_album_id,
-        mbz_release_group_id: meta.mbz_release_group_id,
-        mbz_artist_id: meta.mbz_artist_id,
+      const track: SqliteDbAlbumTrack = {
+        path: getRelativePath(libraryRoot, filePath),
+        name: trackName,
+        artistName,
+        albumName: albumName || null,
+        trackNumber: meta?.trackNumber ?? null,
+        discNumber: meta?.discNumber ?? null,
+        duration: meta?.duration ?? null,
+        genre: meta?.genre ?? null,
+        mbzRecordingId: meta?.mbzRecordingId ?? null,
+        mbzTrackId: meta?.mbzTrackId ?? null,
       };
+      album.tracks.push(track);
+      sourcePathToTrackMap.set(filePath, track);
 
-      await batchInsertSongs([song]);
+      // Track artist for enrichment
+      if (artistName && artistName !== "Unknown Artist") {
+        const key = artistName.toLowerCase().trim();
+        let existing = uniqueArtists.get(key);
+        if (!existing) {
+          existing = { name: artistName, genres: new Set(), mbid: meta?.mbzArtistId || null };
+          uniqueArtists.set(key, existing);
+        }
+        if (meta?.mbzArtistId && !existing.mbid) existing.mbid = meta.mbzArtistId;
+        if (meta?.genre) existing.genres.add(meta.genre);
+      }
+
+      // Store embedded cover art
+      if (meta?.picture?.data && meta.picture.data.length > 0 && albumDir) {
+        try {
+          const buf = new Uint8Array(meta.picture.data).buffer as ArrayBuffer;
+          const hash = await sha256Hash(buf);
+          const format = meta.picture.format || "image/jpeg";
+          const relPath = await saveSqliteDbImage(libraryRoot, "album", hash, new Uint8Array(buf), format);
+          album.coverRelPath = relPath;
+        } catch (picErr) {
+          console.warn("[indexer] Failed to store embedded cover:", picErr);
+        }
+      }
+
       scannedCount++;
       setState({ progress: { done: scannedCount, currentItem: filePath } });
     } catch (err) {
@@ -640,113 +494,188 @@ export function createLocalIndexer(): Indexer {
     }
   }
 
-  async function enrichArtistsFromMusicBrainz() {
-    if (uniqueArtists.size === 0) return;
+  async function processOrganizationQueue() {
+    if (!orgQueue) return;
+    publishStatus("Organizing files\u2026", "info", "Local Organizer");
+    setState({ progress: { currentItem: "Organizing files\u2026" } });
 
-    // Dynamically import MusicBrainz client only when needed
-    const { getArtistDetail, searchArtists } = await import(
-      "../../services/musicbrainz-client"
-    );
+    const organizer = createFileOrganizer(libraryRoot);
+    const results = await orgQueue.processAll(organizer);
 
-    const ARTIST_TIMEOUT = 15000;
-    function mbTimeout<T>(p: Promise<T>): Promise<T> {
-      return Promise.race([
-        p,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`MusicBrainz request timed out after ${ARTIST_TIMEOUT}ms`)), ARTIST_TIMEOUT)
-        ),
-      ]);
+    let organizedCount = 0;
+    let failedCount = 0;
+    const organizedAlbums = new Map<string, string[]>();
+    const organizedArtists = new Map<string, string[]>();
+
+    for (const result of results) {
+      if (result.skipped || !result.targetPath) {
+        if (result.error) failedCount++;
+        continue;
+      }
+      organizedCount++;
+
+      const track = sourcePathToTrackMap.get(result.sourcePath);
+      if (track) {
+        track.path = `${result.targetAlbumRelDir}/${result.targetFileName}`;
+      }
+
+      const albumKey = result.targetAlbumRelDir;
+      if (!organizedAlbums.has(albumKey)) {
+        organizedAlbums.set(albumKey, []);
+      }
+      organizedAlbums.get(albumKey)!.push(result.targetPath);
+
+      const artistKey = albumKey.split("/")[0];
+      if (!organizedArtists.has(artistKey)) {
+        organizedArtists.set(artistKey, []);
+      }
+      organizedArtists.get(artistKey)!.push(artistKey);
     }
 
-    let enriched = 0;
-    for (const [, entry] of uniqueArtists) {
+    // Write album artifacts (cover.jpg, album.nfo)
+    for (const [albumRelDir, paths] of organizedAlbums) {
       if (aborted) break;
+      const artistDir = albumRelDir.split("/")[0];
+      const albumDirName = albumRelDir.split("/").slice(1).join("/");
 
-      try {
-        // Skip if already in DB and up-to-date
-        const existing = entry.mbid
-          ? await getArtistByMbid(entry.mbid)
-          : await getArtistByName(entry.name);
-        if (existing) continue;
+      const albumKey = Array.from(pendingAlbums.keys()).find((k) => {
+        const a = pendingAlbums.get(k);
+        if (!a) return false;
+        const expectedArtist = sanitizeForPath(a.albumArtist || a.artistName);
+        const expectedAlbum = sanitizeForPath(a.name);
+        return artistDir === expectedArtist && albumDirName.startsWith(expectedAlbum);
+      });
+      if (!albumKey) continue;
+      const album = pendingAlbums.get(albumKey);
+      if (!album) continue;
 
-        let mbid = entry.mbid;
-        let artistData: any = null;
+      const targetAlbumDir = `${libraryRoot}/${albumRelDir}`;
 
-        const artistCtx = { artistName: entry.name, artistMbid: mbid ?? undefined };
-
-        if (mbid) {
-          publishStatus(`Fetching artist info for ${entry.name}…`, "info", "MusicBrainz");
-          artistData = await mbTimeout(getArtistDetail(mbid, artistCtx));
-        }
-
-        // If no MBID or lookup failed, fall back to searching by name
-        if (!artistData) {
-          publishStatus(`Searching MusicBrainz for ${entry.name}…`, "info", "MusicBrainz");
-          try {
-            const searchRes: any = await mbTimeout(searchArtists(entry.name, { limit: 1 }));
-            if (searchRes?.artists?.length > 0) {
-              artistData = searchRes.artists[0];
-              mbid = artistData.id as string;
-              const full = await mbTimeout(getArtistDetail(mbid!, { ...artistCtx, artistMbid: mbid }));
-              if (full) artistData = full;
-            }
-          } catch (err) {
-            console.warn("[indexer] MusicBrainz search failed:", err);
-          }
-        }
-
-        if (artistData) {
-          const genres = artistData.tags
-            ? JSON.stringify(artistData.tags.map((t: any) => t.name))
-            : null;
-
-          await upsertArtist({
-            id: mbid || `local-artist-${entry.name.toLowerCase().replace(/\s+/g, "-")}`,
-            name: entry.name,
-            mbz_artist_id: mbid || null,
-            biography: null,
-            image_url: null,
-            genres,
-            country: artistData.country || null,
-            type: artistData.type || null,
-            disambiguation: artistData.disambiguation || null,
+      if (!organizeDryRun) {
+        try {
+          const artifacts = await organizer.writeAlbumArtifacts(targetAlbumDir, {
+            libraryRoot,
+            albumName: album.name,
+            artistName: album.artistName,
+            releaseYear: album.releaseYear,
+            genres: Array.from(album.genres),
+            tracks: album.tracks.map((t) => ({
+              title: t.name,
+              trackNumber: t.trackNumber,
+              duration: t.duration,
+              mbzRecordingId: t.mbzRecordingId,
+              mbzTrackId: t.mbzTrackId,
+              discNumber: t.discNumber,
+              artistName: t.artistName,
+            })),
+            coverRelPath: album.coverRelPath,
+            mbzId: album.mbzId,
+            mbzReleaseGroupId: album.mbzReleaseGroupId,
+            albumArtist: album.albumArtist,
+            albumArtistMbid: album.mbzArtistId,
           });
-          enriched++;
+
+          const artistTargetDir = `${libraryRoot}/${artistDir}`;
+          const artistKey = artistDir.toLowerCase().trim();
+          const artistEntry = uniqueArtists.get(artistKey);
+          await organizer.writeArtistArtifacts(artistTargetDir, {
+            artistName: album.artistName,
+            genres: artistEntry ? Array.from(artistEntry.genres) : [],
+            mbid: artistEntry?.mbid || null,
+          });
+        } catch (err) {
+          console.warn("[indexer] failed to write album artifacts:", err);
         }
-      } catch (err) {
-        console.warn(`[indexer] Skipping MusicBrainz enrichment for ${entry.name}:`, err);
       }
     }
 
-    if (enriched > 0) {
-      publishStatus(`Artist metadata updated for ${enriched} artist${enriched > 1 ? "s" : ""}`, "success", "MusicBrainz");
+    if (organizeDryRun) {
+      publishStatus(`[DRY RUN] Would organize ${organizedCount} file${organizedCount !== 1 ? "s" : ""}`, "info", "Local Organizer");
+    } else if (organizedCount > 0) {
+      publishStatus(`Organized ${organizedCount} file${organizedCount !== 1 ? "s" : ""}`, "success", "Local Organizer");
     }
+    if (failedCount > 0) {
+      publishStatus(`${failedCount} file${failedCount !== 1 ? "s" : ""} failed to organize`, "warn", "Local Organizer");
+    }
+
+    await orgQueue.clear();
   }
 
   async function finish() {
     try {
-      // Clear stale local search cache so new results appear immediately
-      clearMemoryCache("local");
+      const totalSongs = pendingAlbums.size > 0
+        ? Array.from(pendingAlbums.values()).reduce((sum, a) => sum + a.tracks.length, 0)
+        : 0;
 
-      // Enrich artist info from MusicBrainz before finishing
-      try {
-        await enrichArtistsFromMusicBrainz();
-      } catch (err) {
-        console.warn("[indexer] MusicBrainz enrichment failed:", err);
+      beginTransaction();
+
+      // Write albums + tracks
+      for (const [, album] of pendingAlbums) {
+        if (aborted) break;
+
+        const totalDuration = album.tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
+        const albumMeta: SqliteDbAlbumMeta = {
+          $schema: "selftify-album",
+          version: 1,
+          name: album.name,
+          artistName: album.artistName,
+          albumArtist: album.albumArtist || null,
+          releaseYear: album.releaseYear,
+          mbzId: album.mbzId,
+          mbzReleaseGroupId: album.mbzReleaseGroupId,
+          genres: Array.from(album.genres),
+          images: album.coverRelPath ? [{ id: album.coverRelPath, url: album.coverRelPath, width: null, height: null, format: "image/jpeg" }] : [],
+          songCount: album.tracks.length,
+          duration: totalDuration,
+          tracks: album.tracks,
+          updatedAt: Date.now(),
+          enrichedAt: null,
+        };
+        albumRepo.upsertAlbum(albumMeta, album.artistName);
       }
 
-      const count = await getSongCount();
-      scannedCount = count;
-      await updateScanState({
-        scan_status: "done", total_files: count, scanned_files: count,
-        current_dir: "", last_scanned_at: Date.now(), watcher_enabled: 1,
-      });
-      setState({ status: "done", progress: { total: count, done: count, currentItem: "" } });
-      publishStatus(`Local library indexed: ${count} song${count !== 1 ? "s" : ""}`, "success");
+      // Write artists
+      for (const [, entry] of uniqueArtists) {
+        if (aborted) break;
+        if (artistRepo.artistExists(entry.name)) continue;
+
+        const artistMeta: SqliteDbArtistMeta = {
+          $schema: "selftify-artist",
+          version: 1,
+          name: entry.name,
+          sortName: null,
+          mbzId: entry.mbid,
+          biography: null,
+          genres: Array.from(entry.genres),
+          country: null,
+          type: null,
+          disambiguation: null,
+          images: [],
+          updatedAt: Date.now(),
+          enrichedAt: null,
+        };
+        artistRepo.upsertArtist(artistMeta);
+      }
+
+      commitTransaction();
+
+      // Write config
+      configRepo.setConfig("lastScanAt", String(Date.now()));
+      configRepo.setConfig("scanStatus", "done");
+      configRepo.setConfig("songCount", String(totalSongs));
+      configRepo.setConfig("artistCount", String(uniqueArtists.size));
+      configRepo.setConfig("albumCount", String(pendingAlbums.size));
+
+      await flushSave();
+
+      setState({ status: "done", progress: { total: totalSongs, done: totalSongs, currentItem: "" } });
+      publishStatus(`Local library indexed: ${totalSongs} song${totalSongs !== 1 ? "s" : ""}`, "success");
     } catch (err) {
       console.error("[indexer] finish failed:", err);
       publishStatus("Scan finished with errors. Try rescanning.", "warn");
       setState({ status: "done" });
+    } finally {
+      await releaseScanLock(libraryRoot);
     }
     scheduleWatch();
   }
@@ -758,19 +687,10 @@ export function createLocalIndexer(): Indexer {
   }
 
   async function checkChanges() {
-    const state = await getScanState();
-    if (!state || state.scan_status !== "done" || !state.watcher_enabled) {
-      scheduleWatch();
-      return;
-    }
-
     try {
-      const p = await getPlatform();
-      const dbPaths = new Set(await getAllPaths());
-      const fsPaths = new Set<string>();
-      const root = state.root_folder;
-      if (!root) { scheduleWatch(); return; }
+      const root = libraryRoot;if (!root) { scheduleWatch(); return; }
 
+      const fsPaths = new Set<string>();
       const pending = [root];
       const visited = new Set<string>();
       const newFiles: string[] = [];
@@ -782,31 +702,18 @@ export function createLocalIndexer(): Indexer {
         if (visited.size > 200) break;
 
         let entries: DirEntry[];
-        try { entries = await p.readDirectory(dir); } catch (err) { console.warn("[indexer] readDirectory (watch) error:", err); continue; }
+        try { entries = await cachedReadDirectory(dir); } catch (err) { console.warn("[indexer] readDirectory (watch) error:", err); continue; }
         for (const e of entries) {
           if (!e.name) continue;
-          if (e.isDirectory) { if (e.name !== ".trash") pending.push(e.path); continue; }
-          const ext = getAudioExt(e.name);
-          if (!AUDIO_EXTENSIONS.has(ext)) continue;
-          fsPaths.add(e.path);
-          if (!dbPaths.has(e.path)) newFiles.push(e.path);
+          if (e.isDirectory) { if (e.name !== ".trash" && e.name !== ".selftify") pending.push(e.path); continue; }
+          if (isAudioFile(e.name)) fsPaths.add(e.path);
         }
-      }
-
-      let changed = newFiles.length > 0;
-      for (const dbPath of dbPaths) {
-        if (!fsPaths.has(dbPath)) { await deleteSong(fileIdFromPath(dbPath)); changed = true; }
       }
 
       if (newFiles.length > 0) {
         setState({ status: "indexing" });
-        await updateScanState({ scan_status: "indexing" });
-        await enqueueScan(newFiles.map((p) => ({ type: "file", path: p })));
         paused = false; aborted = false;
         run();
-      } else if (changed) {
-        const count = await getSongCount();
-        setState({ progress: { total: count, done: scannedCount } });
       }
     } catch (err) {
       console.warn("[watcher] error:", err);

@@ -1,14 +1,20 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { AlbumArtist } from "../../types/domain-types";
 import { useAuthStore } from "../../stores/auth.store";
 import { useStatusStore } from "../../stores/status.store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Button } from "../../components/ui/button";
-import { CoverImage } from "../../components/ui/art-image";
+import { CoverImage, ArtImage } from "../../components/ui/art-image";
 import { Loader2, Search, Save, Trash2, Link, Check } from "lucide-react";
 import { storeImage as indexDbStoreImage, md5Hash, findImages, recordToBlobUrl } from "../../services/image-store";
-import { electronStoreImage, electronFindImages, isElectronImageStore, electronRecordToBlobUrl } from "../../services/electron-image-store";
 import { platformFetch } from "../../services/platform-fetch";
+import { artistImageResolver } from "../../services/artist-image/providers/artist-resolver";
+import { ARTIST_PROVIDER_META } from "../../services/artist-image/providers/types";
+import type { ArtistCandidate } from "../../services/artist-image/providers/types";
+import { fetchImageAsBlobUrl } from "../../services/image-fetch";
+import { searchWikipedia, sanitizeForPath } from "../../services/wiki-image-search";
+import { importFromDotImg, clearDotImgDir } from "../../services/dot-img";
+import { cn } from "../../lib/utils";
 
 type Props = {
   open: boolean;
@@ -17,34 +23,6 @@ type Props = {
   currentImageUrl: string | null;
   onImageSaved: (blobUrl: string) => void;
 };
-
-const WIKI_API = "https://en.wikipedia.org/w/api.php";
-
-type WikiPageResult = {
-  query?: {
-    pages?: Record<string, {
-      missing?: boolean;
-      thumbnail?: { source: string; width: number; height: number };
-    }>;
-  };
-};
-
-async function searchWikipedia(artistName: string): Promise<string | null> {
-  const url = `${WIKI_API}?action=query&titles=${encodeURIComponent(artistName)}&prop=pageimages&pithumbsize=500&format=json&origin=*`;
-  try {
-    const res = await platformFetch(url, { method: "GET" });
-    if (!res.ok) return null;
-    const data: WikiPageResult = await res.json();
-    const page = Object.values(data?.query?.pages ?? {})[0];
-    return page && !page.missing ? (page.thumbnail?.source ?? null) : null;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeForPath(name: string): string {
-  return name.replace(/[/\\?%*:|"<>]/g, "_").trim();
-}
 
 function getExt(mime: string): string {
   return mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
@@ -57,8 +35,12 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [customUrl, setCustomUrl] = useState("");
-  const [sourceType, setSourceType] = useState<"wikipedia" | "custom">("wikipedia");
+  const [sourceType, setSourceType] = useState<string>("wikipedia");
   const [saved, setSaved] = useState(false);
+
+  const [providerResults, setProviderResults] = useState<Record<string, ArtistCandidate[]>>({});
+  const [providerLoading, setProviderLoading] = useState<Record<string, boolean>>({});
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
 
   const reset = useCallback(() => {
     setSearching(false);
@@ -67,16 +49,17 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
     setCustomUrl("");
     setSourceType("wikipedia");
     setSaved(false);
+    setProviderResults({});
+    setProviderLoading({});
+    setActiveProvider(null);
   }, []);
 
   async function saveImageToStoreAndDisk(
     blob: Blob,
-    sourceType: string,
     sourceUrl: string,
   ): Promise<string> {
     const arrayBuffer = await blob.arrayBuffer();
     const hash = await md5Hash(arrayBuffer);
-    const artistNameNorm = artist.name.toLowerCase().trim();
 
     const record = {
       md5: hash,
@@ -84,43 +67,30 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       format: blob.type || "image/jpeg",
       size: arrayBuffer.byteLength,
       createdAt: Date.now(),
-      artistName: artistNameNorm,
+      artistName: artist.name.toLowerCase().trim(),
       mbzArtistId: artist.mbz || undefined,
       sourceUrl,
     };
 
-    if (await isElectronImageStore()) {
-      await electronStoreImage(record);
-    } else {
-      await indexDbStoreImage(record);
-    }
+    await indexDbStoreImage(record);
 
     const { getPlatformService } = await import("../../services/platform/factory");
     const p = await getPlatformService();
     const { origins, currentOrigin: fallbackOrigin } = useAuthStore.getState();
     const saveOrigin = origins.find((o) => o.id === artist.originId) ?? fallbackOrigin;
+
     if (saveOrigin?.folderPath) {
-      try {
-        const artistDir = sanitizeForPath(artist.name);
-        const imgDir = `${artistDir}/.img`;
-        const dirPath = `${saveOrigin.folderPath}/${imgDir}`;
-        const mbzId = artist.mbz || "unknown";
-        const ext = getExt(blob.type);
-        const fileName = `${mbzId}.${sourceType}.${ext}`;
-        const filePath = `${dirPath}/${fileName}`;
-        await p.createDirectory(dirPath);
-        const wrote = await p.writeFile(filePath, new Uint8Array(arrayBuffer));
-        const stats = wrote ? await p.getFileStats(filePath) : null;
-        if (!wrote || !stats || stats.size === 0) {
-          console.warn("[artist-image-manager] writeFile did not persist", filePath, stats);
-        }
-      } catch (fsErr) {
-        console.warn("[artist-image-manager] filesystem save failed (non-fatal):", fsErr);
+      const ext = getExt(blob.type);
+      const filePath = `${saveOrigin.folderPath}/${sanitizeForPath(artist.name)}/.img/${hash}.${ext}`;
+
+      const exists = await p.fileExists(filePath).catch(() => false);
+      if (!exists) {
+        await p.createDirectory(`${saveOrigin.folderPath}/${sanitizeForPath(artist.name)}/.img`).catch(() => {});
+        await p.writeFile(filePath, new Uint8Array(arrayBuffer));
       }
     }
 
-    const blobUrl = URL.createObjectURL(blob);
-    return blobUrl;
+    return URL.createObjectURL(blob);
   }
 
   useEffect(() => {
@@ -132,15 +102,12 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       }
 
       const artistNorm = artist.name.toLowerCase().trim();
-      const isElectron = await isElectronImageStore();
 
       // 1. Check store (artist-only, skip album covers)
-      const all = isElectron
-        ? await electronFindImages({ artistName: artistNorm })
-        : await findImages({ artistName: artistNorm });
+      const all = await findImages();
       const saved = all.find((r) => !r.albumName);
-      if (saved && (saved.blob.byteLength > 0 || isElectron)) {
-        const blobUrl = isElectron ? await electronRecordToBlobUrl(saved) : await recordToBlobUrl(saved);
+      if (saved && saved.blob.byteLength > 0) {
+        const blobUrl = await recordToBlobUrl(saved);
         if (blobUrl) { setPreviewUrl(blobUrl); return; }
       }
 
@@ -150,22 +117,8 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
           const { getPlatformService } = await import("../../services/platform/factory");
           const p = await getPlatformService();
           const artistDir = sanitizeForPath(artist.name);
-          const imgDir = `${artistOrigin.folderPath}/${artistDir}/.img`;
-          const entries = await p.readDirectory(imgDir).catch(() => []);
-          const imageFile = entries.find((e) => e.isFile && /\.(jpg|jpeg|png|webp)$/i.test(e.name));
-          if (imageFile) {
-            const raw = await p.readFile(imageFile.path);
-            if (raw) {
-              const blob = new Blob([raw] as BlobPart[]);
-              const arrayBuffer = await blob.arrayBuffer();
-              const ext = imageFile.name.endsWith(".png") ? "image/png" : imageFile.name.endsWith(".webp") ? "image/webp" : "image/jpeg";
-              const hash = await md5Hash(arrayBuffer);
-              const record = { md5: hash, blob: arrayBuffer, format: ext, size: arrayBuffer.byteLength, createdAt: Date.now(), artistName: artistNorm, sourceUrl: imageFile.path };
-              if (isElectron) { await electronStoreImage(record); } else { await indexDbStoreImage(record); }
-              const blobUrl = URL.createObjectURL(blob);
-              setPreviewUrl(blobUrl);
-            }
-          }
+          const blobUrl = await importFromDotImg(`${artistOrigin.folderPath}/${artistDir}/.img`, p, { artistName: artistNorm });
+          if (blobUrl) setPreviewUrl(blobUrl);
         } catch {
           // .img folder doesn't exist
         }
@@ -179,7 +132,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
     setError(null);
     addMsg("Saving artist image...", "info", "Artist image");
     try {
-      const sourceUrl = await searchWikipedia(artist.name);
+      const sourceUrl = await searchWikipedia(artist.name, "artist-image-manager");
       if (!sourceUrl) {
         setError("No image found for this artist on Wikipedia.");
         setSearching(false);
@@ -189,7 +142,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       const resp = await platformFetch(sourceUrl, { method: "GET" });
       if (!resp.ok) { setError("Failed to download image."); setSearching(false); return; }
       const blob = await resp.blob();
-      const savedBlobUrl = await saveImageToStoreAndDisk(blob, "wikipedia", sourceUrl);
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, sourceUrl);
       setPreviewUrl(savedBlobUrl);
       setSaved(true);
       onImageSaved(savedBlobUrl);
@@ -200,6 +153,65 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       addMsg("Failed to save artist image", "danger", "Artist image");
     } finally {
       setSearching(false);
+    }
+  }
+
+  async function handleFetchProvider(providerName: string) {
+    setProviderLoading((prev) => ({ ...prev, [providerName]: true }));
+    setError(null);
+    console.log(`[artist-image-manager] fetching from provider: "${providerName}" artist="${artist.name}"`);
+    try {
+      const items = await artistImageResolver.search(providerName, {
+        artist: artist.name,
+        musicbrainzId: artist.mbz || undefined,
+      });
+      console.log(`[artist-image-manager] "${providerName}" resolved ${items.length} candidate(s)`);
+      if (items.length === 0) {
+        console.warn(`[artist-image-manager] "${providerName}" returned no candidates`);
+        setError(`No results from ${providerName}`);
+        setProviderResults((prev) => ({ ...prev, [providerName]: [] }));
+        return;
+      }
+      const candidatesWithBlobs = await Promise.all(
+        items.map(async (cand) => ({
+          ...cand,
+          blobUrl: await fetchImageAsBlobUrl(cand.thumbnailUrl || cand.url),
+        })),
+      );
+      setProviderResults((prev) => ({ ...prev, [providerName]: candidatesWithBlobs }));
+    } catch (err) {
+      console.error(`[artist-image-manager] "${providerName}" fetch error:`, err);
+      setError(`Failed to search ${providerName}: ${err instanceof Error ? err.message : "unknown error"}`);
+      setProviderResults((prev) => ({ ...prev, [providerName]: [] }));
+    } finally {
+      setProviderLoading((prev) => ({ ...prev, [providerName]: false }));
+    }
+  }
+
+  async function handleSelectProviderCandidate(candidate: ArtistCandidate) {
+    const addMsg = useStatusStore.getState().addMessage;
+    setSaving(true);
+    setError(null);
+    setActiveProvider(candidate.provider);
+    setSourceType(candidate.provider);
+    addMsg("Saving artist image...", "info", "Artist image");
+    try {
+      const blobUrl = await fetchImageAsBlobUrl(candidate.url);
+      if (!blobUrl) { setError("Failed to download image."); setSaving(false); return; }
+
+      const response = await fetch(blobUrl);
+      const blob = await response.blob();
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, candidate.url);
+      setPreviewUrl(savedBlobUrl);
+      setSaved(true);
+      onImageSaved(savedBlobUrl);
+      addMsg("Artist image saved", "success", "Artist image");
+    } catch (err) {
+      console.error("[artist-image-manager] provider candidate error:", err);
+      setError("Failed to select artist image.");
+      addMsg("Failed to save artist image", "danger", "Artist image");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -214,7 +226,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       if (!resp.ok) { setError("Could not fetch image from that URL."); setSearching(false); return; }
       const blob = await resp.blob();
       setSourceType("custom");
-      const savedBlobUrl = await saveImageToStoreAndDisk(blob, "custom", customUrl.trim());
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, customUrl.trim());
       setPreviewUrl(savedBlobUrl);
       setSaved(true);
       onImageSaved(savedBlobUrl);
@@ -235,15 +247,9 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       const p = await getPlatformService();
       const { origins, currentOrigin: fallbackOrigin } = useAuthStore.getState();
       const removeOrigin = origins.find((o) => o.id === artist.originId) ?? fallbackOrigin;
-      if (removeOrigin?.folderPath && artist.mbz) {
+      if (removeOrigin?.folderPath) {
         const artistDir = sanitizeForPath(artist.name);
-        const imgDir = `${removeOrigin.folderPath}/${artistDir}/.img`;
-        const mbzId = artist.mbz;
-        for (const st of ["wikipedia", "custom"] as const) {
-          for (const e of ["jpg", "png", "webp"]) {
-            await p.deleteFile(`${imgDir}/${mbzId}.${st}.${e}`).catch(() => {});
-          }
-        }
+        await clearDotImgDir(`${removeOrigin.folderPath}/${artistDir}/.img`, p);
       }
       setPreviewUrl(null);
       setSaved(false);
@@ -272,6 +278,50 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
 
           {error && <p className="text-xs text-destructive">{error}</p>}
 
+          {/* Providers */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">Search from providers</p>
+            {artistImageResolver.getProviderNames().map((name) => {
+              const candidates = providerResults[name] || [];
+              const loading = providerLoading[name];
+              const meta = ARTIST_PROVIDER_META[name];
+              const label = meta?.label || name;
+              const hasResults = candidates.length > 0;
+              const isActive = activeProvider === name;
+
+              return (
+                <div key={name} className={cn("rounded-md border p-2", isActive ? "border-green-500/50 bg-green-500/10" : "border-border/40")}>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-medium">{label}</span>
+                      {hasResults && <p className="text-[10px] text-muted-foreground truncate mt-0.5">{candidates.length} candidate{candidates.length !== 1 ? "s" : ""}</p>}
+                    </div>
+                    <Button variant="outline" size="sm" className="h-7 text-[10px] shrink-0" onClick={() => handleFetchProvider(name)} disabled={loading}>
+                      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                  {hasResults && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {candidates.map((cand, idx) => (
+                        <div key={`${cand.provider}-${idx}`} className="relative group">
+                          <ArtImage
+                            src={cand.blobUrl || cand.url}
+                            alt={cand.provider}
+                            fallback={cand.provider.charAt(0).toUpperCase()}
+                            className={cn("h-12 w-12 rounded-md cursor-pointer ring-1 ring-transparent transition-all hover:ring-primary/50", isActive && "ring-green-500/50")}
+                            onClick={() => handleSelectProviderCandidate(cand)}
+                          />
+                          <button className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-[8px] text-primary-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm" onClick={() => handleSelectProviderCandidate(cand)} title="Select this image">✓</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Wikipedia */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-foreground">Search from Wikipedia</p>
             <Button variant="outline" size="sm" className="w-full gap-2" onClick={handleSearch} disabled={searching}>
@@ -280,6 +330,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
             </Button>
           </div>
 
+          {/* Custom URL */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-foreground">Or paste an image URL</p>
             <div className="flex gap-2">
@@ -307,9 +358,9 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
             </Button>
           </div>
 
-          {artistOrigin?.folderPath && (
+          {saved && artistOrigin?.folderPath && (
             <p className="text-[10px] text-muted-foreground text-center">
-              Saved to {artistOrigin.folderPath}/{sanitizeForPath(artist.name)}/.img/{artist.mbz || "unknown"}.{sourceType}.jpg
+              Saved to {artistOrigin.folderPath}/{sanitizeForPath(artist.name)}/.img/
             </p>
           )}
         </div>

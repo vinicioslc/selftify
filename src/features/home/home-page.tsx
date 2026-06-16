@@ -17,6 +17,7 @@ type HomePageProps = {
   onNavigate?: (view: AppView) => void;
   onNavigateAlbum?: (album: Album) => void;
   onNavigateArtist?: (artist: AlbumArtist) => void;
+  onOpenSettings?: (tab?: string) => void;
 };
 
 const platformCards = [
@@ -38,7 +39,7 @@ const quickActions = [
   { label: "Random", icon: "🎲", route: "/local/songs?sort=random" },
 ];
 
-export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist }: HomePageProps) {
+export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpenSettings }: HomePageProps) {
   const { origins, currentOrigin, setCurrentOrigin } = useAuthStore();
   const { sidebarShowVisualizer, setSidebarShowVisualizer, theme, setTheme } = useSettingsStore();
   const { setQueue } = usePlayerStore();
@@ -170,7 +171,7 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist }: Home
                       </div>
                     </CardHeader>
                     <CardContent className="relative">
-                      <Button size="sm" variant="outline" className="bg-background/80" onClick={() => onNavigate?.("settings")}>
+                      <Button size="sm" variant="outline" className="bg-background/80" onClick={() => onOpenSettings?.()}>
                         Configure
                       </Button>
                     </CardContent>

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock the external dependencies — the hook itself is the "implementation under test"
-vi.mock("../../services/image-cache", () => ({
+vi.mock("../../services/image-fetch", () => ({
   fetchImageAsBlobUrl: vi.fn((url: string) => {
     if (url && url.startsWith("https://upload.wikimedia.org/"))
       return Promise.resolve(`blob:mock/${url.split("/").pop()}`);

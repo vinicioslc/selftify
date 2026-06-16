@@ -1,4 +1,4 @@
-import { fetchImageAsBlobUrl } from "./image-cache";
+import { fetchImageAsBlobUrl } from "./image-fetch";
 import { platformFetch } from "./platform-fetch";
 
 const SPARQL_URL = "https://query.wikidata.org/sparql";
