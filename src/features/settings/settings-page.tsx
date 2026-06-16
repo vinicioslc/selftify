@@ -1,6 +1,7 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore, VisualizerType } from "../../stores/settings.store";
-import { Origin, OriginType } from "../../types/domain-types";
+import { buildLocalOrigin } from "../../lib/build-navigation";
+import { Origin } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
@@ -11,15 +12,13 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
 import { useState, useEffect } from "react";
-import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe, Database, HardDrive } from "lucide-react";
+import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe, Database } from "lucide-react";
 import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
 import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
 import { OriginEditDialog } from "./origin-edit-dialog";
 import { CacheManagerModal } from "./cache-manager-modal";
 import { RankingView } from "./ranking-view";
 import { useStatusStore } from "../../stores/status.store";
-import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group";
-import { getDiskCache, clearAllDiskCaches, type MusicBrainzCacheTtl } from "../../services/musicbrainz-disk-cache";
 
 const PROVIDER_META: Record<string, { label: string; description: string; domain: string }> = {
   embedded: { label: "Embedded Tags", description: "Cover art extracted from file tags", domain: "local" },
@@ -40,8 +39,8 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     visualizerType, setVisualizerType,
     visualizerEnabled, setVisualizerEnabled,
     crossfadeEnabled, setCrossfadeEnabled,
-    crossfadeDuration, setCrossfadeDuration,
-    transitionMixingEnabled, setTransitionMixingEnabled,
+    fadeInDuration, setFadeInDuration,
+    fadeOutDuration, setFadeOutDuration,
     sidebarCollapsed,
     animationsEnabled, setAnimationsEnabled,
     activeAudioOutputs, setActiveAudioOutputs,
@@ -50,7 +49,6 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     searchTimeoutMs, setSearchTimeoutMs,
     streamTimeoutMs, setStreamTimeoutMs,
     cacheTtlMinutes, setCacheTtlMinutes,
-    musicbrainzCacheTtl, setMusicbrainzCacheTtl,
     artworkProviders, isArtworkProviderEnabled, getArtworkPaceMs, setArtworkProvider,
   } = useSettingsStore();
 
@@ -74,8 +72,8 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   const [editingOrigin, setEditingOrigin] = useState<Origin | null>(null);
   const [cacheModalOpen, setCacheModalOpen] = useState(false);
   const [clearingImageCache, setClearingImageCache] = useState(false);
-  const [clearingDiskCache, setClearingDiskCache] = useState(false);
-  const [diskCacheCleared, setDiskCacheCleared] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
+  const [syncingMetadata, setSyncingMetadata] = useState(false);
 
   const [form, setForm] = useState({
     folderPath: "",
@@ -95,16 +93,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
         setAuthError("Please select a music folder");
         return;
       }
-      const origin = {
-        id: crypto.randomUUID(),
-        name: form.folderPath.split("/").filter(Boolean).pop() || "Local Files",
-        type: OriginType.LOCAL,
-        folderPath: form.folderPath,
-        downloadFolder: form.downloadFolder || form.folderPath,
-        enableOnlineSearch: form.enableOnlineSearch,
-        musicBrainzToken: form.musicBrainzToken || undefined,
-        youtubeMusicHeaders: form.youtubeMusicHeaders || undefined,
-      };
+      const origin = buildLocalOrigin(form);
       addOrigin(origin);
       setCurrentOrigin(origin);
 
@@ -156,26 +145,33 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-3xl space-y-8 p-6">
-          <div>
-            <h1 className="text-2xl font-bold">Settings</h1>
-            <p className="text-muted-foreground">Configure your music sources and preferences</p>
-          </div>
+      <div className="shrink-0 px-6 pt-6">
+        <div className="mx-auto max-w-3xl">
+          <h1 className="text-2xl font-bold">Settings</h1>
+          <p className="text-muted-foreground">Configure your music sources and preferences</p>
+        </div>
+      </div>
 
-          <Tabs defaultValue={initialTab || "servers"}>
-            <TabsList>
-              <TabsTrigger value="servers">Servers</TabsTrigger>
-              <TabsTrigger value="playback">Playback</TabsTrigger>
-              <TabsTrigger value="audio">Audio</TabsTrigger>
-              <TabsTrigger value="visualizer">Visualizer</TabsTrigger>
-              <TabsTrigger value="network">Network</TabsTrigger>
-              <TabsTrigger value="ranking">Ranking</TabsTrigger>
-              <TabsTrigger value="artwork">Artwork</TabsTrigger>
-              <TabsTrigger value="appearance">Appearance</TabsTrigger>
-            </TabsList>
+      <Tabs defaultValue={initialTab || "servers"} className="flex min-h-0 flex-1 flex-col">
+            <div className="shrink-0 px-6">
+              <div className="mx-auto max-w-3xl">
+                <TabsList>
+                  <TabsTrigger value="servers">Servers</TabsTrigger>
+                  <TabsTrigger value="library">Library</TabsTrigger>
+                  <TabsTrigger value="playback">Playback</TabsTrigger>
+                  <TabsTrigger value="audio">Audio</TabsTrigger>
+                  <TabsTrigger value="visualizer">Visualizer</TabsTrigger>
+                  <TabsTrigger value="network">Network</TabsTrigger>
+                  <TabsTrigger value="ranking">Ranking</TabsTrigger>
+                  <TabsTrigger value="artwork">Artwork</TabsTrigger>
+                  <TabsTrigger value="appearance">Appearance</TabsTrigger>
+                </TabsList>
+              </div>
+            </div>
 
-            <TabsContent value="servers" className="space-y-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-6">
+              <div className="mx-auto max-w-3xl space-y-8 py-6">
+                <TabsContent value="servers" className="space-y-4">
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">Connected Sources</CardTitle>
@@ -304,6 +300,60 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
               </Card>
             </TabsContent>
 
+            <TabsContent value="library" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Local Library</CardTitle>
+                  <CardDescription>Manage your local music collection</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="font-medium mb-1">Organize Files</p>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      Rename and move files to follow the <code>Artist/Album (Year)/NN - Title.ext</code> convention.
+                      Generates <code>cover.jpg</code>, <code>album.nfo</code>, and <code>artist.nfo</code> sidecar files.
+                    </p>
+                    <Button
+                      variant="default"
+                      onClick={async () => {
+                        const { organizeAllFiles } = await import("../../services/organizer/manual-organizer");
+                        setOrganizing(true);
+                        try {
+                          await organizeAllFiles();
+                        } finally {
+                          setOrganizing(false);
+                        }
+                      }}
+                      disabled={organizing}
+                    >
+                      {organizing ? "Organizing..." : "Organize Files"}
+                    </Button>
+                    <div className="mt-4">
+                      <p className="font-medium mb-1">Sync Metadata</p>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        Update audio file metadata tags, embed cover art from .img/ folders, and regenerate album/artist .nfo files.
+                      </p>
+                      <Button
+                        variant="default"
+                        onClick={async () => {
+                          const { syncAlbumMetadata } = await import("../../services/organizer/sync-metadata");
+                          setSyncingMetadata(true);
+                          try {
+                            await syncAlbumMetadata();
+                          } finally {
+                            setSyncingMetadata(false);
+                          }
+                        }}
+                        disabled={syncingMetadata}
+                      >
+                        {syncingMetadata ? "Syncing..." : "Sync Metadata"}
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             <TabsContent value="playback" className="space-y-4">
               <Card>
                 <CardHeader>
@@ -312,55 +362,42 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                 <CardContent className="space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-medium">Crossfade</p>
-                      <p className="text-sm text-muted-foreground">Smooth transition between tracks</p>
+                      <p className="font-medium">Crossfade (Fade In / Fade Out)</p>
+                      <p className="text-sm text-muted-foreground">Smooth volume fade at start and end of each track</p>
                     </div>
                     <Switch checked={crossfadeEnabled} onCheckedChange={setCrossfadeEnabled} />
                   </div>
                   {crossfadeEnabled && (
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span>Crossfade duration</span>
-                        <span>{crossfadeDuration}s</span>
+                    <div className="space-y-4 pt-2">
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span>Fade in (track start)</span>
+                          <span>{fadeInDuration}s</span>
+                        </div>
+                        <Slider
+                          value={[fadeInDuration]}
+                          onValueChange={([v]) => setFadeInDuration(v)}
+                          min={0}
+                          max={12}
+                          step={0.5}
+                        />
+                        <p className="text-xs text-muted-foreground">0s = instant start</p>
                       </div>
-                      <Slider
-                        value={[crossfadeDuration]}
-                        onValueChange={([v]) => setCrossfadeDuration(v)}
-                        min={1}
-                        max={12}
-                        step={1}
-                      />
-                    </div>
-                  )}
-
-                  <Separator className="my-2" />
-
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">Transition Mixing</p>
-                      <p className="text-sm text-muted-foreground">
-                        Fade out current track while fading in the next (overlap)
-                      </p>
-                    </div>
-                    <Switch
-                      checked={transitionMixingEnabled}
-                      onCheckedChange={setTransitionMixingEnabled}
-                    />
-                  </div>
-                  {transitionMixingEnabled && (
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span>Transition duration</span>
-                        <span>{crossfadeDuration}s</span>
+                      <Separator />
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span>Fade out (track end)</span>
+                          <span>{fadeOutDuration}s</span>
+                        </div>
+                        <Slider
+                          value={[fadeOutDuration]}
+                          onValueChange={([v]) => setFadeOutDuration(v)}
+                          min={0}
+                          max={12}
+                          step={0.5}
+                        />
+                        <p className="text-xs text-muted-foreground">0s = instant stop</p>
                       </div>
-                      <Slider
-                        value={[crossfadeDuration]}
-                        onValueChange={([v]) => setCrossfadeDuration(v)}
-                        min={0}
-                        max={12}
-                        step={0.5}
-                      />
-                      <p className="text-xs text-muted-foreground">0s = instant switch</p>
                     </div>
                   )}
                 </CardContent>
@@ -546,61 +583,6 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                     </Button>
                     <p className="mt-1 text-xs text-muted-foreground">Remove cached album, artist, and search thumbnails so they are fetched again</p>
                   </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-medium flex items-center gap-2">
-                      <HardDrive className="h-4 w-4" /> MusicBrainz Disk Cache
-                    </h4>
-                    <p className="text-xs text-muted-foreground">
-                      Store MusicBrainz metadata in <code className="text-[10px]">db.*.selftify</code> files inside artist folders.
-                      Survives browser data clears and avoids redundant HTTP requests.
-                    </p>
-
-                    <RadioGroup
-                      value={musicbrainzCacheTtl}
-                      onValueChange={(v) => setMusicbrainzCacheTtl(v as MusicBrainzCacheTtl)}
-                      className="flex flex-wrap gap-x-6 gap-y-2"
-                    >
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <RadioGroupItem value="1min" /> 1 minute
-                      </label>
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <RadioGroupItem value="15min" /> 15 minutes
-                      </label>
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <RadioGroupItem value="30min" /> 30 minutes
-                      </label>
-                      <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <RadioGroupItem value="never" /> Never expire
-                      </label>
-                    </RadioGroup>
-
-                    <p className="text-xs text-muted-foreground">
-                      TTL before re-fetching cached metadata from MusicBrainz.
-                    </p>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      onClick={async () => {
-                        setClearingDiskCache(true);
-                        const origin = origins.find((o) => o.type === OriginType.LOCAL);
-                        if (origin?.folderPath) {
-                          await clearAllDiskCaches(origin.folderPath);
-                        }
-                        setClearingDiskCache(false);
-                        setDiskCacheCleared(true);
-                        setTimeout(() => setDiskCacheCleared(false), 2000);
-                      }}
-                      disabled={clearingDiskCache}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      {clearingDiskCache ? "Clearing..." : diskCacheCleared ? "\u2713 Cleared" : "Clear Disk Cache Now"}
-                    </Button>
-                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -733,10 +715,10 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                 </CardContent>
               </Card>
             </TabsContent>
-          </Tabs>
-          <CacheManagerModal open={cacheModalOpen} onOpenChange={setCacheModalOpen} />
+          </div>
         </div>
-      </ScrollArea>
+      </Tabs>
+      <CacheManagerModal open={cacheModalOpen} onOpenChange={setCacheModalOpen} />
     </div>
   );
 }

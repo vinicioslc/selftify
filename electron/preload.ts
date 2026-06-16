@@ -41,17 +41,23 @@ const api = {
   },
   local: {
     parseFile: (filePath: string) => ipcRenderer.invoke('local:parse-file', filePath),
+    replaceCover: (request: { audioPath: string; coverPath: string; metadata?: Record<string, unknown> }) =>
+      ipcRenderer.invoke('local:replace-cover', request),
+    updateMetadata: (request: { audioPath: string; metadata?: Record<string, unknown> }) =>
+      ipcRenderer.invoke('local:update-metadata', request),
   },
   imageFetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) =>
     ipcRenderer.invoke('image:fetch', url, options),
-  imageCache: {
-    store: (hash: string, buffer: number[], format: string, meta?: Record<string, unknown>) =>
-      ipcRenderer.invoke('image-cache:store', hash, buffer, format, meta),
-    get: (hash: string) => ipcRenderer.invoke('image-cache:get', hash),
-    getBySourceUrl: (url: string) => ipcRenderer.invoke('image-cache:get-by-url', url),
-    find: (query: Record<string, unknown>) => ipcRenderer.invoke('image-cache:find', query),
-    clear: () => ipcRenderer.invoke('image-cache:clear'),
+  artworkSearch: (provider: string, input: any) =>
+    ipcRenderer.invoke('artwork:search', provider, input),
+  wikiSearch: (query: string) =>
+    ipcRenderer.invoke('wiki:search', query),
+
+  mbz: {
+    fetch: (url: string, headers: Record<string, string>) =>
+      ipcRenderer.invoke('mbz:fetch', url, headers),
   },
+
   windowControls: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),

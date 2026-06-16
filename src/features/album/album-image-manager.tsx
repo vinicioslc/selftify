@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { Album } from "../../types/domain-types";
 import { useAuthStore } from "../../stores/auth.store";
 import { useStatusStore } from "../../stores/status.store";
@@ -6,14 +6,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Button } from "../../components/ui/button";
 import { ArtImage } from "../../components/ui/art-image";
 import { AlbumEmptySvg } from "../../components/ui/empty-image-svg";
-import { Loader2, Search, Save, Trash2, Link, Check } from "lucide-react";
-import { storeImage as indexDbStoreImage, md5Hash, findImages, recordToBlobUrl } from "../../services/image-store";
-import { electronStoreImage, electronFindImages, isElectronImageStore, electronRecordToBlobUrl } from "../../services/electron-image-store";
+import { Loader2, Search, Save, Trash2, Link, Check, Maximize2 } from "lucide-react";
+import { storeImage, md5Hash, findImages, recordToBlobUrl } from "../../services/image-store";
 import { platformFetch } from "../../services/platform-fetch";
-import { getSongsByAlbum } from "../../services/local-database";
+import { getSongsByAlbum } from "../../api/local/local-queries";
 import { artworkResolver } from "../../services/artwork/artwork-resolver";
+import { ARTWORK_PROVIDER_META } from "../../services/artwork/providers/meta";
 import type { ArtworkCandidate } from "../../services/artwork/providers/types";
-import { fetchImageAsBlobUrl } from "../../services/image-cache";
+import { fetchImageAsBlobUrl } from "../../services/image-fetch";
+import { searchWikipedia, sanitizeForPath } from "../../services/wiki-image-search";
+import { invalidateAlbumCaches } from "../../services/invalidate-caches";
+import { importFromDotImg, clearDotImgDir } from "../../services/dot-img";
+
 import { cn } from "../../lib/utils";
 
 type Props = {
@@ -26,37 +30,8 @@ type Props = {
 
 type SourceType = "wikipedia" | "custom" | string;
 
-const WIKI_API = "https://en.wikipedia.org/w/api.php";
-
-type WikiPageResult = {
-  query?: {
-    pages?: Record<string, {
-      missing?: boolean;
-      thumbnail?: { source: string; width: number; height: number };
-    }>;
-  };
-};
-
-const PROVIDER_LABELS: Record<string, string> = {
-  itunes: "iTunes",
-  deezer: "Deezer",
-};
-
-async function searchWikipedia(query: string): Promise<string | null> {
-  const url = `${WIKI_API}?action=query&titles=${encodeURIComponent(query)}&prop=pageimages&pithumbsize=500&format=json&origin=*`;
-  try {
-    const res = await platformFetch(url, { method: "GET" });
-    if (!res.ok) return null;
-    const data: WikiPageResult = await res.json();
-    const page = Object.values(data?.query?.pages ?? {})[0];
-    return page && !page.missing ? (page.thumbnail?.source ?? null) : null;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeForPath(name: string): string {
-  return name.replace(/[/\\?%*:|"<>]/g, "_").trim();
+function providerLabel(name: string): string {
+  return ARTWORK_PROVIDER_META[name]?.label || name;
 }
 
 const COVER_SIZE = 1024;
@@ -95,26 +70,19 @@ function resizeImageForCover(blob: Blob): Promise<{ arrayBuffer: ArrayBuffer; bl
 async function saveImageToStoreAndDisk(
   blob: Blob,
   album: Album,
-  sourceType: string,
   sourceUrl: string,
 ): Promise<string | null> {
-  console.log("[Selftify] [album-image-manager] saveImageToStoreAndDisk: blob size", blob.size, "type", blob.type);
   let arrayBuffer: ArrayBuffer;
   let resizedBlob: Blob;
   try {
     const resized = await resizeImageForCover(blob);
     arrayBuffer = resized.arrayBuffer;
     resizedBlob = resized.blob;
-    console.log("[Selftify] [album-image-manager] resize ok: arrayBuffer", arrayBuffer.byteLength, "bytes");
-  } catch (err) {
-    console.error("[Selftify] [album-image-manager] resize failed:", err);
+  } catch {
     return null;
   }
 
   const hash = await md5Hash(arrayBuffer);
-  const albumNameNorm = album.name.toLowerCase().trim();
-  const artistNameNorm = album.albumArtistName.toLowerCase().trim();
-  console.log("[Selftify] [album-image-manager] md5 hash", hash);
 
   const record = {
     md5: hash,
@@ -122,84 +90,75 @@ async function saveImageToStoreAndDisk(
     format: "image/jpeg",
     size: arrayBuffer.byteLength,
     createdAt: Date.now(),
-    artistName: artistNameNorm,
-    albumName: albumNameNorm,
+    artistName: album.albumArtistName.toLowerCase().trim(),
+    albumName: album.name.toLowerCase().trim(),
     mbzReleaseGroupId: album.mbzReleaseGroupId || undefined,
     mbzReleaseId: album.mbzId || undefined,
     sourceUrl,
   };
 
-  try {
-    if (await isElectronImageStore()) {
-      await electronStoreImage(record);
-      console.log("[Selftify] [album-image-manager] electronStoreImage ok");
-    } else {
-      await indexDbStoreImage(record);
-      console.log("[Selftify] [album-image-manager] indexDbStoreImage ok");
-    }
-  } catch (err) {
-    console.error("[Selftify] [album-image-manager] store save failed:", err);
-  }
+  try { await storeImage(record); } catch {}
 
-  console.log("[Selftify] [album-image-manager] origin lookup: album.originId", album.originId);
   const { getPlatformService } = await import("../../services/platform/factory");
   const p = await getPlatformService();
-  console.log("[Selftify] [album-image-manager] platform", p.isElectron ? "electron" : p.isWeb ? "web" : "capacitor");
   const { origins, currentOrigin } = useAuthStore.getState();
   const albumOrigin = origins.find((o) => o.id === album.originId) ?? currentOrigin;
-  console.log("[Selftify] [album-image-manager] albumOrigin", albumOrigin?.id, "folderPath", albumOrigin?.folderPath);
+
   if (albumOrigin?.folderPath) {
-    const artistDir = sanitizeForPath(album.albumArtistName);
-    const albumDir = sanitizeForPath(album.name);
-    const imgDir = `${artistDir}/${albumDir}/.img`;
-    const dirPath = `${albumOrigin.folderPath}/${imgDir}`;
-    const prefix = album.mbzId ? `${album.mbzId}.` : "";
-    const fileName = `${prefix}${sourceType}.jpg`;
-    const filePath = `${dirPath}/${fileName}`;
-    console.log("[Selftify] [album-image-manager] mkdir:", dirPath);
-    try {
-      await p.createDirectory(dirPath);
-      console.log("[Selftify] [album-image-manager] mkdir ok");
-      console.log("[Selftify] [album-image-manager] write:", filePath);
-      const wrote = await p.writeFile(filePath, new Uint8Array(arrayBuffer));
-      console.log("[Selftify] [album-image-manager] write result:", wrote);
-      const stats = wrote ? await p.getFileStats(filePath) : null;
-      if (wrote && stats && stats.size > 0) {
-        console.log(`[Selftify] [album-image-manager] cover saved to ${filePath}`);
-      } else {
-        console.warn("[Selftify] [album-image-manager] writeFile did not persist", filePath, stats);
-      }
-    } catch (fsErr) {
-      console.error("[Selftify] [album-image-manager] filesystem save failed:", fsErr);
+    const albumAbsDir = await getAlbumAbsDir(album, albumOrigin.folderPath);
+    const filePath = `${albumAbsDir}/.img/${hash}.jpg`;
+
+    const exists = await p.fileExists(filePath).catch(() => false);
+    if (!exists) {
+      await p.createDirectory(`${albumAbsDir}/.img`).catch(() => {});
+      await p.writeFile(filePath, new Uint8Array(arrayBuffer));
     }
 
-    // Embed cover into all local audio files for this album (Electron only)
-    const electronApi = (window as any).electronApi;
-    if (electronApi?.yt?.embedArtwork && p.isElectron) {
+    invalidateAlbumCaches(album);
+
+    const api = (window as any).electronApi;
+    if (api?.yt?.embedArtwork && p.isElectron) {
+      getSongsByAlbum(album.albumArtistName, album.name).then((dbSongs) => {
+        const paths = dbSongs.map((s) => s.path).filter(Boolean) as string[];
+        Promise.allSettled(paths.map((audioPath) =>
+          api.yt.embedArtwork({ audioPath, coverPath: filePath }).catch(() => {}),
+        ));
+      }).catch(() => {});
+    }
+
+    Promise.resolve().then(async () => {
       try {
-        const dbSongs = await getSongsByAlbum(album.albumArtistName, album.name);
-        const audioPaths = dbSongs.map((s) => s.path).filter(Boolean) as string[];
-        if (audioPaths.length > 0) {
-          console.log(`[Selftify] [album-image-manager] embedding cover into ${audioPaths.length} audio files`);
-          for (const audioPath of audioPaths) {
-            try {
-              await electronApi.yt.embedArtwork({ audioPath, coverPath: filePath });
-              console.log(`[Selftify] [album-image-manager] embedded cover into ${audioPath}`);
-            } catch (embedErr) {
-              console.warn(`[album-image-manager] embed failed for ${audioPath}:`, embedErr);
+        const { initDatabase, isReady } = await import("../../services/db/database");
+        const { findAlbumByName, upsertAlbum } = await import("../../services/db/repositories/album-repo");
+        const { OriginType } = await import("../../types/domain-types");
+        const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+        if (root) {
+          if (!isReady()) await initDatabase(root).catch(() => {});
+          if (isReady()) {
+            const existing = findAlbumByName(album.albumArtistName, album.name);
+            if (existing) {
+              const newImg = { id: hash, url: hash, width: null, height: null, format: "image/jpeg" as const };
+              const updated = { ...existing, images: [newImg, ...(existing.images || []).filter((i) => i.id !== hash)], updatedAt: Date.now() };
+              upsertAlbum(updated, album.albumArtistName);
             }
           }
         }
-      } catch (dbErr) {
-        console.warn("[album-image-manager] failed to fetch local songs for embedding:", dbErr);
-      }
-    }
-  } else {
-    console.warn("[Selftify] [album-image-manager] no folderPath for origin", albumOrigin?.id ?? album.originId);
+      } catch {}
+    });
   }
 
   const blobUrl = URL.createObjectURL(resizedBlob);
   return blobUrl;
+}
+
+async function getAlbumAbsDir(album: Album, folderPath: string): Promise<string> {
+  try {
+    const { getAlbumDir } = await import("../../api/local/local-queries");
+    const result = await getAlbumDir(album.albumArtistName, album.name);
+    if (result) return result;
+  } catch {}
+  const base = `${folderPath}/${sanitizeForPath(album.albumArtistName)}/${sanitizeForPath(album.name)}`;
+  return album.releaseYear ? `${base} (${album.releaseYear})` : base;
 }
 
 export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, onImageSaved }: Props) {
@@ -215,6 +174,8 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
   const [coverLoading, setCoverLoading] = useState<Record<string, boolean>>({});
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [fullscreenUrl, setFullscreenUrl] = useState<string | null>(null);
+  const [candidateDims, setCandidateDims] = useState<Record<string, { w: number; h: number }>>({});
 
   const reset = useCallback(() => {
     setSearching(false);
@@ -226,6 +187,12 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
     setCoverLoading({});
     setActiveProvider(null);
     setSaved(false);
+    setFullscreenUrl(null);
+    setCandidateDims({});
+  }, []);
+
+  useEffect(() => {
+    return () => { setFullscreenUrl(null); };
   }, []);
 
   async function loadExistingPreview() {
@@ -237,13 +204,10 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
     const albumNameNorm = album.name.toLowerCase().trim();
     const artistNameNorm = album.albumArtistName.toLowerCase().trim();
 
-    // 1. Check IndexedDB / Electron store
-    const isElectron = await isElectronImageStore();
-    const records = isElectron
-      ? await electronFindImages({ artistName: artistNameNorm, albumName: albumNameNorm })
-      : await findImages({ artistName: artistNameNorm, albumName: albumNameNorm });
+    // 1. Check image store
+    const records = await findImages();
     if (records.length > 0) {
-      const blobUrl = isElectron ? await electronRecordToBlobUrl(records[0]) : await recordToBlobUrl(records[0]);
+      const blobUrl = await recordToBlobUrl(records[0]);
       if (blobUrl) { setPreviewUrl(blobUrl); return; }
     }
 
@@ -252,24 +216,9 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
       try {
         const { getPlatformService } = await import("../../services/platform/factory");
         const p = await getPlatformService();
-        const artistDir = sanitizeForPath(album.albumArtistName);
-        const albumDir = sanitizeForPath(album.name);
-        const imgDir = `${localOrigin.folderPath}/${artistDir}/${albumDir}/.img`;
-        const entries = await p.readDirectory(imgDir).catch(() => []);
-        const imageFile = entries.find((e) => e.isFile && /\.(jpg|jpeg|png|webp)$/i.test(e.name));
-        if (imageFile) {
-          const raw = await p.readFile(imageFile.path);
-          if (raw) {
-            const blob = new Blob([raw] as BlobPart[]);
-            const arrayBuffer = await blob.arrayBuffer();
-            const ext = imageFile.name.endsWith(".png") ? "image/png" : imageFile.name.endsWith(".webp") ? "image/webp" : "image/jpeg";
-            const hash = await md5Hash(arrayBuffer);
-            const record = { md5: hash, blob: arrayBuffer, format: ext, size: arrayBuffer.byteLength, createdAt: Date.now(), artistName: artistNameNorm, albumName: albumNameNorm, sourceUrl: imageFile.path };
-            if (isElectron) { await electronStoreImage(record); } else { await indexDbStoreImage(record); }
-            const blobUrl = URL.createObjectURL(blob);
-            setPreviewUrl(blobUrl);
-          }
-        }
+        const albumAbsDir = await getAlbumAbsDir(album, localOrigin.folderPath);
+        const blobUrl = await importFromDotImg(`${albumAbsDir}/.img`, p, { artistName: artistNameNorm, albumName: albumNameNorm });
+        if (blobUrl) setPreviewUrl(blobUrl);
       } catch {
         // .img folder doesn't exist — normal
       }
@@ -284,6 +233,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
   async function handleFetchProvider(providerName: string) {
     setCoverLoading((prev) => ({ ...prev, [providerName]: true }));
     setError(null);
+    console.log(`[album-image-manager] fetching from provider: "${providerName}" album="${album.name}" artist="${album.albumArtistName}"`);
     try {
       const items = await artworkResolver.resolveFromProvider(providerName, {
         artist: album.albumArtistName,
@@ -291,6 +241,13 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
         musicbrainzReleaseId: album.mbzId || undefined,
         musicbrainzReleaseGroupId: album.mbzReleaseGroupId || undefined,
       });
+      console.log(`[album-image-manager] "${providerName}" resolved ${items.length} candidate(s)`);
+      if (items.length === 0) {
+        console.warn(`[album-image-manager] "${providerName}" returned no candidates`);
+        setError(`No results from ${providerLabel(providerName)}`);
+        setCoverResults((prev) => ({ ...prev, [providerName]: [] }));
+        return;
+      }
       const candidatesWithBlobs = await Promise.all(
         items.map(async (cand) => ({
           ...cand,
@@ -298,7 +255,25 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
         }))
       );
       setCoverResults((prev) => ({ ...prev, [providerName]: candidatesWithBlobs }));
-    } catch {
+
+      // Use provider-provided dimensions (original file), fallback to loading from image
+      const dims: Record<string, { w: number; h: number }> = {};
+      for (const cand of candidatesWithBlobs) {
+        if (cand.width && cand.height) {
+          dims[cand.url] = { w: cand.width, h: cand.height };
+        } else {
+          const url = cand.blobUrl || cand.url;
+          if (!url) continue;
+          try {
+            const img = new Image();
+            await new Promise<void>((r) => { img.onload = () => { dims[cand.url] = { w: img.naturalWidth, h: img.naturalHeight }; r(); }; img.onerror = () => r(); img.src = url; });
+          } catch { /* ignore */ }
+        }
+      }
+      setCandidateDims((prev) => ({ ...prev, ...dims }));
+    } catch (err) {
+      console.error(`[album-image-manager] "${providerName}" fetch error:`, err);
+      setError(`Failed to search ${providerLabel(providerName)}: ${err instanceof Error ? err.message : "unknown error"}`);
       setCoverResults((prev) => ({ ...prev, [providerName]: [] }));
     } finally {
       setCoverLoading((prev) => ({ ...prev, [providerName]: false }));
@@ -306,6 +281,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
   }
 
   async function handleSelectProviderCandidate(candidate: ArtworkCandidate) {
+    setFullscreenUrl(null);
     const addMsg = useStatusStore.getState().addMessage;
     setSaving(true);
     setError(null);
@@ -318,7 +294,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
 
       const response = await fetch(blobUrl);
       const blob = await response.blob();
-      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, candidate.provider, candidate.url);
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, candidate.url);
       if (!savedBlobUrl) throw new Error("saveImageToStoreAndDisk returned null");
       setPreviewUrl(savedBlobUrl);
       setSaved(true);
@@ -334,13 +310,14 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
   }
 
   async function handleSearchWikipedia() {
+    setFullscreenUrl(null);
     const addMsg = useStatusStore.getState().addMessage;
     setSearching(true);
     setError(null);
     addMsg("Saving cover...", "info", "Cover");
     try {
       const query = `${album.name} ${album.albumArtistName}`;
-      const sourceUrl = await searchWikipedia(query);
+      const sourceUrl = await searchWikipedia(query, "album-image-manager");
       if (!sourceUrl) {
         setError("No image found for this album on Wikipedia.");
         setSearching(false);
@@ -350,7 +327,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
       const resp = await platformFetch(sourceUrl, { method: "GET" });
       if (!resp.ok) { setError("Failed to download image."); setSearching(false); return; }
       const blob = await resp.blob();
-      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, "wikipedia", sourceUrl);
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, sourceUrl);
       if (!savedBlobUrl) throw new Error("saveImageToStoreAndDisk returned null");
       setPreviewUrl(savedBlobUrl);
       setSaved(true);
@@ -367,6 +344,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
 
   async function handleFetchCustom() {
     if (!customUrl.trim()) return;
+    setFullscreenUrl(null);
     const addMsg = useStatusStore.getState().addMessage;
     setSearching(true);
     setError(null);
@@ -376,7 +354,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
       if (!resp.ok) { setError("Could not fetch image from that URL."); setSearching(false); return; }
       const blob = await resp.blob();
       setSourceType("custom");
-      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, "custom", customUrl.trim());
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, customUrl.trim());
       if (!savedBlobUrl) throw new Error("saveImageToStoreAndDisk returned null");
       setPreviewUrl(savedBlobUrl);
       setSaved(true);
@@ -392,6 +370,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
 
   async function handleSave() {
     if (!previewUrl || saving) return;
+    setFullscreenUrl(null);
     const addMsg = useStatusStore.getState().addMessage;
     setSaving(true);
     setError(null);
@@ -403,7 +382,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
       if (!resp.ok) { throw new Error(`fetch preview failed: ${resp.status}`); }
       const blob = await resp.blob();
       console.log("[Selftify] [album-image-manager] handleSave: blob size", blob.size, "type", blob.type);
-      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, sourceType, previewUrl);
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, album, previewUrl);
       console.log("[Selftify] [album-image-manager] handleSave: result", savedBlobUrl ? "ok" : "null");
       if (!savedBlobUrl) {
         throw new Error("saveImageToStoreAndDisk returned null");
@@ -430,16 +409,8 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
       const { origins, currentOrigin: fallbackOrigin } = useAuthStore.getState();
       const albumOrigin = origins.find((o) => o.id === album.originId) ?? fallbackOrigin;
       if (albumOrigin?.folderPath) {
-        const artistDir = sanitizeForPath(album.albumArtistName);
-        const albumDir = sanitizeForPath(album.name);
-        const imgDir = `${albumOrigin.folderPath}/${artistDir}/${albumDir}/.img`;
-        const prefix = album.mbzId ? `${album.mbzId}.` : "";
-        const allSources = ["wikipedia", "custom", ...artworkResolver.getProviderNames()];
-        for (const st of allSources) {
-          for (const e of ["jpg", "png", "webp"]) {
-            await p.deleteFile(`${imgDir}/${prefix}${st}.${e}`).catch(() => {});
-          }
-        }
+        const albumAbsDir = await getAlbumAbsDir(album, albumOrigin.folderPath);
+        await clearDotImgDir(`${albumAbsDir}/.img`, p);
       }
       setPreviewUrl(null);
       setSaved(false);
@@ -455,7 +426,8 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
   const providerNames = artworkResolver.getProviderNames();
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
+    <>
+      <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
       <DialogContent className="sm:max-w-xl md:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Manage Album Cover — {album.name}</DialogTitle>
@@ -463,20 +435,32 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
 
         <div className="space-y-4">
           {previewUrl && (
-            <div className="flex flex-col items-center gap-2">
-              <img src={previewUrl} alt={album.name} className="h-48 w-48 rounded-lg object-cover" />
+            <div className="relative flex flex-col items-center gap-2">
+              <img
+                src={previewUrl}
+                alt={album.name}
+                className="h-48 w-48 cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
+                onClick={() => setFullscreenUrl(previewUrl)}
+              />
+              <button
+                className="absolute right-0 top-0 flex h-6 w-6 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition-opacity hover:opacity-100"
+                onClick={() => setFullscreenUrl(previewUrl)}
+                title="View full size"
+              >
+                <Maximize2 className="h-3 w-3" />
+              </button>
             </div>
           )}
 
           {error && <p className="text-xs text-destructive">{error}</p>}
 
           {/* Providers */}
-          <div className="space-y-1.5">
+          {!saved && <div className="space-y-1.5">
             <p className="text-xs font-medium text-foreground">Search from providers</p>
             {providerNames.map((name) => {
               const candidates = coverResults[name] || [];
               const loading = coverLoading[name];
-              const label = PROVIDER_LABELS[name] || name;
+              const label = providerLabel(name);
               const hasResults = candidates.length > 0;
               const isActive = activeProvider === name;
 
@@ -493,7 +477,9 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
                   </div>
                   {hasResults && (
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {candidates.map((cand) => (
+                      {candidates.map((cand) => {
+                        const dim = candidateDims[cand.url];
+                        return (
                         <div key={`${cand.provider}-${cand.url}`} className="relative group">
                           <ArtImage
                             src={cand.blobUrl || cand.url}
@@ -503,27 +489,29 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
                             className={cn("h-12 w-12 rounded-md cursor-pointer ring-1 ring-transparent transition-all hover:ring-primary/50", isActive && "ring-green-500/50")}
                             onClick={() => handleSelectProviderCandidate(cand)}
                           />
+                          {dim && <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/70 px-1 text-[8px] leading-tight text-white">{dim.w}×{dim.h}</span>}
                           <button className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-[8px] text-primary-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm" onClick={() => handleSelectProviderCandidate(cand)} title="Select this cover">✓</button>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               );
             })}
-          </div>
+          </div>}
 
           {/* Wikipedia */}
-          <div className="space-y-2">
+          {!saved && <div className="space-y-2">
             <p className="text-xs font-medium text-foreground">Search from Wikipedia</p>
             <Button variant="outline" size="sm" className="w-full gap-2" onClick={handleSearchWikipedia} disabled={searching}>
               {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               {searching ? "Searching..." : "Search Wikipedia"}
             </Button>
-          </div>
+          </div>}
 
           {/* Custom URL */}
-          <div className="space-y-2">
+          {!saved && <div className="space-y-2">
             <p className="text-xs font-medium text-foreground">Or paste an image URL</p>
             <div className="flex gap-2">
               <input type="text" value={customUrl} onChange={(e) => setCustomUrl(e.target.value)} placeholder="https://example.com/image.jpg" className="flex-1 h-8 rounded-md border border-input bg-background px-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring" onKeyDown={(e) => e.key === "Enter" && handleFetchCustom()} />
@@ -532,7 +520,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
                 Fetch
               </Button>
             </div>
-          </div>
+          </div>}
 
           {/* Actions */}
           <div className="flex gap-2">
@@ -553,11 +541,29 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
 
           {saved && localOrigin?.folderPath && (
             <p className="text-[10px] text-muted-foreground text-center">
-              Saved to {localOrigin.folderPath}/{sanitizeForPath(album.albumArtistName)}/{sanitizeForPath(album.name)}/.img/{album.mbzId ? `${album.mbzId}.` : ""}{sourceType}.jpg
+              Saved to {localOrigin.folderPath}/{sanitizeForPath(album.albumArtistName)}/{sanitizeForPath(album.name)}/.img/
             </p>
           )}
         </div>
       </DialogContent>
     </Dialog>
+
+    {fullscreenUrl && (
+      <div
+        className="fixed inset-0 z-[60] flex cursor-pointer items-center justify-center bg-black/90"
+        onClick={() => setFullscreenUrl(null)}
+        onKeyDown={(e) => { if (e.key === "Escape") setFullscreenUrl(null); }}
+        tabIndex={-1}
+        ref={(el) => el?.focus()}
+      >
+        <img
+          src={fullscreenUrl}
+          alt={album.name}
+          className="max-h-[90vh] max-w-[90vw] object-contain select-none"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    )}
+  </>
   );
 }

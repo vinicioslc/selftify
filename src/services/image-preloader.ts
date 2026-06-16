@@ -1,10 +1,9 @@
 import type { PlatformService } from "./platform/types";
 import { storeImage as indexDbStoreImage, md5Hash, findImages, updateImageMeta as indexDbUpdateImageMeta } from "./image-store";
-import { electronStoreImage, isElectronImageStore, electronUpdateImageMeta } from "./electron-image-store";
 import { getPlatformService } from "./platform/factory";
-import { getArtistsFromSongs, getAlbumsFromSongs, getSongsByAlbum } from "./local-database";
+import { getArtistsFromSongs, getAlbumsFromSongs, getSongsByAlbum } from "../api/local/local-queries";
 
-const IMG_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+export const IMG_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const BATCH_SIZE = 5;
 const COVER_SIZE = 1024;
 
@@ -12,7 +11,7 @@ function sanitizeForPath(name: string): string {
   return name.replace(/[/\\?%*:|"<>]/g, "_").trim();
 }
 
-function isImageFile(name: string): boolean {
+export function isImageFile(name: string): boolean {
   const lower = name.toLowerCase();
   for (const ext of IMG_EXTS) {
     if (lower.endsWith(ext)) return true;
@@ -66,13 +65,7 @@ async function findFirstImageInDir(
   }
 }
 
-async function storeImageViaPlatform(record: Parameters<typeof indexDbStoreImage>[0]): Promise<void> {
-  if (await isElectronImageStore()) {
-    await electronStoreImage(record);
-  } else {
-    await indexDbStoreImage(record);
-  }
-}
+const storeImageViaPlatform = indexDbStoreImage;
 
 async function preloadArtistImage(
   p: PlatformService,
@@ -115,10 +108,12 @@ async function preloadAlbumImage(
   folderPath: string,
   artistName: string,
   albumName: string,
+  releaseYear?: number | null,
 ): Promise<void> {
   try {
     const artistDir = sanitizeForPath(artistName);
-    const albumDir = sanitizeForPath(albumName);
+    const albumDirBase = sanitizeForPath(albumName);
+    const albumDir = releaseYear ? `${albumDirBase} (${releaseYear})` : albumDirBase;
     const imgDirPath = `${folderPath}/${artistDir}/${albumDir}/.img`;
     const found = await findFirstImageInDir(p, imgDirPath);
     if (!found) return;
@@ -149,24 +144,15 @@ async function preloadAlbumImage(
 
     // Enrich with MusicBrainz IDs from songs in this album
     try {
-      const songs = await getSongsByAlbum(artistName, albumName);
-      if (songs.length > 0) {
-        const mbzArtistId = songs[0].mbz_artist_id;
-        const mbzReleaseGroupId = songs[0].mbz_release_group_id;
-        const mbzAlbumId = songs[0].mbz_album_id;
-        if (mbzArtistId || mbzReleaseGroupId || mbzAlbumId) {
+        const songs = await getSongsByAlbum(artistName, albumName);
+        if (songs.length > 0) {
           const meta: Parameters<typeof indexDbUpdateImageMeta>[1] = {
-            mbzArtistId: mbzArtistId || undefined,
-            mbzReleaseGroupId: mbzReleaseGroupId || undefined,
-            mbzReleaseId: mbzAlbumId || undefined,
+            mbzArtistId: undefined,
+            mbzReleaseGroupId: undefined,
+            mbzReleaseId: undefined,
           };
-          if (await isElectronImageStore()) {
-            await electronUpdateImageMeta(hash, meta);
-          } else {
-            await indexDbUpdateImageMeta(hash, meta);
-          }
+          await indexDbUpdateImageMeta(hash, meta);
         }
-      }
     } catch {
       // non-critical — image is stored without MBZ IDs
     }
@@ -190,7 +176,7 @@ export async function preloadImagesFromDotImg(folderPath: string): Promise<void>
     console.log(`[image-preloader] processing ${artists.length} artists...`);
     for (let i = 0; i < artists.length; i += BATCH_SIZE) {
       const batch = artists.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map((a) => preloadArtistImage(p, folderPath, a.name)));
+      await Promise.all(batch.map((a) => preloadArtistImage(p, folderPath, a)));
     }
   } catch (err) {
     console.warn("[image-preloader] artist preload failed:", err);
@@ -201,7 +187,7 @@ export async function preloadImagesFromDotImg(folderPath: string): Promise<void>
     console.log(`[image-preloader] processing ${albums.length} albums...`);
     for (let i = 0; i < albums.length; i += BATCH_SIZE) {
       const batch = albums.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map((a) => preloadAlbumImage(p, folderPath, a.artist_name, a.name)));
+      await Promise.all(batch.map((a) => preloadAlbumImage(p, folderPath, a.artistName, a.name, a.releaseYear)));
     }
   } catch (err) {
     console.warn("[image-preloader] album preload failed:", err);

@@ -6,8 +6,12 @@ import { execFile, execFileSync } from 'child_process';
 import Store from 'electron-store';
 import { tmpdir } from 'os';
 
-import { electronImageStore } from './image-store';
 import { TaskQueue } from './queue';
+
+function warnFs(prefix: string, err: unknown): void {
+  if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+  console.warn(prefix, err);
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -91,7 +95,7 @@ ipcMain.handle('fs:read-file', async (_event, filePath: string) => {
     const data = fs.readFileSync(filePath);
     return new Uint8Array(data);
   } catch (err) {
-    console.warn("[main] fs:read-file error:", err);
+    warnFs("[main] fs:read-file error:", err);
     return null;
   }
 });
@@ -105,12 +109,8 @@ ipcMain.handle('fs:read-directory', async (_event, dirPath: string) => {
       isFile: e.isFile(),
       path: join(dirPath, e.name),
     }));
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
-      fs.mkdirSync(dirPath, { recursive: true });
-    } else {
-      console.warn("[main] fs:read-directory error:", err);
-    }
+  } catch (err) {
+    warnFs("[main] fs:read-directory error:", err);
     return [];
   }
 });
@@ -119,7 +119,7 @@ ipcMain.handle('fs:file-exists', async (_event, filePath: string) => {
   try {
     return fs.existsSync(filePath);
   } catch (err) {
-    console.warn("[main] fs:file-exists error:", err);
+    warnFs("[main] fs:file-exists error:", err);
     return false;
   }
 });
@@ -129,7 +129,7 @@ ipcMain.handle('fs:file-stats', async (_event, filePath: string) => {
     const stat = fs.statSync(filePath);
     return { size: stat.size, modifiedAt: stat.mtimeMs };
   } catch (err) {
-    console.warn("[main] fs:file-stats error:", err);
+    warnFs("[main] fs:file-stats error:", err);
     return null;
   }
 });
@@ -139,17 +139,21 @@ ipcMain.handle('fs:write-file', async (_event, filePath: string, data: number[])
     fs.writeFileSync(filePath, Buffer.from(data));
     return true;
   } catch (err) {
-    console.warn("[main] fs:write-file error:", err);
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOSPC') {
+      console.warn('[main] ENOSPC (no disk space) on write to:', filePath);
+    } else {
+      warnFs("[main] fs:write-file error:", err);
+    }
     return false;
   }
 });
 
 ipcMain.handle('fs:delete-file', async (_event, filePath: string) => {
   try {
-    fs.unlinkSync(filePath);
+    fs.rmSync(filePath, { force: true, recursive: true });
     return true;
   } catch (err) {
-    console.warn("[main] fs:delete-file error:", err);
+    warnFs("[main] fs:delete-file error:", err);
     return false;
   }
 });
@@ -159,7 +163,7 @@ ipcMain.handle('fs:create-directory', async (_event, dirPath: string) => {
     fs.mkdirSync(dirPath, { recursive: true });
     return true;
   } catch (err) {
-    console.warn("[main] fs:create-directory error:", err);
+    warnFs("[main] fs:create-directory error:", err);
     return false;
   }
 });
@@ -169,7 +173,7 @@ ipcMain.handle('fs:rename-file', async (_event, oldPath: string, newPath: string
     fs.renameSync(oldPath, newPath);
     return true;
   } catch (err) {
-    console.warn("[main] fs:rename-file error:", err);
+    warnFs("[main] fs:rename-file error:", err);
     return false;
   }
 });
@@ -212,36 +216,6 @@ ipcMain.handle('yt:fetch', async (_event, { url, init }: { url: string; init?: R
   }
 });
 
-// ── Image CORS proxy (fetch through main process, no CORS) ──
-
-ipcMain.handle('image:fetch', async (_event, url: string, options?: { method?: string; headers?: Record<string, string>; body?: string | number[] }) => {
-  try {
-    const mergedHeaders: Record<string, string> = {
-      "User-Agent": "Selftify/1.0.0 (https://github.com/anomalyco/selftify)",
-      ...(options?.headers || {}),
-    };
-    let body: BodyInit | undefined;
-    if (options?.body != null) {
-      if (typeof options.body === 'string') {
-        body = options.body;
-      } else if (Array.isArray(options.body)) {
-        body = Buffer.from(options.body);
-      }
-    }
-    const response = await fetch(url, {
-      method: options?.method || 'GET',
-      headers: mergedHeaders,
-      body,
-    });
-    const rawBody = await response.arrayBuffer();
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value: string, key: string) => { headers[key] = value; });
-    return { status: response.status, headers, body: Array.from(new Uint8Array(rawBody)) };
-  } catch (err: any) {
-    return { status: 0, headers: {}, body: [] };
-  }
-});
-
 // ── YouTube yt-dlp — TaskQueue + cache ──
 
 const ytQueue = new TaskQueue();
@@ -249,7 +223,6 @@ const ytSearchCache = new Map<string, { items: YtDlpSearchItem[]; ts: number }>(
 const ytStreamCache = new Map<string, { url: string; ts: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const COOKIE_FILE = join(tmpdir(), 'selftify-cookies.txt');
-const COOKIE_INVALID_MSG = "The provided YouTube account cookies are no longer valid";
 
 function ensureCookieFile(cookies?: string): boolean {
   if (!cookies) {
@@ -403,40 +376,51 @@ ytQueue.register('yt:download', async (payload: unknown) => {
   });
 });
 
-interface YtVideoInfo {
-  title: string;
-  uploader: string;
-  duration: number;
-  thumbnail?: string;
-}
-
-const ytVideoInfoCache = new Map<string, { info: YtVideoInfo; ts: number }>();
-
 ytQueue.register('yt:get-video-info', async (payload: unknown) => {
   const videoId = payload as string;
-  const cached = ytVideoInfoCache.get(videoId);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.info;
-
   const args = [
     `https://music.youtube.com/watch?v=${videoId}`,
-    '--skip-download',
-    '--print',
-    '%(title)s\t%(uploader)s\t%(duration)s\t%(thumbnail)s',
+    '--dump-json',
+    '--no-download',
+    '--no-playlist',
   ];
-  const info = await execYtDlp<YtVideoInfo | null>(args, (stdout) => {
-    const line = stdout.trim().split('\n')[0];
-    if (!line) return null;
-    const parts = line.split('\t');
-    return {
-      title: parts[0] || '',
-      uploader: parts[1] || '',
-      duration: parts[2] ? parseInt(parts[2], 10) || 0 : 0,
-      thumbnail: parts[3] || undefined,
-    };
-  });
-  if (info) ytVideoInfoCache.set(videoId, { info, ts: Date.now() });
-  return info;
+  return execYtDlp<any>(args, (stdout) => JSON.parse(stdout));
 });
+
+function getImageDimensions(filePath: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    execFile('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height',
+      '-of', 'csv=s=x:p=0',
+      filePath,
+    ], { timeout: 10000 }, (err, stdout) => {
+      if (err) return reject(err);
+      const trimmed = stdout.trim();
+      const parts = trimmed.split('x');
+      if (parts.length !== 2) return reject(new Error(`ffprobe parse error: "${trimmed}"`));
+      resolve({ width: parseInt(parts[0], 10), height: parseInt(parts[1], 10) });
+    });
+  });
+}
+
+function execFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile('ffmpeg', args, { timeout: 30000 }, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+function detectImageFormat(bytes: number[]): string | null {
+  if (bytes.length < 2) return null;
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8) return 'jpg';
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
+  if (bytes[0] === 0x52 && bytes[1] === 0x49) return 'webp';
+  return null;
+}
 
 function execYtDlp<T>(args: string[], parse: (stdout: string) => T): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -445,9 +429,6 @@ function execYtDlp<T>(args: string[], parse: (stdout: string) => T): Promise<T> 
       const stderrTrimmed = (stderr || '').trim();
       if (stderrTrimmed) {
         console.warn('[yt-dlp] stderr:', stderrTrimmed.slice(0, 500));
-        if (stderrTrimmed.includes(COOKIE_INVALID_MSG)) {
-          mainWindow?.webContents.send('yt:cookies-invalid');
-        }
       }
 
       if (error) {
@@ -497,11 +478,11 @@ ipcMain.handle('yt:stream-url', async (_event, payload: string | { videoId: stri
   return ytQueue.add<string | null>('yt:stream-url', payload);
 });
 
-ipcMain.handle('yt:get-video-info', async (_event, videoId: string): Promise<YtVideoInfo | null> => {
-  return ytQueue.add<YtVideoInfo | null>('yt:get-video-info', videoId);
+ipcMain.handle('yt:get-video-info', async (_event, videoId: string): Promise<any | null> => {
+  return ytQueue.add<any | null>('yt:get-video-info', videoId);
 });
 
-// ── Download Queue IPC ──
+// ── Download Queue ──
 
 interface DownloadMp3Request {
   videoId: string;
@@ -544,115 +525,49 @@ ytQueue.register('yt:download-mp3', async (payload: unknown) => {
   const p = payload as DownloadMp3Request;
   const safeArtist = p.metadata.artist.replace(/[<>:"/\\|?*]/g, '_');
   const safeTitle = p.metadata.title.replace(/[<>:"/\\|?*]/g, '_');
-
-  const prefix = p.metadata.trackNumber
-    ? `${String(p.metadata.trackNumber).padStart(2, '0')} - `
-    : '';
-
-  let albumDir: string;
-  if (p.metadata.album) {
-    const safeAlbum = p.metadata.album.replace(/[<>:"/\\|?*]/g, '_');
-    albumDir = safeAlbum;
-  } else {
-    albumDir = `${safeTitle} (Single)`;
-  }
-
+  const prefix = p.metadata.trackNumber ? `${String(p.metadata.trackNumber).padStart(2, '0')} - ` : '';
+  const safeAlbum = p.metadata.album
+    ? p.metadata.album.replace(/[<>:"/\\|?*]/g, '_') + (p.metadata.releaseYear ? ` (${p.metadata.releaseYear})` : '')
+    : `${safeTitle} (Single)`;
   const filename = `${prefix}${safeTitle}`;
-  const outputDir = join(p.downloadFolder, safeArtist, albumDir);
+  const outputDir = join(p.downloadFolder, safeArtist, safeAlbum);
   fs.mkdirSync(outputDir, { recursive: true });
   const outputPath = join(outputDir, `${filename}.%(ext)s`);
-
   return new Promise<string>((resolve, reject) => {
     const args = [
       `https://music.youtube.com/watch?v=${p.videoId}`,
-      '--extract-audio',
-      '--audio-format', 'mp3',
-      '--audio-quality', '0',
-      '--output', outputPath,
-      '--no-playlist',
-      '--no-embed-metadata',
-      '--no-embed-thumbnail',
+      '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
+      '--output', outputPath, '--no-playlist', '--no-embed-metadata', '--no-embed-thumbnail',
     ];
     execFile(ytDlpBin, args, { timeout: 180000 }, (error) => {
-      if (error) {
-        reject(new Error(`yt-dlp download failed: ${error.message}`));
-        return;
-      }
-      const finalPath = join(outputDir, `${filename}.mp3`);
-      resolve(finalPath);
+      if (error) { reject(new Error(`yt-dlp download failed: ${error.message}`)); return; }
+      resolve(join(outputDir, `${filename}.mp3`));
     });
   });
 });
-
-function getImageDimensions(filePath: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    execFile('ffprobe', [
-      '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=width,height',
-      '-of', 'csv=s=x:p=0',
-      filePath,
-    ], { timeout: 10000 }, (err, stdout) => {
-      if (err) return reject(err);
-      const trimmed = stdout.trim();
-      const parts = trimmed.split('x');
-      if (parts.length !== 2) return reject(new Error(`ffprobe parse error: "${trimmed}"`));
-      resolve({ width: parseInt(parts[0], 10), height: parseInt(parts[1], 10) });
-    });
-  });
-}
-
-function execFfmpeg(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile('ffmpeg', args, { timeout: 30000 }, (err) => {
-      if (err) return reject(err);
-      resolve();
-    });
-  });
-}
-
-function detectImageFormat(bytes: number[]): string | null {
-  if (bytes.length < 2) return null;
-  if (bytes[0] === 0xFF && bytes[1] === 0xD8) return 'jpg';
-  if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
-  if (bytes[0] === 0x52 && bytes[1] === 0x49) return 'webp';
-  return null;
-}
 
 ytQueue.register('yt:process-cover', async (payload: unknown) => {
   const p = payload as ProcessCoverRequest;
   const ext = detectImageFormat(p.imageData) || 'jpg';
   const tmpIn = join(tmpdir(), `selftify-cover-in-${Date.now()}.${ext}`);
   const finalPath = join(p.outputDir, '.img', 'cover.jpg');
-
   fs.writeFileSync(tmpIn, Buffer.from(p.imageData));
   try {
     const dims = await getImageDimensions(tmpIn);
-
     let scale = 1.0;
     const minSide = Math.min(dims.width, dims.height);
     const maxSide = Math.max(dims.width, dims.height);
-
-    if (minSide < 500) {
-      scale = 500 / minSide;
-    } else if (maxSide > 1000) {
-      scale = 1000 / maxSide;
-    }
-
+    if (minSide < 500) scale = 500 / minSide;
+    else if (maxSide > 1000) scale = 1000 / maxSide;
     const newW = Math.floor(dims.width * scale);
     const newH = Math.floor(dims.height * scale);
     const cropSize = Math.min(newW, newH);
-
     fs.mkdirSync(join(p.outputDir, '.img'), { recursive: true });
-
     await execFfmpeg([
-      '-y',
-      '-i', tmpIn,
+      '-y', '-i', tmpIn,
       '-vf', `scale=${newW}:${newH}:force_original_aspect_ratio=decrease,crop=${cropSize}:${cropSize}`,
-      '-q:v', '2',
-      finalPath,
+      '-q:v', '2', finalPath,
     ]);
-
     return finalPath;
   } catch (err) {
     console.error('[yt:process-cover] failed:', err);
@@ -666,15 +581,10 @@ ytQueue.register('yt:process-cover', async (payload: unknown) => {
 ytQueue.register('yt:embed-artwork', async (payload: unknown) => {
   const p = payload as EmbedArtworkRequest;
   const tmpFile = p.audioPath + '.tmp.mp3';
-
   const meta = p.metadata;
   const ffmpegArgs = [
-    '-y',
-    '-i', p.audioPath,
-    '-i', p.coverPath,
-    '-map', '0',
-    '-map', '1',
-    '-c', 'copy',
+    '-y', '-i', p.audioPath, '-i', p.coverPath,
+    '-map', '0', '-map', '1', '-c', 'copy',
     '-id3v2_version', '3',
     '-metadata:s:v', 'title=Album cover',
     '-metadata', `title=${meta?.title ?? ''}`,
@@ -687,18 +597,28 @@ ytQueue.register('yt:embed-artwork', async (payload: unknown) => {
     '-metadata', `genre=${meta?.genres?.join('; ') ?? ''}`,
     tmpFile,
   ];
-
-  if (meta?.mbzRecordingId) {
-    ffmpegArgs.push('-metadata', `musicbrainz_trackid=${meta.mbzRecordingId}`);
-  }
-  if (meta?.mbzArtistId) {
-    ffmpegArgs.push('-metadata', `musicbrainz_artistid=${meta.mbzArtistId}`);
-  }
-
+  if (meta?.mbzRecordingId) ffmpegArgs.push('-metadata', `musicbrainz_trackid=${meta.mbzRecordingId}`);
+  if (meta?.mbzArtistId) ffmpegArgs.push('-metadata', `musicbrainz_artistid=${meta.mbzArtistId}`);
   await execFfmpeg(ffmpegArgs);
-
   fs.renameSync(tmpFile, p.audioPath);
 });
+
+// ── Download Queue IPC ──
+
+interface DownloadMp3Request {
+  videoId: string;
+  downloadFolder: string;
+  metadata: {
+    title: string;
+    artist: string;
+    album?: string;
+    albumArtist?: string;
+    trackNumber?: number;
+    discNumber?: number;
+    releaseYear?: number;
+    genres?: string[];
+  };
+}
 
 ipcMain.handle('yt:download-mp3', async (_event, request: DownloadMp3Request): Promise<string> => {
   return ytQueue.add<string>('yt:download-mp3', request, 'normal');
@@ -712,33 +632,237 @@ ipcMain.handle('yt:embed-artwork', async (_event, request: EmbedArtworkRequest):
   return ytQueue.add<void>('yt:embed-artwork', request, 'normal');
 });
 
-// ── Image Cache IPC ──
+// ── Local cover replacement (strip old + embed new) ──
 
-ipcMain.handle('image-cache:store', async (_event, hash: string, buffer: number[], format: string, meta?: any) => {
-  return electronImageStore.store(hash, buffer, format, meta);
+interface ReplaceCoverRequest {
+  audioPath: string;
+  coverPath: string;
+  metadata?: {
+    title?: string;
+    artist?: string;
+    album?: string;
+    albumArtist?: string;
+    trackNumber?: number;
+    discNumber?: number;
+    releaseYear?: number;
+    genre?: string;
+    mbzRecordingId?: string;
+  };
+}
+
+ipcMain.handle('local:replace-cover', async (_event, request: ReplaceCoverRequest): Promise<boolean> => {
+  try {
+    const ext = request.audioPath.slice(request.audioPath.lastIndexOf('.'));
+    const tmpFile = request.audioPath + '.tmp' + ext;
+    const meta = request.metadata;
+    const args: string[] = [
+      '-y', '-i', request.audioPath, '-i', request.coverPath,
+      '-map', '0:a', '-map', '1',
+      '-c', 'copy',
+      '-disposition:v', 'attached_pic',
+      '-id3v2_version', '3',
+      '-metadata:s:v', 'title=Album cover',
+      '-metadata', `title=${meta?.title ?? ''}`,
+      '-metadata', `artist=${meta?.artist ?? ''}`,
+      '-metadata', `album=${meta?.album ?? ''}`,
+      '-metadata', `album_artist=${meta?.albumArtist ?? ''}`,
+      '-metadata', `track=${meta?.trackNumber ?? ''}`,
+      '-metadata', `disc=${meta?.discNumber ?? ''}`,
+      '-metadata', `date=${meta?.releaseYear ?? ''}`,
+      tmpFile,
+    ];
+    if (meta?.genre) args.push('-metadata', `genre=${meta.genre}`);
+    if (meta?.mbzRecordingId) args.push('-metadata', `musicbrainz_trackid=${meta.mbzRecordingId}`);
+    await execFfmpeg(args);
+    fs.renameSync(tmpFile, request.audioPath);
+    return true;
+  } catch (err) {
+    console.error('[main] local:replace-cover failed:', err);
+    return false;
+  }
 });
 
-ipcMain.handle('image-cache:get', async (_event, hash: string) => {
-  return electronImageStore.get(hash);
+interface UpdateMetadataRequest {
+  audioPath: string;
+  metadata?: {
+    title?: string;
+    artist?: string;
+    album?: string;
+    albumArtist?: string;
+    trackNumber?: number;
+    discNumber?: number;
+    releaseYear?: number;
+    genre?: string;
+    mbzRecordingId?: string;
+  };
+}
+
+ipcMain.handle('local:update-metadata', async (_event, request: UpdateMetadataRequest): Promise<boolean> => {
+  try {
+    const ext = request.audioPath.slice(request.audioPath.lastIndexOf('.'));
+    const tmpFile = request.audioPath + '.tmp' + ext;
+    const meta = request.metadata;
+    const args: string[] = [
+      '-y', '-i', request.audioPath,
+      '-map', '0',
+      '-c', 'copy',
+      '-id3v2_version', '3',
+      '-metadata', `title=${meta?.title ?? ''}`,
+      '-metadata', `artist=${meta?.artist ?? ''}`,
+      '-metadata', `album=${meta?.album ?? ''}`,
+      '-metadata', `album_artist=${meta?.albumArtist ?? ''}`,
+      '-metadata', `track=${meta?.trackNumber ?? ''}`,
+      '-metadata', `disc=${meta?.discNumber ?? ''}`,
+      '-metadata', `date=${meta?.releaseYear ?? ''}`,
+      tmpFile,
+    ];
+    if (meta?.genre) args.push('-metadata', `genre=${meta.genre}`);
+    if (meta?.mbzRecordingId) args.push('-metadata', `musicbrainz_trackid=${meta.mbzRecordingId}`);
+    await execFfmpeg(args);
+    fs.renameSync(tmpFile, request.audioPath);
+    return true;
+  } catch (err) {
+    console.error('[main] local:update-metadata failed:', err);
+    return false;
+  }
 });
 
-ipcMain.handle('image-cache:get-by-url', async (_event, url: string) => {
-  return electronImageStore.getBySourceUrl(url);
+// ── External fetch proxy IPC (CORS bypass) ──
+
+ipcMain.handle('image:fetch', async (_event, url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const fetchOpts: any = { method: options?.method || 'GET', signal: controller.signal };
+    if (options?.headers) fetchOpts.headers = options.headers;
+    if (options?.body) fetchOpts.body = options.body;
+    const response = await fetch(url, fetchOpts);
+    clearTimeout(timeout);
+    const rawBody = await response.arrayBuffer();
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value: string, key: string) => { headers[key.toLowerCase()] = value; });
+    return { ok: response.ok, status: response.status, statusText: response.statusText, headers, body: Array.from(new Uint8Array(rawBody)) };
+  } catch (err: any) {
+    console.debug('[main] image:fetch error:', err?.message ?? err);
+    return { ok: false, status: 0, statusText: String(err?.message ?? err), headers: {}, body: [] };
+  }
 });
 
-ipcMain.handle('image-cache:find', async (_event, query: any) => {
-  return electronImageStore.find(query);
+ipcMain.handle('artwork:search', async (_event, provider: string, input: any) => {
+  try {
+    console.log(`[main:artwork] searching "${provider}" for artist="${input?.artist}" album="${input?.album}"`);
+    switch (provider) {
+      case 'cover_art_archive': {
+        const mbid = input?.releaseMbid || input?.releaseGroupMbid;
+        if (!mbid) return [];
+        const type = input?.releaseMbid ? 'release' : 'release-group';
+        const url = `https://coverartarchive.org/${type}/${mbid}/front-250.jpg`;
+        const resp = await fetch(url);
+        if (!resp.ok) return [];
+        const buf = await resp.arrayBuffer();
+        return [{ provider, url, thumbnailUrl: url, data: Array.from(new Uint8Array(buf)) }];
+      }
+      case 'deezer': {
+        const q = `${input?.artist || ''} ${input?.album || ''}`.trim();
+        if (!q) return [];
+        const url = `https://api.deezer.com/search/album?q=${encodeURIComponent(q)}`;
+        const resp = await fetch(url);
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return (data.data || []).slice(0, 5).map((r: any) => ({
+          provider,
+          url: r.cover_xl || r.cover_big || r.cover_medium || r.cover,
+          thumbnailUrl: r.cover_medium || r.cover_small || r.cover,
+          sourceId: String(r.id),
+        }));
+      }
+      case 'itunes': {
+        const q = `${input?.artist || ''} ${input?.album || ''}`.trim();
+        if (!q) return [];
+        const params = new URLSearchParams({ term: q, entity: 'album', media: 'music', limit: '5' });
+        const resp = await fetch(`https://itunes.apple.com/search?${params}`);
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return (data.results || []).slice(0, 5).map((r: any) => ({
+          provider,
+          url: r.artworkUrl100?.replace('100x100bb', '1200x1200bb') || r.artworkUrl100,
+          thumbnailUrl: r.artworkUrl100,
+          sourceId: String(r.collectionId),
+        }));
+      }
+      case 'musicbrainz-rg': {
+        const q = `release-group:"${encodeURIComponent(input?.album || '')}" AND artist:"${encodeURIComponent(input?.artist || '')}"`;
+        const resp = await fetch(`https://musicbrainz.org/ws/2/release-group?query=${q}&fmt=json`);
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return (data['release-groups'] || []).slice(0, 5).map((r: any) => ({
+          provider,
+          url: `https://coverartarchive.org/release-group/${r.id}/front-250.jpg`,
+          thumbnailUrl: `https://coverartarchive.org/release-group/${r.id}/front-120.jpg`,
+          sourceId: r.id,
+        }));
+      }
+      case 'discogs': {
+        const q = `${input?.artist || ''} ${input?.album || ''}`.trim();
+        if (!q) return [];
+        const resp = await fetch(`https://api.discogs.com/database/search?q=${encodeURIComponent(q)}&type=master&per_page=5`, {
+          headers: { 'User-Agent': 'Selftify/1.0.0' },
+        });
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return (data.results || []).slice(0, 5).map((r: any) => ({
+          provider,
+          url: r.cover_image || '',
+          thumbnailUrl: r.thumb || '',
+          sourceId: String(r.id),
+        }));
+      }
+      case 'fanart-tv': {
+        const apiKey = 'e8d9c4af2b976d6e9f3e5c7e8c9a0b1c';
+        const mbid = input?.musicbrainzId || input?.musicbrainzReleaseGroupId;
+        if (!mbid) return [];
+        const resp = await fetch(`https://webservice.fanart.tv/v3/music/albums/${mbid}?api_key=${apiKey}`);
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        const images = data?.albumaarts || data?.albumcovers || [];
+        return images.slice(0, 5).map((r: any) => ({
+          provider,
+          url: r.url || '',
+          thumbnailUrl: r.url || '',
+          sourceId: String(r.id),
+        }));
+      }
+      default:
+        console.warn(`[main:artwork] unknown provider "${provider}"`);
+        return [];
+    }
+  } catch (err: any) {
+    console.warn(`[main:artwork] error for "${provider}":`, err?.message ?? err);
+    return [];
+  }
 });
 
-ipcMain.handle('image-cache:clear', async () => {
-  return electronImageStore.clear();
+// ── MusicBrainz CORS proxy (fetch through main process) ──
+
+ipcMain.handle('mbz:fetch', async (_event, url: string, reqHeaders?: Record<string, string>) => {
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Selftify/1.0.0', Accept: 'application/json', ...reqHeaders },
+    });
+    const rawBody = await response.arrayBuffer();
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value: string, key: string) => { headers[key] = value; });
+    return { ok: response.ok, status: response.status, statusText: response.statusText, headers, body: Array.from(new Uint8Array(rawBody)) };
+  } catch (err: any) {
+    console.error("[main:mbz] fetch failed:", err?.message ?? err, "for URL:", url?.slice(0, 120));
+    throw new Error(err?.message || 'mbz:fetch failed');
+  }
 });
 
-// ── Local file metadata parsing (IPC so music-metadata runs in Node.js) ──
+// ── Local file metadata parsing (music-metadata via IPC) ──
 
 ipcMain.handle('local:parse-file', async (_event, filePath: string) => {
   try {
-    const fs = require('fs');
     const { parseBuffer } = require('music-metadata');
     const data = fs.readFileSync(filePath);
     const result = await Promise.race([
@@ -783,7 +907,21 @@ ipcMain.handle('local:parse-file', async (_event, filePath: string) => {
   }
 });
 
-// ── App lifecycle ──
+// ── Wiki search (Wikipedia thumbnail via main process) ──
+
+ipcMain.handle('wiki:search', async (_event, query: string) => {
+  try {
+    const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(query)}&prop=pageimages&pithumbsize=250&format=json&origin=*`;
+    const response = await fetch(url);
+    const data = await response.json();
+    const pages = data?.query?.pages ?? {};
+    const page = Object.values(pages)[0] as any;
+    return page && !page.missing ? (page.thumbnail?.source ?? null) : null;
+  } catch (err: any) {
+    console.warn('[main] wiki:search error:', err?.message ?? err);
+    return null;
+  }
+});
 
 // ── Window Controls IPC ──
 
