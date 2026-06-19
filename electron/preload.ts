@@ -53,6 +53,12 @@ const api = {
   wikiSearch: (query: string) =>
     ipcRenderer.invoke('wiki:search', query),
 
+  lyrics: {
+    getRemoteLyricsBySong: (song: any) => ipcRenderer.invoke('lyric:by-song', song),
+    searchRemoteLyrics: (params: any) => ipcRenderer.invoke('lyric:search', params),
+    getRemoteLyricsByRemoteId: (query: any) => ipcRenderer.invoke('lyric:by-remote-id', query),
+  },
+
   mbz: {
     fetch: (url: string, headers: Record<string, string>) =>
       ipcRenderer.invoke('mbz:fetch', url, headers),

@@ -9,7 +9,9 @@ import { Slider } from "../../components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { CoverImage } from "../../components/ui/art-image";
+import { SongCoverImage } from "../shared/song-cover-image";
 import { VisualizerContainer } from "../visualizer/visualizer-container";
+import { LyricsPanel } from "../lyrics/lyrics-panel";
 import { formatDuration } from "../../lib/utils";
 import {
   Play,
@@ -224,10 +226,14 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
         {/* Right: tabs (queue, lyrics, visualizer info) */}
         <div className="flex flex-col border-t border-border md:w-1/2 md:border-l md:border-t-0">
           <Tabs defaultValue="queue" className="flex h-full flex-col">
-            <TabsList className="mx-4 mt-4 grid w-auto grid-cols-2 border-border">
+            <TabsList className="mx-4 mt-4 grid w-auto grid-cols-3 border-border">
               <TabsTrigger value="queue">
                 <ListMusic className="mr-2 h-4 w-4" />
                 Queue
+              </TabsTrigger>
+              <TabsTrigger value="lyrics">
+                <AudioLines className="mr-2 h-4 w-4" />
+                Lyrics
               </TabsTrigger>
               <TabsTrigger value="visualizer">
                 <AudioLines className="mr-2 h-4 w-4" />
@@ -251,8 +257,8 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
                         <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
                           {i + 1}
                         </span>
-                        <CoverImage
-                          src={track.imageUrl}
+                        <SongCoverImage
+                          song={track}
                           alt={track.name}
                           fallback={track.name.charAt(0)}
                           className="h-10 w-10 shrink-0 rounded-md"
@@ -290,6 +296,10 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
                   </div>
                 )}
               </ScrollArea>
+            </TabsContent>
+
+            <TabsContent value="lyrics" className="flex-1 overflow-hidden p-4">
+              <LyricsPanel />
             </TabsContent>
 
             <TabsContent value="visualizer" className="flex-1 p-4">

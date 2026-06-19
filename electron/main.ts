@@ -9,7 +9,6 @@ import { tmpdir } from 'os';
 import { TaskQueue } from './queue';
 
 function warnFs(prefix: string, err: unknown): void {
-  if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return;
   console.warn(prefix, err);
 }
 
@@ -102,6 +101,7 @@ ipcMain.handle('fs:read-file', async (_event, filePath: string) => {
 
 ipcMain.handle('fs:read-directory', async (_event, dirPath: string) => {
   try {
+    if (!fs.existsSync(dirPath)) return [];
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     return entries.map((e) => ({
       name: e.name,
@@ -927,6 +927,26 @@ ipcMain.handle('wiki:search', async (_event, query: string) => {
 
 ipcMain.on('window:minimize', () => {
   mainWindow?.minimize();
+});
+
+// ── Lyrics IPC Handlers ──────────────────────────────────────────
+
+ipcMain.handle('lyric:by-song', async (_event, song: any) => {
+  const { getRemoteLyrics } = await import('../src/services/lyrics/lyrics-service');
+  const result = await getRemoteLyrics(song);
+  return result;
+});
+
+ipcMain.handle('lyric:search', async (_event, params: any) => {
+  const { searchAll } = await import('../src/services/lyrics/lyrics-service');
+  const results = await searchAll(params);
+  return results;
+});
+
+ipcMain.handle('lyric:by-remote-id', async (_event, query: any) => {
+  const { getRemoteLyricsById } = await import('../src/services/lyrics/lyrics-service');
+  const result = await getRemoteLyricsById(query);
+  return result;
 });
 
 ipcMain.on('window:maximize', () => {

@@ -58,6 +58,11 @@ export type Song = {
   youtubeVideoId?: string;
   youtubeVideoTitle?: string;
   youtubeChannelName?: string;
+
+  lyricsEmbedded?: string;
+  lyricsPath?: string;
+  lyricsCache?: string;
+  lyricsCacheType?: "lrc" | "plain" | null;
 };
 
 export type Album = {

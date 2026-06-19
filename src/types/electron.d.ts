@@ -67,6 +67,12 @@ export interface ElectronLocalApi {
   parseFile: (filePath: string) => Promise<any>;
 }
 
+export interface ElectronLyricsApi {
+  getRemoteLyricsBySong: (song: any) => Promise<any>;
+  searchRemoteLyrics: (params: any) => Promise<any>;
+  getRemoteLyricsByRemoteId: (query: any) => Promise<any>;
+}
+
 export interface ElectronApi {
   mpv: ElectronMpvApi;
   db: ElectronDbApi;
@@ -78,6 +84,7 @@ export interface ElectronApi {
   imageFetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) => Promise<{ status: number; headers: Record<string, string>; body: number[] }>;
   imageCache: ElectronImageCacheApi;
   local: ElectronLocalApi;
+  lyrics: ElectronLyricsApi;
   artworkSearch: (provider: string, input: any) => Promise<any[]>;
   wikiSearch: (query: string) => Promise<string | null>;
   onCookiesInvalid: (callback: () => void) => () => void;

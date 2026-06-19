@@ -1,7 +1,40 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { LyricSource } from "../types/lyrics-types";
 
 export type VisualizerType = "butterchurn" | "audiomotion" | "none";
+
+export type LyricsSettings = {
+  fetch: boolean;
+  sources: LyricSource[];
+  preferLocalLyrics: boolean;
+  alignment: "center" | "left" | "right";
+  follow: boolean;
+  showProvider: boolean;
+  showMatch: boolean;
+  fontSize: number;
+  fontSizeUnsync: number;
+  gap: number;
+  gapUnsync: number;
+  delayMs: number;
+  enableNeteaseTranslation: boolean;
+};
+
+export const DEFAULT_LYRICS_SETTINGS: LyricsSettings = {
+  fetch: true,
+  sources: [LyricSource.NETEASE, LyricSource.LRCLIB],
+  preferLocalLyrics: false,
+  alignment: "center",
+  follow: true,
+  showProvider: true,
+  showMatch: true,
+  fontSize: 24,
+  fontSizeUnsync: 24,
+  gap: 24,
+  gapUnsync: 24,
+  delayMs: 0,
+  enableNeteaseTranslation: false,
+};
 
 export type RankingWeights = {
   title: number;
@@ -48,8 +81,10 @@ type SettingsState = {
   cacheTtlMinutes: number;
   rankingWeights: RankingWeights;
   artworkProviders: ArtworkProviders;
+  lyrics: LyricsSettings;
 
   setTheme: (theme: "dark" | "light" | "system") => void;
+  setLyricsSettings: (settings: Partial<LyricsSettings>) => void;
   setVisualizerType: (type: VisualizerType) => void;
   setVisualizerEnabled: (enabled: boolean) => void;
   setAudioApi: (api: "webaudio" | "htmlaudio") => void;
@@ -101,8 +136,11 @@ export const useSettingsStore = create<SettingsState>()(
       cacheTtlMinutes: 60,
       rankingWeights: { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5 },
       artworkProviders: { ...DEFAULT_ARTWORK_PROVIDERS },
+      lyrics: { ...DEFAULT_LYRICS_SETTINGS },
 
       setTheme: (theme) => set({ theme }),
+      setLyricsSettings: (partial) =>
+        set((state) => ({ lyrics: { ...state.lyrics, ...partial } })),
       setVisualizerType: (visualizerType) => set({ visualizerType }),
       setVisualizerEnabled: (visualizerEnabled) => set({ visualizerEnabled }),
       setAudioApi: (audioApi) => set({ audioApi }),
