@@ -5,6 +5,7 @@ import type { Album, AlbumArtist } from "../../types/domain-types";
 import { buildArtistNav, buildAlbumNav } from "../../lib/build-navigation";
 import { Button } from "../../components/ui/button";
 import { CoverImage } from "../../components/ui/art-image";
+import { SongCoverImage } from "../shared/song-cover-image";
 import { Slider } from "../../components/ui/slider";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
@@ -222,8 +223,8 @@ export function NowPlayingPage({ onNavigateAlbum, onNavigateArtist, onClose }: N
                   <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
                     {i + 1}
                   </span>
-                  <CoverImage
-                    src={track.imageUrl}
+                  <SongCoverImage
+                    song={track}
                     alt={track.name}
                     fallback={track.name.charAt(0)}
                     className="h-10 w-10 shrink-0 rounded-md"

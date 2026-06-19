@@ -1,24 +1,6 @@
 import type { SqliteDbMbzYtMapping, CandidateData } from "./sqlite-db-types";
-import { useAuthStore } from "../../stores/auth.store";
-import { OriginType } from "../../types/domain-types";
-import { initDatabase, isReady } from "../db/database";
 import * as mappingRepo from "../db/repositories/mapping-repo";
-
-async function ensureDb(): Promise<boolean> {
-  if (isReady()) return true;
-  const root = getLibraryRoot();
-  if (!root) return false;
-  try {
-    await initDatabase(root);
-    return isReady();
-  } catch {
-    return false;
-  }
-}
-
-function getLibraryRoot(): string | undefined {
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-}
+import { ensureDb, getLibraryRoot } from "../db/ensure-db";
 
 export async function getMbzYtMapping(
   _libraryRoot: string,

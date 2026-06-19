@@ -7,6 +7,8 @@ import type { MbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
 import type { StreamSourceCandidate } from "../types/domain-types";
 import { useStatusStore } from "../stores/status.store";
 import { sqliteDbTrackToSong } from "./sqlite-db/sqlite-db-resolver";
+import { getPlatformService } from "./platform/factory";
+import { getLibraryRoot } from "./db/ensure-db";
 
 export type ResolveResult = {
   song: Song;
@@ -64,7 +66,38 @@ export async function findLocalSongByMbid(mbzRecordingId: string, originId: stri
 export async function resolveSong(song: Song, manualVideoId?: string): Promise<ResolveResult> {
   // Step 1: path already set (local file or pre-resolved stream)
   if (song.path) {
+    // Only check file existence for local files, not stream URLs
+    if (song.originType === OriginType.LOCAL && !song.path.startsWith("http")) {
+      const root = getLibraryRoot();
+      const absPath = song.path.startsWith("/") ? song.path : root ? `${root}/${song.path}` : song.path;
+      const p = await getPlatformService();
+      const exists = absPath ? await p.fileExists(absPath) : false;
+      if (!exists) {
+        addMsg(`File not found: ${song.name} — removed from library`, "warn");
+        log(`file not found, removing from DB: ${absPath}`);
+        try {
+          const { deleteTrack } = await import("./db/repositories/track-repo");
+          const { flushSave } = await import("./db/database");
+          const relPath = song.path.startsWith("/") && root ? song.path.slice(root.length + 1) : song.path;
+          deleteTrack(relPath);
+          await flushSave();
+        } catch (err) {
+          console.warn("[stream-resolver] failed to remove missing file from DB:", err);
+        }
+        return { song: { ...song, path: undefined }, source: "none" };
+      }
+    }
     return { song, source: "local" };
+  }
+
+  // Step 1b: cached youtubeVideoId → resolve stream URL directly (skip search)
+  if (song.youtubeVideoId) {
+    log(`using cached youtubeVideoId=${song.youtubeVideoId}`);
+    addMsg("Resolving cached YouTube stream...", "info");
+    const streamUrl = await getStreamUrl(song);
+    if (streamUrl) {
+      return { song: { ...song, path: streamUrl }, source: "youtube" };
+    }
   }
 
   // Step 2: try to find local file by MBZ ID

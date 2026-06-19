@@ -4,27 +4,10 @@ import { OriginType } from "../../types/domain-types";
 import { getAllPlaylists, getPlaylistById } from "../../services/playlist-service";
 import { sqliteDbTrackToSong, sqliteDbAlbumMetaToAlbum, sqliteDbArtistMetaToAlbumArtist } from "../../services/sqlite-db/sqlite-db-resolver";
 import { resolveSqliteDbImageObjectUrl } from "../../services/sqlite-db/sqlite-db-image";
-import { initDatabase, isReady } from "../../services/db/database";
 import * as albumRepo from "../../services/db/repositories/album-repo";
 import * as artistRepo from "../../services/db/repositories/artist-repo";
-import { useAuthStore } from "../../stores/auth.store";
+import { getLibraryRoot, ensureDb } from "../../services/db/ensure-db";
 import type { SqliteDbAlbumMeta, SqliteDbArtistMeta } from "../../services/sqlite-db/sqlite-db-types";
-
-function getLibraryRoot(): string | undefined {
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-}
-
-async function ensureDb(): Promise<boolean> {
-  if (isReady()) return true;
-  const root = getLibraryRoot();
-  if (!root) return false;
-  try {
-    await initDatabase(root);
-    return isReady();
-  } catch {
-    return false;
-  }
-}
 
 export function createLocalController(ctx: ApiContext): ServerController {
   async function loadAllAlbumMetas(): Promise<{ meta: SqliteDbAlbumMeta; artistDir: string }[]> {
@@ -75,12 +58,27 @@ export function createLocalController(ctx: ApiContext): ServerController {
     );
   }
 
+  async function findFirstAlbumImage(artistName: string): Promise<string | null> {
+    const root = getLibraryRoot();
+    if (!root) return null;
+    const albums = albumRepo.getAlbumsByArtist(artistName);
+    for (const album of albums) {
+      if (album.images?.[0]?.url) {
+        const url = await resolveSqliteDbImageObjectUrl(root, album.images[0].url);
+        if (url) return url;
+      }
+    }
+    return null;
+  }
+
   async function findArtistImage(artistName: string): Promise<string | null> {
     const root = getLibraryRoot();
     if (!root) return null;
     const artistMeta = artistRepo.findArtistByName(artistName);
-    if (!artistMeta?.images?.[0]?.url) return null;
-    return resolveSqliteDbImageObjectUrl(root, artistMeta.images[0].url);
+    if (artistMeta?.images?.[0]?.url) {
+      return resolveSqliteDbImageObjectUrl(root, artistMeta.images[0].url);
+    }
+    return findFirstAlbumImage(artistName);
   }
 
   async function populateArtistImages(artists: AlbumArtist[]): Promise<AlbumArtist[]> {
@@ -127,6 +125,18 @@ export function createLocalController(ctx: ApiContext): ServerController {
       return null;
     },
 
+    getAlbumDetailByName: async (albumArtist: string, albumName: string) => {
+      const albums = await loadAllAlbumMetas();
+      for (const { meta } of albums) {
+        if (meta.artistName.toLowerCase() === albumArtist.toLowerCase() &&
+            meta.name.toLowerCase() === albumName.toLowerCase()) {
+          const imageUrl = await resolveImageUrl(meta.artistName, meta.name);
+          return sqliteDbAlbumMetaToAlbum(meta, ctx.originId, OriginType.LOCAL, imageUrl);
+        }
+      }
+      return null;
+    },
+
     getAlbumList: async (_offset = 0, limit = 100) => {
       const albums = await loadAllAlbumMetas();
       const sliced = albums.slice(_offset, _offset + limit);
@@ -143,9 +153,7 @@ export function createLocalController(ctx: ApiContext): ServerController {
       for (const meta of artists) {
         const expected = `local-artist-${meta.name.toLowerCase().replace(/\s+/g, "-")}`;
         if (expected === id) {
-          const imageUrl = meta.images?.[0]?.url
-            ? await resolveSqliteDbImageObjectUrl(getLibraryRoot() || "", meta.images[0].url)
-            : null;
+          const imageUrl = await findArtistImage(meta.name);
           return sqliteDbArtistMetaToAlbumArtist(meta, ctx.originId, OriginType.LOCAL, imageUrl);
         }
       }
@@ -157,9 +165,7 @@ export function createLocalController(ctx: ApiContext): ServerController {
       const sliced = artists.slice(_offset, _offset + limit);
       return Promise.all(
         sliced.map(async (meta) => {
-          const imageUrl = meta.images?.[0]?.url
-            ? await resolveSqliteDbImageObjectUrl(getLibraryRoot() || "", meta.images[0].url)
-            : null;
+          const imageUrl = await findArtistImage(meta.name);
           return sqliteDbArtistMetaToAlbumArtist(meta, ctx.originId, OriginType.LOCAL, imageUrl);
         }),
       );
@@ -231,11 +237,51 @@ export function createLocalController(ctx: ApiContext): ServerController {
               relPath = `${meta.artistName}/${meta.name}/${track.path}`;
             }
             let data = await p.readFile(`${root}/${relPath}`);
+            if (data) return URL.createObjectURL(new Blob([data.buffer as ArrayBuffer]));
             if (!data && track.path.includes("/")) {
-              const fallbackRel = `${meta.artistName}/${meta.name}/${track.path.split("/").pop()}`;
-              data = await p.readFile(`${root}/${fallbackRel}`);
+              const parts = track.path.split("/");
+              const fileName = parts.pop()!;
+              const artistName = parts[0];
+              console.debug(`[Selftify] getStreamUrl: stored path failed, trying fallbacks for ${fileName}`);
+              // Try (releaseYear) suffix
+              if (meta.releaseYear) {
+                const yearSuffixed = `${artistName}/${meta.name} (${meta.releaseYear})/${fileName}`;
+                console.debug(`[Selftify] getStreamUrl: trying yearSuffixed=${yearSuffixed}`);
+                data = await p.readFile(`${root}/${yearSuffixed}`);
+                if (data) console.debug(`[Selftify] getStreamUrl: yearSuffixed FOUND`);
+              }
+              // Try album name from metadata (no year)
+              if (!data) {
+                const fallbackRel = `${meta.artistName}/${meta.name}/${fileName}`;
+                console.debug(`[Selftify] getStreamUrl: trying metadataFallback=${fallbackRel}`);
+                data = await p.readFile(`${root}/${fallbackRel}`);
+                if (data) console.debug(`[Selftify] getStreamUrl: metadataFallback FOUND`);
+              }
+              // Scan artist directory for album subdirs matching meta.name
+              if (!data) {
+                try {
+                  console.debug(`[Selftify] getStreamUrl: scanning ${root}/${artistName} for dirs matching "${meta.name}"`);
+                  const entries = await p.readDirectory(`${root}/${artistName}`);
+                  for (const entry of entries) {
+                    if (entry.isDirectory && entry.name.startsWith(meta.name)) {
+                      const candidate = `${root}/${artistName}/${entry.name}/${fileName}`;
+                      console.debug(`[Selftify] getStreamUrl: trying scanned candidate=${candidate}`);
+                      data = await p.readFile(candidate);
+                      if (data) {
+                        console.debug(`[Selftify] getStreamUrl: scanned candidate FOUND`);
+                        break;
+                      }
+                    }
+                  }
+                } catch (err) {
+                  console.debug(`[Selftify] getStreamUrl: directory scan failed:`, err);
+                }
+              }
             }
-            if (!data) return null;
+            if (!data) {
+              console.debug(`[Selftify] getStreamUrl: ALL FALLBACKS FAILED for songId=${songId}`);
+              return null;
+            }
             const blob = new Blob([data.buffer as ArrayBuffer]);
             return URL.createObjectURL(blob);
           } catch {

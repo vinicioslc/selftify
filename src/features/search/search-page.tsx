@@ -28,13 +28,11 @@ import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
 import { SongInfoDialog } from "../song-info/song-info-dialog";
 import { AlbumEmptySvg, ArtistEmptySvg } from "../../components/ui/empty-image-svg";
 import { useArtistImage } from "../../hooks/use-artist-image";
-import { useCover } from "../../hooks/use-cover";
+import { SongCoverImage } from "../shared/song-cover-image";
+import { ContextMenuOverlay } from "../../components/ui/context-menu-overlay";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { cn, formatDuration } from "../../lib/utils";
 import { buildArtistNav, buildAlbumNav } from "../../lib/build-navigation";
@@ -58,27 +56,6 @@ function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavig
       />
       <p className="max-w-20 truncate text-center text-xs font-medium">{artist.name}</p>
     </div>
-  );
-}
-
-function MbSongImageCell({ song }: { song: Song }) {
-  const { coverUrl, loading, triggerRemote } = useCover({
-    artistName: song.artistName,
-    albumName: song.albumName,
-    mbzArtistId: song.mbzArtistId,
-    mbzReleaseGroupId: song.mbzReleaseGroupId,
-    mbzReleaseId: song.mbzAlbumId,
-  }, { deferRemote: true });
-  const finalUrl = coverUrl || song.imageUrl;
-  return (
-    <CoverImage
-      src={finalUrl}
-      alt={song.name}
-      fallback={song.name.charAt(0)}
-      className="h-10 w-10 shrink-0 rounded-md"
-      lazy={!finalUrl}
-      onLazyLoad={triggerRemote}
-    />
   );
 }
 
@@ -633,7 +610,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
         sortValue: (s) => s.name,
         render: (song) => (
           <div className="flex min-w-0 items-center gap-3">
-            <MbSongImageCell song={song} />
+            <SongCoverImage song={song} className="h-10 w-10 shrink-0 rounded-md" />
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{song.name}</p>
               <p className="truncate text-xs text-muted-foreground">
@@ -1104,92 +1081,42 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
       {/* Context Menu */}
       {contextMenuSong && (
-        <div
-          className="fixed inset-0 z-50"
-          onContextMenu={(e) => e.preventDefault()}
-          onClick={() => setContextMenuSong(null)}
-        >
-          <div
-            className="absolute"
-            style={{ left: contextMenuPos.x, top: contextMenuPos.y }}
+      <ContextMenuOverlay open x={contextMenuPos.x} y={contextMenuPos.y} onClose={() => setContextMenuSong(null)}>
+        <DropdownMenuItem onClick={() => { playSong(contextMenuSong); setContextMenuSong(null); }}>
+          <span className="text-sm">▶ Play</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => { addToQueue([contextMenuSong], { type: "next" }); setContextMenuSong(null); }}>
+          <span className="text-sm">⏭ Add Next</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => { setAddToPlaylistSong(contextMenuSong); setContextMenuSong(null); }}>
+          <span className="text-sm">📋 Add to Playlist</span>
+        </DropdownMenuItem>
+        {!contextMenuSong.path && (
+          <DropdownMenuItem onClick={() => { import("../../stores/download.store").then((m) => m.useDownloadStore.getState().enqueueSong(contextMenuSong)); setContextMenuSong(null); }}>
+            <span className="text-sm">⬇ Download</span>
+          </DropdownMenuItem>
+        )}
+        {contextMenuSong.path && contextMenuSong.originType === OriginType.LOCAL && (
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onClick={async () => {
+              const origin = origins.find((o) => o.id === contextMenuSong.originId);
+              if (origin && contextMenuSong.path) {
+                const ok = await moveSongToTrash(contextMenuSong.path, origin);
+                if (ok) setLocalResults((prev) => prev.filter((s) => s.id !== contextMenuSong.id));
+              }
+              setContextMenuSong(null);
+            }}
           >
-            <DropdownMenu open={true} onOpenChange={(o) => { if (!o) setContextMenuSong(null); }}>
-              <DropdownMenuTrigger asChild>
-                <span className="absolute w-px h-px" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                side="bottom"
-                align="start"
-                className="min-w-[180px]"
-                onCloseAutoFocus={(e) => e.preventDefault()}
-              >
-                <DropdownMenuItem
-                  onClick={() => {
-                    playSong(contextMenuSong);
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">▶ Play</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    addToQueue([contextMenuSong], { type: "next" });
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">⏭ Add Next</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setAddToPlaylistSong(contextMenuSong);
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">📋 Add to Playlist</span>
-                </DropdownMenuItem>
-                {!contextMenuSong.path && (
-                  <DropdownMenuItem
-                    onClick={() => {
-                      import("../../stores/download.store").then((m) =>
-                        m.useDownloadStore.getState().enqueueSong(contextMenuSong),
-                      );
-                      setContextMenuSong(null);
-                    }}
-                  >
-                    <span className="text-sm">⬇ Download</span>
-                  </DropdownMenuItem>
-                )}
-                {contextMenuSong.path && contextMenuSong.originType === OriginType.LOCAL && (
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onClick={async () => {
-                      const origin = origins.find((o) => o.id === contextMenuSong.originId);
-                      if (origin && contextMenuSong.path) {
-                        const ok = await moveSongToTrash(contextMenuSong.path, origin);
-                        if (ok) {
-                          setLocalResults((prev) => prev.filter((s) => s.id !== contextMenuSong.id));
-                        }
-                      }
-                      setContextMenuSong(null);
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-2" />
-                    <span className="text-sm">Delete</span>
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => {
-                    setSongInfoSong(contextMenuSong);
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">🔍 Music Metadata</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+            <Trash2 className="h-3.5 w-3.5 mr-2" />
+            <span className="text-sm">Delete</span>
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => { setSongInfoSong(contextMenuSong); setContextMenuSong(null); }}>
+          <span className="text-sm">🔍 Music Metadata</span>
+        </DropdownMenuItem>
+      </ContextMenuOverlay>
       )}
     </div>
   );

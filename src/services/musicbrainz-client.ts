@@ -9,7 +9,7 @@ import type {
 import type { MusicBrainzContext } from "./musicbrainz-types";
 import { getCachedQuery, setCachedQuery, hashQuery } from "./sqlite-db/sqlite-db-query";
 import { useAuthStore } from "../stores/auth.store";
-import { OriginType } from "../types/domain-types";
+import { getLibraryRoot } from "./db/ensure-db";
 
 const BASE_URL = "https://musicbrainz.org/ws/2";
 const COVER_ART_URL = "https://coverartarchive.org/release";
@@ -90,10 +90,7 @@ export type MusicBrainzSearchOpts = {
   rawQuery?: string;
 };
 
-function getLibraryRoot(): string | undefined {
-  const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
-  return origin?.folderPath || undefined;
-}
+
 
 async function getSqliteDbCached<T>(cacheKey: string): Promise<T | null> {
   const libraryRoot = getLibraryRoot();

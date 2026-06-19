@@ -1,10 +1,9 @@
 import { getPlatformService } from "./platform/factory";
 import { useStatusStore } from "../stores/status.store";
-import { useAuthStore } from "../stores/auth.store";
-import { OriginType, type Album } from "../types/domain-types";
+import { type Album } from "../types/domain-types";
 import { cachedDelete } from "./sqlite-db/sqlite-db-cache";
 import * as albumRepo from "./db/repositories/album-repo";
-import { initDatabase, isReady } from "./db/database";
+import { getLibraryRoot, ensureDbWithRoot as ensureDb } from "./db/ensure-db";
 
 function addMsg(text: string, level: "info" | "success" | "warn" | "danger" = "info") {
   useStatusStore.getState().addMessage(text, level, "Library");
@@ -12,20 +11,6 @@ function addMsg(text: string, level: "info" | "success" | "warn" | "danger" = "i
 
 function log(msg: string) {
   console.debug(`[delete-album] ${msg}`);
-}
-
-function getLibraryRoot(): string | undefined {
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-}
-
-async function ensureDb(root: string): Promise<boolean> {
-  if (isReady()) return true;
-  try {
-    await initDatabase(root);
-    return isReady();
-  } catch {
-    return false;
-  }
 }
 
 export async function deleteAlbumFromLibrary(album: Album): Promise<boolean> {
@@ -51,22 +36,35 @@ export async function deleteAlbumFromLibrary(album: Album): Promise<boolean> {
     log(`error ensuring .trash dir: ${err}`);
   }
 
-  // Build album directory path
-  const albumDir = `${root}/${album.albumArtistName}/${album.name}`;
-
   // 1. Get tracks from DB to know which audio files to move
   const dbReady = await ensureDb(root);
   let trackPaths: string[] = [];
+  let albumDir: string | null = null;
   if (dbReady) {
     const meta = albumRepo.findAlbumByName(album.albumArtistName, album.name, true);
     if (meta) {
       trackPaths = meta.tracks.map((t) => t.path).filter(Boolean);
+      // Derive album directory from the first track's actual path
+      if (meta.tracks.length > 0 && meta.tracks[0].path && meta.tracks[0].path.includes("/")) {
+        const parts = meta.tracks[0].path.split("/");
+        albumDir = `${root}/${parts[0]}/${parts[1]}`;
+      }
     }
   }
 
-  // 2. Move audio files to .trash
+  // Fallback: construct album dir from sanitized metadata names
+  if (!albumDir) {
+    const { sanitizeForPath } = await import("../services/organizer/sanitizer");
+    const artistDir = sanitizeForPath(album.albumArtistName);
+    const albumDirBase = sanitizeForPath(album.name);
+    albumDir = album.releaseYear
+      ? `${root}/${artistDir}/${albumDirBase} (${album.releaseYear})`
+      : `${root}/${artistDir}/${albumDirBase}`;
+  }
+
+  // 2. Move audio files to .trash (track.path already includes artist/album dirs)
   for (const relPath of trackPaths) {
-    const fullPath = `${albumDir}/${relPath}`;
+    const fullPath = `${root}/${relPath}`;
     try {
       const exists = await p.fileExists(fullPath);
       if (!exists) continue;

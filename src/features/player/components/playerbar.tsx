@@ -1,9 +1,11 @@
 import type { Album, AlbumArtist } from "../../../types/domain-types";
 import { usePlayerStore } from "../../../stores/player.store";
 import { useSettingsStore } from "../../../stores/settings.store";
+import { useIsCompact } from "../../../hooks/use-is-compact";
 import { LeftControls } from "./left-controls";
 import { CenterControls } from "./center-controls";
 import { RightControls } from "./right-controls";
+import { CompactPlayerBar } from "./compact-playerbar";
 
 type PlayerbarProps = {
   currentView?: string;
@@ -17,6 +19,11 @@ type PlayerbarProps = {
 export function PlayerBar({ currentView, onNavigate, onGoBack, onOpenQueue, onNavigateAlbum, onNavigateArtist }: PlayerbarProps) {
   const { currentTrack } = usePlayerStore();
   const { sidebarCollapsed } = useSettingsStore();
+  const isCompact = useIsCompact();
+
+  if (isCompact) {
+    return <CompactPlayerBar onOpenQueue={onOpenQueue} onNavigateAlbum={onNavigateAlbum} onNavigateArtist={onNavigateArtist} />;
+  }
 
   return (
     <div className="playerbar-grid">

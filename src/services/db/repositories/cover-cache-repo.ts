@@ -1,4 +1,5 @@
-import { query, exec, isReady, initDatabase } from "../database";
+import { query, exec } from "../database";
+import { ensureDbWithRoot as ensureDb } from "../ensure-db";
 
 export type CoverCacheRow = {
   id: string;
@@ -9,17 +10,6 @@ export type CoverCacheRow = {
   source_url: string | null;
   created_at: number;
 };
-
-export async function ensureDb(root: string): Promise<boolean> {
-  if (!isReady()) {
-    try {
-      await initDatabase(root);
-    } catch {
-      return false;
-    }
-  }
-  return isReady();
-}
 
 export function upsertCoverCache(
   artistName: string,

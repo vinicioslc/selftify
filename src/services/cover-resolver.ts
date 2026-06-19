@@ -1,9 +1,8 @@
 import { findImages, recordToBlobUrl, storeImage as indexDbStoreImage, md5Hash } from "./image-store";
 import { loadFromAlbumDotImg } from "./dot-img-loader";
 import { useSettingsStore } from "../stores/settings.store";
-import { useAuthStore } from "../stores/auth.store";
-import { OriginType } from "../types/domain-types";
 import { sqliteDbImageToObjectUrl } from "./sqlite-db/sqlite-db-image";
+import { getLibraryRoot } from "./db/ensure-db";
 
 export type CoverInput = {
   artistName?: string | null;
@@ -58,9 +57,7 @@ async function findFromStore(query: Record<string, string>): Promise<string | nu
   return recordToBlobUrl(results[0]);
 }
 
-function getLibraryRoot(): string | undefined {
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-}
+
 
 async function findSqliteDbAlbumImage(artistName: string, albumName: string): Promise<string | null> {
   try {

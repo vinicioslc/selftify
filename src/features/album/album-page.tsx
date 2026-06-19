@@ -9,6 +9,8 @@ import { getController } from "../../api/controller";
 import { resolveSong, resolveSongs } from "../../services/stream-resolver";
 import { ArtImage } from "../../components/ui/art-image";
 import { Button } from "../../components/ui/button";
+import { ImageOverlay } from "../../components/ui/image-overlay";
+import { ContextMenuOverlay } from "../../components/ui/context-menu-overlay";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Play, Loader2, Info, MoreHorizontal, Download, RefreshCw, Trash2, SkipForward, ListPlus } from "lucide-react";
 import { cn, formatDuration } from "../../lib/utils";
@@ -43,6 +45,7 @@ import { findImages, recordToBlobUrl } from "../../services/image-store";
 import { loadFromArtistDotImg } from "../../services/dot-img-loader";
 import { deleteAlbumFromLibrary } from "../../services/delete-album";
 import { moveSongToTrash } from "../../services/move-to-trash";
+import { getAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
 
 interface AlbumPageProps {
   album: Album;
@@ -71,6 +74,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   const [deleting, setDeleting] = useState(false);
   const [contextMenuSong, setContextMenuSong] = useState<Song | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
+  const [imageExpanded, setImageExpanded] = useState(false);
   const resolvedCoverUrl = albumImageUrl || coverUrl || album.imageUrl || null;
   const coverUrlRef = useRef<string | null>(resolvedCoverUrl);
 
@@ -225,15 +229,30 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           (s) => s.albumName === album.name || s.albumName === undefined,
         );
 
+        // 1.5 Resolve album from SQLite for cached mbzId (no network)
+        let resolvedMbid = album.mbzId;
+        let resolvedRgId = album.mbzReleaseGroupId;
+        if (!resolvedMbid && !resolvedRgId) {
+          try {
+            const dbAlbum = await controller.getAlbumDetailByName(album.albumArtistName, album.name).catch(() => null);
+            if (dbAlbum) {
+              resolvedMbid = dbAlbum.mbzId;
+              resolvedRgId = dbAlbum.mbzReleaseGroupId;
+            }
+          } catch {
+            // fall through — use original album fields
+          }
+        }
+
         // 2. Try to fetch MusicBrainz tracks (for MBZ IDs, extra metadata)
         let mbzTracks: Song[] = [];
           if (mbzModule) {
             const { getReleaseDetail, getReleaseByReleaseGroup, searchReleases } = mbzModule;
             const mbCtx: MusicBrainzContext = { artistName: album.albumArtistName };
             try {
-              let releaseMbid = album.mbzId;
-              if (!releaseMbid && album.mbzReleaseGroupId) {
-                const release = await getReleaseByReleaseGroup(album.mbzReleaseGroupId, mbCtx);
+              let releaseMbid = resolvedMbid;
+              if (!releaseMbid && resolvedRgId) {
+                const release = await getReleaseByReleaseGroup(resolvedRgId, mbCtx);
                 releaseMbid = release?.id;
               }
               if (!releaseMbid && album.name && album.albumArtistName) {
@@ -302,6 +321,31 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
               });
             } else {
               merged.set(key, t);
+            }
+          }
+
+          // 4. Enrich MBZ-only tracks with cached YouTube mappings (no network request)
+          const allMappings = await getAllSavedMbzYtMappings().catch(() => []);
+          const albumArtistLower = album.albumArtistName.toLowerCase();
+          const albumNameLower = album.name.toLowerCase();
+          const mappingByRecordingId = new Map<string, string>();
+          for (const m of allMappings) {
+            if (
+              m.selectedVideoId &&
+              m.artistName?.toLowerCase() === albumArtistLower &&
+              m.albumName?.toLowerCase() === albumNameLower
+            ) {
+              mappingByRecordingId.set(m.mbzRecordingId, m.selectedVideoId);
+            }
+          }
+          if (mappingByRecordingId.size > 0) {
+            for (const [key, song] of merged) {
+              if (!song.path && song.mbzRecordingId) {
+                const videoId = mappingByRecordingId.get(song.mbzRecordingId);
+                if (videoId) {
+                  merged.set(key, { ...song, youtubeVideoId: videoId });
+                }
+              }
             }
           }
 
@@ -457,7 +501,10 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           status={status}
         />
         <div className="relative z-10 flex flex-col gap-6 p-6 md:flex-row">
-        <div className="relative">
+        <div
+          className="relative cursor-pointer"
+          onClick={() => setImageExpanded(true)}
+        >
         <ArtImage
           src={resolvedCoverUrl}
           alt={album.name}
@@ -469,6 +516,10 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
             <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/80">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
+          )}
+
+          {imageExpanded && resolvedCoverUrl && (
+            <ImageOverlay src={resolvedCoverUrl} alt={album.name} onClose={() => setImageExpanded(false)} />
           )}
         </div>
         <div className="flex flex-col justify-end gap-2">
@@ -520,10 +571,19 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
             </span>
             {album.releaseYear && <> &middot; {album.releaseYear}</>}
           </p>
-          {album.songCount && (
+          {songs.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              {album.songCount} songs
-              {album.duration ? <> &middot; {formatDuration(Math.round(album.duration / album.songCount * 1000))} avg</> : null}
+              {songs.length} {songs.length === 1 ? "song" : "songs"}
+              {songs.some((s) => !s.path) && (
+                <span className="ml-1 text-xs">
+                  ({songs.filter((s) => s.path).length} local
+                  {songs.some((s) => !s.path && s.youtubeVideoId) && (
+                    <> + {songs.filter((s) => !s.path && s.youtubeVideoId).length} stream</>
+                  )}
+                  )
+                </span>
+              )}
+              {album.duration ? <> &middot; {formatDuration(Math.round(album.duration / Math.max(album.songCount || 1, 1) * 1000))} avg</> : null}
             </p>
           )}
           {songs.length > 0 && (
@@ -573,50 +633,29 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
       </ScrollArea>
 
       {contextMenuSong && (
-        <div
-          className="fixed inset-0 z-50"
-          onContextMenu={(e) => e.preventDefault()}
-          onClick={() => setContextMenuSong(null)}
-        >
-          <div className="absolute" style={{ left: contextMenuPos.x, top: contextMenuPos.y }}>
-            <DropdownMenu open={true} onOpenChange={(o) => { if (!o) setContextMenuSong(null); }}>
-              <DropdownMenuTrigger asChild>
-                <span className="absolute w-px h-px" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                side="bottom"
-                align="start"
-                className="min-w-[180px]"
-                onCloseAutoFocus={(e) => e.preventDefault()}
-              >
-                <DropdownMenuItem onClick={() => { setContextMenuSong(null); playSong(contextMenuSong); }}>
-                  <Play className="mr-2 h-4 w-4" />
-                  <span>Play</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handlePlayNext(contextMenuSong)}>
-                  <SkipForward className="mr-2 h-4 w-4" />
-                  <span>Play Next</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleAddToQueue(contextMenuSong)}>
-                  <ListPlus className="mr-2 h-4 w-4" />
-                  <span>Add to Queue</span>
-                </DropdownMenuItem>
-                {contextMenuSong.path && contextMenuSong.originType === OriginType.LOCAL && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onClick={() => handleDeleteSong(contextMenuSong)}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      <span>Delete File</span>
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+      <ContextMenuOverlay open x={contextMenuPos.x} y={contextMenuPos.y} onClose={() => setContextMenuSong(null)}>
+        <DropdownMenuItem onClick={() => { setContextMenuSong(null); playSong(contextMenuSong); }}>
+          <Play className="mr-2 h-4 w-4" />
+          <span>Play</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => handlePlayNext(contextMenuSong)}>
+          <SkipForward className="mr-2 h-4 w-4" />
+          <span>Play Next</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => handleAddToQueue(contextMenuSong)}>
+          <ListPlus className="mr-2 h-4 w-4" />
+          <span>Add to Queue</span>
+        </DropdownMenuItem>
+        {contextMenuSong.path && contextMenuSong.originType === OriginType.LOCAL && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => handleDeleteSong(contextMenuSong)}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              <span>Delete File</span>
+            </DropdownMenuItem>
+          </>
+        )}
+      </ContextMenuOverlay>
       )}
 
       {songInfoSong && (

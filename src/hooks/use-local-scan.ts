@@ -3,6 +3,7 @@ import { getIndexer, type Indexer, type IndexerStatus } from "../api/indexer/ind
 import { OriginType } from "../types/domain-types";
 import { useAuthStore } from "../stores/auth.store";
 import { readConfig, readOrCreateConfig } from "../services/sqlite-db/sqlite-db-config";
+import { getLibraryRoot } from "../services/db/ensure-db";
 
 export function useLocalScan() {
   const indexerRef = useRef<Indexer | null>(null);
@@ -14,10 +15,6 @@ export function useLocalScan() {
       if (unsubscribeRef.current) unsubscribeRef.current();
     };
   }, []);
-
-  function getLibraryRoot(): string | undefined {
-    return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-  }
 
   const ensureIndexer = useCallback(async () => {
     if (!indexerRef.current) {

@@ -51,6 +51,10 @@ export function deleteTracksByAlbum(albumId: string): void {
   exec("DELETE FROM tracks WHERE album_id = ?", [albumId]);
 }
 
+export function deleteTrack(path: string): void {
+  exec("DELETE FROM tracks WHERE path = ?", [path]);
+}
+
 export function searchTracks(queryText: string): (SqliteDbAlbumTrack & { album_id: string })[] {
   const like = `%${queryText.toLowerCase()}%`;
   return query<any>(

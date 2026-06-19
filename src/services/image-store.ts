@@ -1,5 +1,6 @@
 import { sha256Hash, imageRelPath, readSqliteDbImage } from "./sqlite-db/sqlite-db-image";
 import { cacheBlobUrl } from "./image-fetch";
+import { getLibraryRoot } from "./db/ensure-db";
 
 export type ImageRecord = {
   md5: string;
@@ -27,12 +28,13 @@ export async function storeImage(record: ImageRecord): Promise<string | null> {
     const { saveSqliteDbImage } = await import("./sqlite-db/sqlite-db-image");
     const data = new Uint8Array(record.blob);
     const category = record.albumName ? "album" as const : "artist" as const;
-    const root = await getLibraryRoot();
+    const root = getLibraryRoot() || "";
     relPath = await saveSqliteDbImage(root, category, record.md5, data, record.format);
 
     if (record.albumName && record.artistName && root) {
-      const { upsertCoverCache, ensureDb } = await import("./db/repositories/cover-cache-repo");
-      const dbOk = await ensureDb(root);
+      const { upsertCoverCache } = await import("./db/repositories/cover-cache-repo");
+      const { ensureDbWithRoot } = await import("./db/ensure-db");
+      const dbOk = await ensureDbWithRoot(root);
       if (dbOk) {
         upsertCoverCache(record.artistName, record.albumName, record.md5, record.format, record.sourceUrl);
       }
@@ -63,11 +65,12 @@ export async function findImages(query?: Record<string, string>): Promise<ImageR
   if (!query || !query.artistName) return [];
 
   try {
-    const root = await getLibraryRoot();
+    const root = getLibraryRoot();
     if (!root) return [];
 
-    const { findCoverCache, ensureDb } = await import("./db/repositories/cover-cache-repo");
-    const dbOk = await ensureDb(root);
+    const { findCoverCache } = await import("./db/repositories/cover-cache-repo");
+    const { ensureDbWithRoot } = await import("./db/ensure-db");
+    const dbOk = await ensureDbWithRoot(root);
     if (!dbOk) return [];
 
     const albumName = query.albumName || "";
@@ -103,8 +106,4 @@ export async function checkCacheVersion(): Promise<void> {
   // No-op
 }
 
-async function getLibraryRoot(): Promise<string> {
-  const { useAuthStore } = await import("../stores/auth.store");
-  const { OriginType } = await import("../types/domain-types");
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath || "";
-}
+

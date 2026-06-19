@@ -1,9 +1,13 @@
 import type { Album, AlbumArtist, Song, Origin } from "../types/domain-types";
 import { OriginType } from "../types/domain-types";
 
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 export function buildArtistNav(song: Pick<Song, "artistId" | "artistName" | "originId" | "originType" | "imageUrl" | "mbzArtistId">): AlbumArtist {
   return {
-    id: song.artistId || `artist-${song.artistName.toLowerCase().replace(/\s+/g, "-")}`,
+    id: song.artistId || `artist-${slugify(song.artistName)}`,
     originId: song.originId,
     originType: song.originType,
     name: song.artistName,
@@ -12,15 +16,17 @@ export function buildArtistNav(song: Pick<Song, "artistId" | "artistName" | "ori
   };
 }
 
-export function buildAlbumNav(song: Pick<Song, "albumId" | "albumName" | "artistName" | "originId" | "originType" | "imageUrl" | "albumArtistName">): Album | null {
+export function buildAlbumNav(song: Pick<Song, "albumId" | "albumName" | "artistName" | "originId" | "originType" | "imageUrl" | "albumArtistName" | "mbzAlbumId" | "mbzReleaseGroupId">): Album | null {
   if (!song.albumName) return null;
   return {
-    id: song.albumId || `album-${song.artistName.toLowerCase().replace(/\s+/g, "-")}-${song.albumName.toLowerCase().replace(/\s+/g, "-")}`,
+    id: song.albumId || `album-${slugify(song.artistName)}-${slugify(song.albumName)}`,
     originId: song.originId,
     originType: song.originType,
     name: song.albumName,
     albumArtistName: song.albumArtistName || song.artistName,
     imageUrl: song.imageUrl || null,
+    mbzId: song.mbzAlbumId,
+    mbzReleaseGroupId: song.mbzReleaseGroupId,
   };
 }
 

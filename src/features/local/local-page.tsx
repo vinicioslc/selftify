@@ -13,17 +13,16 @@ import { Input } from "../../components/ui/input";
 import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc, ChevronLeft, ChevronRight, Plus, Trash2, Users, Tags } from "lucide-react";
 import { DataTable } from "../shared/data-table";
 import { songColumns } from "../shared/song-columns";
 import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
 import { moveSongToTrash } from "../../services/move-to-trash";
+import { CoverImage } from "../../components/ui/art-image";
+import { ContextMenuOverlay } from "../../components/ui/context-menu-overlay";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 
 const PAGE_SIZE = 20;
@@ -39,6 +38,8 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   const [folderPath, setFolderPath] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [songs, setSongs] = useState<Song[]>([]);
+  const [albums, setAlbums] = useState<Album[]>([]);
+  const [artists, setArtists] = useState<AlbumArtist[]>([]);
   const [totalSongs, setTotalSongs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("songs");
@@ -77,6 +78,12 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
             const withImages = await controller.populateSongImages(mapped);
             setSongs(withImages);
             setTotalSongs(mapped.length);
+            const [albumList, artistList] = await Promise.all([
+              controller.getAlbumList(0, 10000),
+              controller.getAlbumArtistList(0, 10000),
+            ]);
+            setAlbums(albumList);
+            setArtists(artistList);
             useStatusStore.getState().addMessage(`Loaded ${mapped.length} song${mapped.length !== 1 ? "s" : ""} from local library`, "info", "Library");
             setLocalStats({
               songs: await getSongCount(),
@@ -183,6 +190,18 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   function handlePlayGenre(genre: string) {
     const list = songs.filter((s) => s.genres?.includes(genre));
     if (list.length > 0) setQueue(list, { type: "now" });
+  }
+
+  async function handlePlayAlbum(album: Album) {
+    const controller = await getController();
+    const albumSongs = await controller.getAlbumSongs(album.albumArtistName, album.name);
+    if (albumSongs.length > 0) setQueue(albumSongs, { type: "now" });
+  }
+
+  async function handlePlayArtist(artist: AlbumArtist) {
+    const controller = await getController();
+    const artistSongs = await controller.getArtistSongs(artist.name);
+    if (artistSongs.length > 0) setQueue(artistSongs, { type: "now" });
   }
 
   function handleAlbumClick(song: Song) {
@@ -441,8 +460,18 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                 <List className="h-3 w-3" /> Songs
               </TabsTrigger>
               {isLocalMode && (
+                <TabsTrigger value="artists" className="gap-1 text-xs">
+                  <Users className="h-3 w-3" /> Artists
+                </TabsTrigger>
+              )}
+              {isLocalMode && (
+                <TabsTrigger value="albums" className="gap-1 text-xs">
+                  <Disc className="h-3 w-3" /> Albums
+                </TabsTrigger>
+              )}
+              {isLocalMode && (
                 <TabsTrigger value="genres" className="gap-1 text-xs">
-                  <Disc className="h-3 w-3" /> Genres
+                  <Tags className="h-3 w-3" /> Genres
                 </TabsTrigger>
               )}
             </TabsList>
@@ -541,6 +570,89 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           </TabsContent>
 
           {isLocalMode && (
+            <TabsContent value="artists" className="flex-1 p-0">
+              <ScrollArea className="h-full">
+                {artists.length === 0 ? (
+                  <div className="flex h-full items-center justify-center">
+                    <p className="text-sm text-muted-foreground">No artists found in your library.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                    {artists.map((artist) => (
+                      <div
+                        key={artist.id}
+                        className="group cursor-pointer rounded-lg border p-3 transition-colors hover:bg-accent/50"
+                        onClick={() => onNavigateArtist?.(artist)}
+                      >
+                        <div className="relative mb-2">
+                          <CoverImage
+                            src={artist.imageUrl}
+                            alt={artist.name}
+                            fallback={artist.name.charAt(0).toUpperCase()}
+                            className="aspect-square w-full rounded-lg"
+                          />
+                          <Button
+                            size="icon"
+                            className="absolute bottom-2 right-2 h-8 w-8 rounded-full bg-primary shadow-lg opacity-0 transition-all group-hover:opacity-100 group-hover:translate-y-0 translate-y-2 hover:scale-105 hover:bg-primary/90"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePlayArtist(artist);
+                            }}
+                          >
+                            <Play className="h-3.5 w-3.5 fill-current" />
+                          </Button>
+                        </div>
+                        <p className="truncate text-sm font-medium">{artist.name}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </TabsContent>
+          )}
+          {isLocalMode && (
+            <TabsContent value="albums" className="flex-1 p-0">
+              <ScrollArea className="h-full">
+                {albums.length === 0 ? (
+                  <div className="flex h-full items-center justify-center">
+                    <p className="text-sm text-muted-foreground">No albums found in your library.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                    {albums.map((album) => (
+                      <div
+                        key={album.id}
+                        className="group cursor-pointer rounded-lg border p-3 transition-colors hover:bg-accent/50"
+                        onClick={() => onNavigateAlbum?.(album)}
+                      >
+                        <div className="relative mb-2">
+                          <CoverImage
+                            src={album.imageUrl}
+                            alt={album.name}
+                            fallback={album.name.charAt(0).toUpperCase()}
+                            className="aspect-square w-full rounded-lg"
+                          />
+                          <Button
+                            size="icon"
+                            className="absolute bottom-2 right-2 h-8 w-8 rounded-full bg-primary shadow-lg opacity-0 transition-all group-hover:opacity-100 group-hover:translate-y-0 translate-y-2 hover:scale-105 hover:bg-primary/90"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePlayAlbum(album);
+                            }}
+                          >
+                            <Play className="h-3.5 w-3.5 fill-current" />
+                          </Button>
+                        </div>
+                        <p className="truncate text-sm font-medium">{album.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{album.albumArtistName}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </TabsContent>
+          )}
+          {isLocalMode && (
             <TabsContent value="genres" className="flex-1 p-0">
             <ScrollArea className="h-full">
               {genres.length === 0 ? (
@@ -582,70 +694,32 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
 
       {/* Context Menu */}
       {contextMenuSong && (
-        <div
-          className="fixed inset-0 z-50"
-          onContextMenu={(e) => e.preventDefault()}
-          onClick={() => setContextMenuSong(null)}
+      <ContextMenuOverlay open x={contextMenuPos.x} y={contextMenuPos.y} onClose={() => setContextMenuSong(null)}>
+        <DropdownMenuItem onClick={() => { addToQueue?.([contextMenuSong], { type: "now" }); setContextMenuSong(null); }}>
+          <span className="text-sm">▶ Play</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => { addToQueue?.([contextMenuSong], { type: "next" }); setContextMenuSong(null); }}>
+          <span className="text-sm">⏭ Play Next</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => { setAddToPlaylistSong(contextMenuSong); setContextMenuSong(null); }}>
+          <span className="text-sm">📋 Add to Playlist</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-destructive focus:text-destructive"
+          onClick={async () => {
+            const origin = origins.find((o) => o.id === contextMenuSong.originId);
+            if (origin && contextMenuSong.path) {
+              const ok = await moveSongToTrash(contextMenuSong.path, origin);
+              if (ok) setSongs((prev) => prev.filter((s) => s.id !== contextMenuSong.id));
+            }
+            setContextMenuSong(null);
+          }}
         >
-          <div
-            className="absolute"
-            style={{ left: contextMenuPos.x, top: contextMenuPos.y }}
-          >
-            <DropdownMenu open={true} onOpenChange={(o) => { if (!o) setContextMenuSong(null); }}>
-              <DropdownMenuTrigger asChild>
-                <span className="absolute w-px h-px" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                side="bottom"
-                align="start"
-                className="min-w-[180px]"
-                onCloseAutoFocus={(e) => e.preventDefault()}
-              >
-                <DropdownMenuItem
-                  onClick={() => {
-                    addToQueue?.([contextMenuSong], { type: "now" });
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">▶ Play</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    addToQueue?.([contextMenuSong], { type: "next" });
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">⏭ Play Next</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setAddToPlaylistSong(contextMenuSong);
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <span className="text-sm">📋 Add to Playlist</span>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={async () => {
-                    const origin = origins.find((o) => o.id === contextMenuSong.originId);
-                    if (origin && contextMenuSong.path) {
-                      const ok = await moveSongToTrash(contextMenuSong.path, origin);
-                      if (ok) {
-                        setSongs((prev) => prev.filter((s) => s.id !== contextMenuSong.id));
-                      }
-                    }
-                    setContextMenuSong(null);
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5 mr-2" />
-                  <span className="text-sm">Delete</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+          <Trash2 className="h-3.5 w-3.5 mr-2" />
+          <span className="text-sm">Delete</span>
+        </DropdownMenuItem>
+      </ContextMenuOverlay>
       )}
 
       {/* Add to Playlist Dialog */}

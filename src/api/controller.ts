@@ -22,6 +22,7 @@ export interface ServerController {
   authenticate(url: string, username: string, password: string): Promise<{ token: string; username: string }>;
   search(query: string, limit?: number): Promise<SearchResults>;
   getAlbumDetail(id: string): Promise<Album | null>;
+  getAlbumDetailByName(albumArtist: string, albumName: string): Promise<Album | null>;
   getAlbumList(offset?: number, limit?: number): Promise<Album[]>;
   getAlbumArtistDetail(id: string): Promise<AlbumArtist | null>;
   getAlbumArtistList(offset?: number, limit?: number): Promise<AlbumArtist[]>;

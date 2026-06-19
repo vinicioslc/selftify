@@ -14,7 +14,7 @@ function log(msg: string) {
  * Move a local song file to the .trash folder within the library root,
  * then remove its entry from the local database.
  *
- * @param filePath Absolute path to the file
+ * @param filePath Absolute or relative (from library root) path to the file
  * @param origin The local origin (provides folderPath as library root)
  * @returns true if successfully moved and deleted
  */
@@ -62,19 +62,37 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
 
   const absPath = filePath.startsWith("/") ? filePath : `${root}/${filePath}`;
 
-  try {
-    const moved = await p.renameFile(absPath, finalDest);
-    if (!moved) {
-      log(`rename/move failed for ${absPath} -> ${finalDest}`);
-      addMsg("Cannot delete: file move failed", "danger");
+  const fileExists = await p.fileExists(absPath);
+
+  if (fileExists) {
+    try {
+      const moved = await p.renameFile(absPath, finalDest);
+      if (!moved) {
+        log(`rename/move failed for ${absPath} -> ${finalDest}`);
+        addMsg("Cannot delete: file move failed", "danger");
+        return false;
+      }
+    } catch (err) {
+      log(`rename/move error: ${err}`);
+      addMsg("Cannot delete: file move error", "danger");
       return false;
     }
-  } catch (err) {
-    log(`rename/move error: ${err}`);
-    addMsg("Cannot delete: file move error", "danger");
-    return false;
+  } else {
+    log(`file not found on disk, removing from DB only: ${absPath}`);
   }
 
-  addMsg(`Moved to trash: ${fileName}`, "success");
+  // Remove entry from the database
+  try {
+    const relPath = filePath.startsWith("/") ? filePath.slice(root.length + 1) : filePath;
+    const { deleteTrack } = await import("./db/repositories/track-repo");
+    deleteTrack(relPath);
+    const { flushSave } = await import("./db/database");
+    await flushSave();
+  } catch (err) {
+    log(`failed to remove song from DB: ${err}`);
+    addMsg(fileExists ? "File moved to trash but database entry could not be removed" : "Could not remove from database", "warn");
+  }
+
+  addMsg(fileExists ? `Moved to trash: ${fileName}` : `Removed from library: ${fileName}`, "success");
   return true;
 }

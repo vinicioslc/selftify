@@ -6,8 +6,8 @@ import { useStatusStore } from "../../stores/status.store";
 import { OriginType, type AlbumArtist, type Album } from "../../types/domain-types";
 import type { MusicBrainzContext } from "../../services/musicbrainz-types";
 import { getController } from "../../api/controller";
-import { CoverImage } from "../../components/ui/art-image";
-import { ArtImage } from "../../components/ui/art-image";
+import { CoverImage, ArtImage } from "../../components/ui/art-image";
+import { ImageOverlay } from "../../components/ui/image-overlay";
 import { cn } from "../../lib/utils";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
@@ -88,6 +88,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   const [imageManagerOpen, setImageManagerOpen] = useState(false);
   const [mbzLoading, setMbzLoading] = useState(false);
   const [isArtistCached, setIsArtistCached] = useState(false);
+  const [imageExpanded, setImageExpanded] = useState(false);
   const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
   const localAlbumImagesRef = useRef<Map<string, string>>(new Map());
   const localSongCountsRef = useRef<Map<string, number>>(new Map());
@@ -312,7 +313,26 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           setTotal(0);
         }
 
-        if (!resolvedMbid) {
+        // Resolve MBZ from SQLite cache (no network)
+        let effectiveMbid = resolvedMbid;
+        if (!effectiveMbid) {
+          try {
+            const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+            if (root) {
+              const { initDatabase, isReady } = await import("../../services/db/database");
+              const { findArtistByName } = await import("../../services/db/repositories/artist-repo");
+              if (!isReady()) await initDatabase(root);
+              if (isReady()) {
+                const dbArtist = findArtistByName(artist.name);
+                if (dbArtist?.mbzId) effectiveMbid = dbArtist.mbzId;
+              }
+            }
+          } catch {
+            // fall through
+          }
+        }
+
+        if (!effectiveMbid) {
           if (!cancelled) {
             const localAlbums: ArtistAlbum[] = [];
             const grouped = new Map<string, ArtistAlbum>();
@@ -335,10 +355,10 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
         }
 
         const { getArtistReleaseGroups } = await import("../../services/musicbrainz-client");
-        const mbCtx: MusicBrainzContext | undefined = resolvedMbid
-          ? { artistName: artist.name, artistMbid: resolvedMbid }
+        const mbCtx: MusicBrainzContext | undefined = effectiveMbid
+          ? { artistName: artist.name, artistMbid: effectiveMbid }
           : undefined;
-        const result = await getArtistReleaseGroups(resolvedMbid!, PAGE_SIZE, 0, mbCtx);
+        const result = await getArtistReleaseGroups(effectiveMbid, PAGE_SIZE, 0, mbCtx);
         if (cancelled) return;
         setTotal(result.total);
         if (result.groups.length < PAGE_SIZE) setAllLoaded(true);
@@ -477,16 +497,16 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
                   alt={album.name}
                   fallback={album.name.charAt(0)}
                   emptySvg={<AlbumEmptySvg />}
-                  className="h-44 w-full md:h-52"
+                  className="aspect-square w-full rounded-[5px]"
                 />
                 {!album.hasLocal ? (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
+                  <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
                     <span className="text-xs font-medium text-white drop-shadow">
                       No local songs
                     </span>
                   </div>
                 ) : album.localSongCount > 0 ? (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/30 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
+                  <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/30 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
                     <span className="text-xs font-medium text-white drop-shadow">
                       {album.localSongCount} {album.localSongCount === 1 ? "song" : "songs"}
                     </span>
@@ -521,13 +541,21 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
           status={"paused"}
         />
         <div className="relative z-10 flex flex-col gap-6 p-6 md:flex-row md:items-end md:gap-8">
-          <CoverImage
-            src={artistImageUrl}
-            alt={artist.name}
-            fallback={artist.name.charAt(0)}
-            emptySvg={<ArtistEmptySvg />}
-            className="h-40 w-40 shrink-0 shadow-lg md:h-48 md:w-48"
-          />
+          <div
+            className={cn("relative", artistImageUrl && "cursor-zoom-in")}
+            onClick={() => artistImageUrl && setImageExpanded(!imageExpanded)}
+          >
+            <CoverImage
+              src={artistImageUrl}
+              alt={artist.name}
+              fallback={artist.name.charAt(0)}
+              emptySvg={<ArtistEmptySvg />}
+              className="h-40 w-40 shrink-0 shadow-lg md:h-48 md:w-48"
+            />
+            {imageExpanded && artistImageUrl && (
+              <ImageOverlay src={artistImageUrl} alt={artist.name} onClose={() => setImageExpanded(false)} />
+            )}
+          </div>
           <div className="flex flex-col justify-end gap-3">
             <div>
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Artist</p>

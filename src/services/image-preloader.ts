@@ -111,10 +111,18 @@ async function preloadAlbumImage(
   releaseYear?: number | null,
 ): Promise<void> {
   try {
-    const artistDir = sanitizeForPath(artistName);
-    const albumDirBase = sanitizeForPath(albumName);
-    const albumDir = releaseYear ? `${albumDirBase} (${releaseYear})` : albumDirBase;
-    const imgDirPath = `${folderPath}/${artistDir}/${albumDir}/.img`;
+    let albumDirResolved: string | null = null;
+    try {
+      const { getAlbumDir } = await import("../api/local/local-queries");
+      albumDirResolved = await getAlbumDir(artistName, albumName);
+    } catch {}
+    if (!albumDirResolved) {
+      const artistDir = sanitizeForPath(artistName);
+      const albumDirBase = sanitizeForPath(albumName);
+      const albumDir = releaseYear ? `${albumDirBase} (${releaseYear})` : albumDirBase;
+      albumDirResolved = `${folderPath}/${artistDir}/${albumDir}`;
+    }
+    const imgDirPath = `${albumDirResolved}/.img`;
     const found = await findFirstImageInDir(p, imgDirPath);
     if (!found) return;
 

@@ -114,10 +114,11 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
 
   const albumRepo = await import("../db/repositories/album-repo");
   const artistRepo = await import("../db/repositories/artist-repo");
-  const { upsertCoverCache, ensureDb } = await import("../db/repositories/cover-cache-repo");
+  const { upsertCoverCache } = await import("../db/repositories/cover-cache-repo");
+  const { ensureDbWithRoot } = await import("../db/ensure-db");
   const { createFileOrganizer } = await import("./file-organizer");
   const { sanitizeForPath: sanitize } = await import("./sanitizer");
-  await ensureDb(libraryRoot);
+  await ensureDbWithRoot(libraryRoot);
 
   const albums = albumRepo.getAllAlbums();
   if (albums.length === 0) {

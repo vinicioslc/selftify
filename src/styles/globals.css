@@ -87,6 +87,7 @@ body,
 
 :root {
   --player-bar-height: 90px;
+  --player-bar-height-compact: 64px;
   --sidebar-width: 280px;
   --topbar-height: 38px;
 }
@@ -94,6 +95,12 @@ body,
 @media (max-width: 768px) {
   :root {
     --player-bar-height: 72px;
+  }
+}
+
+@media (max-aspect-ratio: 1/1) {
+  :root {
+    --player-bar-height: var(--player-bar-height-compact);
   }
 }
 

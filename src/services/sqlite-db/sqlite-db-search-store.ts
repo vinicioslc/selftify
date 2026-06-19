@@ -1,29 +1,12 @@
-import { useAuthStore } from "../../stores/auth.store";
-import { OriginType } from "../../types/domain-types";
 import type { Song, Album, AlbumArtist } from "../../types/domain-types";
 import type { SearchResults } from "../../api/controller";
-import { initDatabase, isReady } from "../db/database";
 import * as searchCacheRepo from "../db/repositories/search-cache-repo";
 import type { CacheEntry } from "../db/repositories/search-cache-repo";
+import { ensureDb } from "../db/ensure-db";
+import { initDatabase, isReady } from "../db/database";
 
 const LS_PREFIX = "selftify:search-cache:";
 const LS_TTL = 7 * 24 * 60 * 60 * 1000;
-
-function getLibraryRoot(): string | undefined {
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-}
-
-async function ensureDb(): Promise<boolean> {
-  if (isReady()) return true;
-  const root = getLibraryRoot();
-  if (!root) return false;
-  try {
-    await initDatabase(root);
-    return isReady();
-  } catch {
-    return false;
-  }
-}
 
 function normalizeQuery(q: string): string {
   return q.trim().toLowerCase().replace(/\s+/g, " ");

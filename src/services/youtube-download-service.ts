@@ -67,6 +67,12 @@ export async function searchAndRank(
     console.log(`[${ts}] [searchAndRank] ${song.mbzRecordingId || "?"}: ${msg}`);
   };
 
+  // Early return if song already has a cached youtubeVideoId
+  if (song.youtubeVideoId) {
+    log(`using cached youtubeVideoId=${song.youtubeVideoId}`);
+    return { videoId: song.youtubeVideoId, title: song.youtubeVideoTitle || song.name };
+  }
+
   log(`starting search: "${query}"`);
   addMsg(`🔍 Searching YouTube for "${song.artistName} — ${song.name}"...`);
   if (!api) { log("no electron API"); return null; }
@@ -253,6 +259,27 @@ export async function getStreamUrl(song: Song): Promise<string | null> {
   };
 
   log("starting");
+
+  // Fast path: cached youtubeVideoId → skip search entirely
+  if (song.youtubeVideoId) {
+    log(`using cached youtubeVideoId=${song.youtubeVideoId}`);
+    addMsg(`▶ Extracting cached stream...`, "info");
+    const api = getElectronApi();
+    if (api) {
+      const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+      try {
+        const url = await api.yt.getStreamUrl(song.youtubeVideoId, cookies);
+        if (url) {
+          addMsg(`▶ Audio stream ready — "${song.name}"`, "success");
+          return url;
+        }
+      } catch (err) {
+        log(`yt:stream-url failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    // Fall through to searchAndRank if fast path fails
+  }
+
   const match = await searchAndRank(song);
   if (!match) { addMsg("❌ Could not find a YouTube match", "warn"); return null; }
   addMsg(`🎵 Selected: ${match.title}`, "success");

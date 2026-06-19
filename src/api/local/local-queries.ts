@@ -1,31 +1,11 @@
-import { initDatabase, isReady } from "../../services/db/database";
 import * as albumRepo from "../../services/db/repositories/album-repo";
 import * as artistRepo from "../../services/db/repositories/artist-repo";
 import * as configRepo from "../../services/db/repositories/config-repo";
 import type { SqliteDbAlbumMeta, SqliteDbAlbumTrack, SqliteDbConfig } from "../../services/sqlite-db/sqlite-db-types";
-import { useAuthStore } from "../../stores/auth.store";
-import { OriginType } from "../../types/domain-types";
-
-async function ensureDb(): Promise<boolean> {
-  if (isReady()) return true;
-  const root = getLibraryRoot();
-  if (!root) return false;
-  try {
-    await initDatabase(root);
-    return isReady();
-  } catch {
-    return false;
-  }
-}
+import { getLibraryRoot, ensureDb } from "../../services/db/ensure-db";
 
 function trackToId(path: string): string {
   return path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? path;
-}
-
-function getLibraryRoot(): string | undefined {
-  const state = useAuthStore.getState();
-  const localOrigin = state.origins?.find((o: any) => o.type === OriginType.LOCAL || o.type === "local");
-  return localOrigin?.folderPath;
 }
 
 export async function getSongByMbid(mbid: string): Promise<SqliteDbAlbumTrack & { albumDir: string } | null> {
