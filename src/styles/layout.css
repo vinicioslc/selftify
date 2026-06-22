@@ -22,7 +22,7 @@
 .topbar {
   grid-area: topbar;
   -webkit-app-region: drag;
-  z-index: 300;
+  z-index: 1002; /* acima de DialogOverlay (1000) e DialogContent (1001) */
 }
 
 .topbar button,

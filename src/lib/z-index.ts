@@ -6,10 +6,13 @@ export const ZIndex = {
   PlayerBar: 200,
   Topbar: 300,
 
+  DebugPanel: 150,
+  FullScreenPlayer: 50,
+
   Dropdown: 1000,
   Popover: 1000,
   DialogOverlay: 1000,
-  DialogContent: 1000,
+  DialogContent: 1001,
 
   ContextMenu: 5000,
 

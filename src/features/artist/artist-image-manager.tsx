@@ -262,6 +262,30 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
     }
   }
 
+  async function handleSaveCurrent() {
+    if (!previewUrl) return;
+    const addMsg = useStatusStore.getState().addMessage;
+    setSaving(true);
+    setError(null);
+    addMsg("Saving artist image...", "info", "Artist image");
+    try {
+      const response = await fetch(previewUrl);
+      if (!response.ok) { setError("Failed to save image."); setSaving(false); return; }
+      const blob = await response.blob();
+      const savedBlobUrl = await saveImageToStoreAndDisk(blob, "artist-image-manual");
+      setPreviewUrl(savedBlobUrl);
+      setSaved(true);
+      onImageSaved(savedBlobUrl);
+      addMsg("Artist image saved", "success", "Artist image");
+    } catch (err) {
+      console.error("[artist-image-manager] save error:", err);
+      setError("Failed to save artist image.");
+      addMsg("Failed to save artist image", "danger", "Artist image");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) reset(); onOpenChange(o); }}>
       <DialogContent className="sm:max-w-md">
@@ -348,7 +372,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
                 <Check className="h-4 w-4" /> Saved
               </Button>
             ) : (
-              <Button variant="default" size="sm" className="flex-1 gap-2" disabled={!previewUrl || saving}>
+              <Button variant="default" size="sm" className="flex-1 gap-2" disabled={!previewUrl || saving} onClick={handleSaveCurrent}>
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 {saving ? "Saving..." : "Save"}
               </Button>

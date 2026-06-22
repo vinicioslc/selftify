@@ -148,7 +148,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col">
       <div className="shrink-0 px-6 pt-6">
         <div className="mx-auto max-w-3xl">
           <h1 className="text-2xl font-bold">Settings</h1>
@@ -156,7 +156,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
         </div>
       </div>
 
-      <Tabs defaultValue={initialTab || "servers"} className="flex min-h-0 flex-1 flex-col">
+      <Tabs defaultValue={initialTab || "servers"}>
             <div className="shrink-0 px-6">
               <div className="mx-auto max-w-3xl">
                 <TabsList>
@@ -173,7 +173,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-6">
+            <div className="px-6">
               <div className="mx-auto max-w-3xl space-y-8 py-6">
                 <TabsContent value="servers" className="space-y-4">
               <Card>

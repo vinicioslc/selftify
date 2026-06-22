@@ -363,6 +363,36 @@ A única exceção é refatoração puramente mecânica (renomear variável, ext
 - **User-facing status**: Any operation of interest to the user (loading, searching, indexing, playing) must publish a brief message via `useStatusStore.getState().addMessage(text, level, source)` so it appears in the TopBar status popover. Use `"info"` for normal activity, `"success"` for completion, `"warn"` for warnings, `"danger"` for errors. Examples: `"Searching local files..."`, `"Found 42 songs"`, `"Scan complete"`.
 - **No cross-project references**: This project must never reference any other self-hosted music projects. See `USER_INSTRUCTIONS.md` for details.
 
+### Shell Layout Architecture
+
+The app uses a CSS Grid shell layout (`src/styles/layout.css`) with four named areas:
+
+```
+┌──────────────────────────────────────┐
+│              topbar                   │  ← drag region, always on top
+│              z-index: 300             │
+├──────────────────┬───────────────────┤
+│                  │                    │
+│     sidebar      │     content        │  ← main content area (scrolls internally)
+│                  │                    │
+├──────────────────┴───────────────────┤
+│   player (bottom bar)                 │  ← always on top of content
+│   z-index: 200                       │  │ contains progress bar + controls
+└──────────────────────────────────────┘
+```
+
+**Rules:**
+
+1. **Topbar (`grid-area: topbar`, `z-index: 300`)** — Always on top of all content. Contains window controls (close, minimize) in Electron and the app navigation/drag region. Uses `-webkit-app-region: drag` for Electron window dragging.
+
+2. **Player bar (`grid-area: player`, `z-index: 200`)** — Always visible at the bottom, above the main content. Contains the playback controls (play/pause, skip, shuffle, repeat), the progress/seek slider (`PlayerbarSlider`), volume control, and queue/lyrics buttons. The progress bar lives inside the player bar (center column) and stretches between the left and right control groups.
+
+3. **Content area** (`main-content` grid) — Stretched vertically between the topbar and player bar. It contains the sidebar + page content. The content fills all available space and scrolls internally per-page (pages use their own scroll containers, NOT `body` scroll).
+
+4. **Modals / Dialogs** — Render via Radix Portal to `document.body`, outside the CSS Grid. The `DialogOverlay` uses `z-[1000]` and `DialogContent` uses `z-[1001]` to always stack above all layout elements.
+
+5. **No body scroll** — `html, body, #root` have `overflow: hidden`. All scrolling is contained within page-level scroll containers inside the grid's content area.
+
 ---
 
 ## UI Framework Stack & Conventions

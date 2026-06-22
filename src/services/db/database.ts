@@ -103,12 +103,12 @@ function runMigrations(): void {
   const existing = db!.exec("SELECT version FROM _meta LIMIT 1");
   const currentVersion = existing.length > 0 ? (existing[0].values[0][0] as number) : 0;
 
-  if (currentVersion < 2) {
-    try {
-      db!.exec("ALTER TABLE albums ADD COLUMN deleted_at INTEGER");
-    } catch {
-      // column may already exist — ignore
-    }
+  // Ensure deleted_at column exists — old databases created before this column
+  // was added to the CREATE TABLE statement may lack it.
+  try {
+    db!.exec("ALTER TABLE albums ADD COLUMN deleted_at INTEGER");
+  } catch {
+    // column may already exist — ignore
   }
 
   if (currentVersion < SCHEMA_VERSION) {

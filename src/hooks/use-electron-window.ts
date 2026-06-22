@@ -22,7 +22,12 @@ export function useElectronWindow() {
 
   const minimize = useCallback(() => api?.windowControls.minimize(), [api]);
   const maximize = useCallback(() => api?.windowControls.maximize(), [api]);
-  const close = useCallback(() => api?.windowControls.close(), [api]);
+  const close = useCallback(() => {
+    // Garantir que o body não esteja com pointer-events: none
+    // (workaround para bug do @radix-ui/react-dismissable-layer)
+    document.body.style.pointerEvents = "";
+    api?.windowControls.close();
+  }, [api]);
 
   return { isElectron, isMaximized, minimize, maximize, close };
 }
