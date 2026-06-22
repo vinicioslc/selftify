@@ -44,5 +44,9 @@ export async function searchWikipedia(query: string, logSource: string): Promise
 }
 
 export function sanitizeForPath(name: string): string {
-  return name.replace(/[/\\?%*:|"<>]/g, "_").trim();
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[/\\?%*:|"<>]/g, "_")
+    .trim();
 }

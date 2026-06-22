@@ -11,7 +11,7 @@ export async function writeCoverToAlbumDir(
   const exists = await cachedExists(coverPath);
   if (exists) return true;
 
-  const sqliteDbImagePath = `${libraryRoot}/.selftify/${coverRelPath}`;
+  const sqliteDbImagePath = `${libraryRoot}/${coverRelPath}`;
   const imageData = await cachedRead(sqliteDbImagePath);
   if (!imageData) return false;
 

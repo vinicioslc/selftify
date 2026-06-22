@@ -604,7 +604,7 @@ Se `sourcePath === targetPath`, skip. Detectado por comparação de paths normal
 
 ### 5. Caracteres especiais em nomes
 
-Sanitizar: `\/?%*:|"<>` → `_`. Limite de 200 chars por componente.
+Sanitizar: `\/?%*:|"<>` → `_`. Diacríticos são removidos via `normalize("NFD")` + strip do bloco Unicode `\u0300-\u036f` (ex: `"José"` → `"Jose"`). Limite de 200 chars por componente.
 
 ### 6. Arquivos .lrc órfãos
 

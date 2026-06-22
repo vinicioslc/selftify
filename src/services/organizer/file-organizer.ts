@@ -91,10 +91,10 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
 
     const paddedTrack = padTrackNumber(ctx.trackNumber, ctx.discNumber);
     const parts = [
-      ctx.artistName,
-      ctx.albumName || "",
+      ctx.artistName ? sanitizeForPath(ctx.artistName) : "",
+      ctx.albumName ? sanitizeForPath(ctx.albumName) : "",
       paddedTrack,
-      ctx.trackTitle,
+      ctx.trackTitle ? sanitizeForPath(ctx.trackTitle) : "",
     ].filter(Boolean);
     const targetFileName = `${parts.join(" - ")}${ctx.extension}`;
 

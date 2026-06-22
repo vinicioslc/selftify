@@ -8,7 +8,11 @@ const BATCH_SIZE = 5;
 const COVER_SIZE = 1024;
 
 function sanitizeForPath(name: string): string {
-  return name.replace(/[/\\?%*:|"<>]/g, "_").trim();
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[/\\?%*:|"<>]/g, "_")
+    .trim();
 }
 
 export function isImageFile(name: string): boolean {
