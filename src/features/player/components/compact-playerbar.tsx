@@ -11,6 +11,7 @@ import {
   ListMusic,
   Download,
   Inbox,
+  MicVocal,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -38,6 +39,8 @@ export function CompactPlayerBar({ onOpenQueue, onNavigateAlbum, onNavigateArtis
     setVolume,
     togglePlay,
     toggleFullScreen,
+    isFullScreen,
+    setFullScreenTab,
     queue,
   } = usePlayerStore();
   const enqueueSong = useDownloadStore((s) => s.enqueueSong);
@@ -133,6 +136,11 @@ export function CompactPlayerBar({ onOpenQueue, onNavigateAlbum, onNavigateArtis
                   {pendingCount}
                 </Badge>
               )}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setFullScreenTab("lyrics"); if (!isFullScreen) toggleFullScreen(); }}>
+              <MicVocal className="mr-2 h-4 w-4" />
+              Lyrics
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onOpenQueue?.(); }}>

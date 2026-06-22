@@ -14,6 +14,7 @@ import {
   Heart,
   Download,
   Inbox,
+  MicVocal,
 } from "lucide-react";
 import type { Album, AlbumArtist } from "../../../types/domain-types";
 import { DownloadStatus } from "../../../types/domain-types";
@@ -25,7 +26,7 @@ type RightControlsProps = {
 };
 
 export function RightControls({ onOpenQueue, onNavigateAlbum, onNavigateArtist }: RightControlsProps) {
-  const { volume, setVolume, toggleFullScreen, queue, currentTrack } = usePlayerStore();
+  const { volume, setVolume, toggleFullScreen, isFullScreen, setFullScreenTab, queue, currentTrack } = usePlayerStore();
   const enqueueSong = useDownloadStore((s) => s.enqueueSong);
   const setPanelOpen = useDownloadStore((s) => s.setPanelOpen);
   const pendingCount = useDownloadStore((s) => s.tasks.filter(t => t.status === DownloadStatus.PENDING || t.status === DownloadStatus.SEARCHING || t.status === DownloadStatus.DOWNLOADING_AUDIO || t.status === DownloadStatus.GETTING_COVER || t.status === DownloadStatus.PROCESSING_COVER || t.status === DownloadStatus.EMBEDDING_COVER).length);
@@ -81,6 +82,19 @@ export function RightControls({ onOpenQueue, onNavigateAlbum, onNavigateArtist }
         variant="ghost"
         size="icon"
         className="h-8 w-8 text-muted-foreground hover:text-foreground"
+        onClick={() => {
+          setFullScreenTab("lyrics");
+          if (!isFullScreen) toggleFullScreen();
+        }}
+        title="Show lyrics"
+      >
+        <MicVocal className="h-4 w-4" />
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 text-muted-foreground hover:text-foreground"
       >
         <Heart className="h-4 w-4" />
       </Button>
@@ -120,7 +134,7 @@ export function RightControls({ onOpenQueue, onNavigateAlbum, onNavigateArtist }
             onValueChange={([v]) => setVolume(v / 100)}
             max={100}
             step={1}
-            className="w-20"
+            className="w-32"
           />
         )}
       </div>

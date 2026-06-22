@@ -47,6 +47,8 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
     setSeek,
     isFullScreen,
     toggleFullScreen,
+    fullScreenTab,
+    setFullScreenTab,
     queue,
   } = usePlayerStore();
   const { visualizerEnabled, visualizerType } = useSettingsStore();
@@ -225,7 +227,7 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
 
         {/* Right: tabs (queue, lyrics, visualizer info) */}
         <div className="flex flex-col border-t border-border md:w-1/2 md:border-l md:border-t-0">
-          <Tabs defaultValue="queue" className="flex h-full flex-col">
+          <Tabs value={fullScreenTab} onValueChange={setFullScreenTab} className="flex h-full flex-col">
             <TabsList className="mx-4 mt-4 grid w-auto grid-cols-3 border-border">
               <TabsTrigger value="queue">
                 <ListMusic className="mr-2 h-4 w-4" />
