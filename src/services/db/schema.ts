@@ -41,7 +41,8 @@ export const CREATE_TABLES = [
     song_count            INTEGER DEFAULT 0,
     duration              INTEGER DEFAULT 0,
     updated_at            INTEGER NOT NULL,
-    enriched_at           INTEGER
+    enriched_at           INTEGER,
+    deleted_at            INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS idx_albums_artist_id ON albums(artist_id)`,
   `CREATE INDEX IF NOT EXISTS idx_albums_name ON albums(name COLLATE NOCASE)`,

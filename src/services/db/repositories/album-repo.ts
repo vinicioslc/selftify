@@ -93,9 +93,9 @@ export function getAlbumsByArtist(artistName: string, includeDeleted = false): S
 export function upsertAlbum(meta: SqliteDbAlbumMeta, artistId: string): void {
   const r = albumToRow(meta, artistId);
   exec(
-    `INSERT OR REPLACE INTO albums (id, artist_id, name, artist_name, album_artist, release_year, mbz_id, mbz_release_group_id, genres, images, song_count, duration, updated_at, enriched_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [r.id, r.artist_id, r.name, r.artist_name, r.album_artist, r.release_year, r.mbz_id, r.mbz_release_group_id, r.genres, r.images, r.song_count, r.duration, r.updated_at, r.enriched_at],
+    `INSERT OR REPLACE INTO albums (id, artist_id, name, artist_name, album_artist, release_year, mbz_id, mbz_release_group_id, genres, images, song_count, duration, updated_at, enriched_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [r.id, r.artist_id, r.name, r.artist_name, r.album_artist, r.release_year, r.mbz_id, r.mbz_release_group_id, r.genres, r.images, r.song_count, r.duration, r.updated_at, r.enriched_at, r.deleted_at],
   );
   deleteTracksByAlbum(r.id);
   for (const t of meta.tracks) {
