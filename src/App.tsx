@@ -28,6 +28,8 @@ import { YoutubeRankingDebug } from "./features/debug/youtube-ranking-debug";
 import { DownloadQueuePanel } from "./features/download/download-queue-panel";
 import { getPlatformService } from "./services/platform/factory";
 import { CookieEditDialog } from "./features/settings/cookie-edit-dialog";
+import { Toaster } from "./components/ui/toaster";
+import { useGlobalErrorHandler } from "./hooks/use-global-error-handler";
 
 type SearchState = {
   query: string;
@@ -43,6 +45,7 @@ type NavEntry = {
 };
 
 export function App() {
+  useGlobalErrorHandler();
   const { origins, currentOrigin } = useAuthStore();
   const { sidebarCollapsed, sidebarWidth } = useSettingsStore();
 
@@ -328,6 +331,7 @@ export function App() {
           onOpenChange={(open) => { setSettingsOpen(open); if (!open) setSettingsTab(undefined); }}
           initialTab={settingsTab}
         />
+        <Toaster />
       </div>
       )}
     </WebAudioProvider>

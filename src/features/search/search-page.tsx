@@ -28,6 +28,7 @@ import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
 import { SongInfoDialog } from "../song-info/song-info-dialog";
 import { AlbumEmptySvg, ArtistEmptySvg } from "../../components/ui/empty-image-svg";
 import { useArtistImage } from "../../hooks/use-artist-image";
+import { useToastStore } from "../../stores/toast.store";
 import { SongCoverImage } from "../shared/song-cover-image";
 import { ContextMenuOverlay } from "../../components/ui/context-menu-overlay";
 import {
@@ -83,7 +84,6 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   }>({ songs: [], hasMore: false, offset: 0 });
 
   const [loading, setLoading] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
   const [searchMode, setSearchMode] = useState<SearchMode>(
     initialMode ?? (currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local"),
   );
@@ -157,7 +157,6 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
 
     setLoading(true);
-    setSearchError(null);
 
     if (mode === "local") {
       setMbResults(null);
@@ -184,8 +183,9 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
           addMsg(`Found ${results.songs.length} song${results.songs.length !== 1 ? "s" : ""} in local files`, results.songs.length > 0 ? "success" : "info", "Search");
       } catch (err) {
         console.error("Search error:", err);
-        setSearchError("Search failed. Please try again.");
-        addMsg(`Search failed: ${err instanceof Error ? err.message : "Unknown error"}`, "danger", "Search");
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        useToastStore.getState().toast(`Falha: ${msg}`, "danger");
+        addMsg(`Search failed: ${msg}`, "danger", "Search");
       } finally {
         setLoading(false);
       }
@@ -292,8 +292,9 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
         setSearchCache("musicbrainz", q, mbRaw).catch(() => {});
       } catch (err) {
         console.error("Search error:", err);
-        setSearchError("Search failed. Please try again.");
-        addMsg(`Search failed: ${err instanceof Error ? err.message : "Unknown error"}`, "danger", "Search");
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        useToastStore.getState().toast(`Falha: ${msg}`, "danger");
+        addMsg(`Search failed: ${msg}`, "danger", "Search");
       } finally {
         setLoading(false);
       }
@@ -338,8 +339,9 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       // Results cached in-memory; no client-side persistence needed
     } catch (err) {
       console.error("Search error:", err);
-      setSearchError("Search failed. Please try again.");
-      addMsg(`Search failed: ${err instanceof Error ? err.message : "Unknown error"}`, "danger", "Search");
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      useToastStore.getState().toast(`Falha: ${msg}`, "danger");
+      addMsg(`Search failed: ${msg}`, "danger", "Search");
     } finally {
       setLoading(false);
     }
@@ -845,13 +847,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
           </div>
         )}
 
-        {searchError && (
-          <div className="flex h-full items-center justify-center p-8">
-            <p className="text-center text-sm text-destructive">{searchError}</p>
-          </div>
-        )}
-
-        {currentOrigin && !loading && !searchError && (
+        {currentOrigin && !loading && (
           (searchMode === "local" && localResults.length === 0 && !query.trim()) ||
           (searchMode === "musicbrainz" && !mbResults && !query.trim()) ||
           (searchMode === "youtube" && ytResults.songs.length === 0 && !query.trim())
@@ -865,7 +861,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
           </div>
         )}
 
-        {currentOrigin && !loading && !searchError && searchMode === "local" && localResults.length === 0 && query.trim() && (
+        {currentOrigin && !loading && searchMode === "local" && localResults.length === 0 && query.trim() && (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-8">
             <Music className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-center text-sm text-muted-foreground">
