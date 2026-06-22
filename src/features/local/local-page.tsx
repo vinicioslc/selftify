@@ -453,7 +453,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
 
       {/* Song list */}
       {showSongs && (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-1 flex-col">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b px-4">
             <TabsList className="h-9">
               <TabsTrigger value="songs" className="gap-1 text-xs">
@@ -489,7 +489,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
             </div>
           </div>
 
-          <TabsContent value="songs" className="flex flex-1 flex-col p-0">
+          <TabsContent value="songs" className="flex min-h-0 flex-1 flex-col p-0">
             {/* Pagination bar */}
             {displaySongs.length > 0 && (
               <div className="flex items-center justify-between border-b px-4 py-1.5">
