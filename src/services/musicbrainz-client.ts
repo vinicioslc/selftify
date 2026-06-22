@@ -51,22 +51,18 @@ async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Re
   }
   lastMbRequestAt = Date.now();
 
-  const electronApi = (window as any).electronApi;
-  if (electronApi?.mbz?.fetch) {
-    try {
-      const result = await electronApi.mbz.fetch(url, Object.fromEntries(headers.entries()));
-      const body = Array.isArray(result.body) ? new Uint8Array(result.body) : result.body;
-      return new Response(body, {
-        status: result.status,
-        statusText: result.statusText,
-        headers: result.headers,
-      });
-    } catch (err) {
-      console.warn("[mb-client] IPC fetch failed, falling back to direct fetch:", err);
-    }
+  try {
+    const { platformFetch } = await import("../services/platform-fetch");
+    const response = await platformFetch(url, { headers: Object.fromEntries(headers.entries()) });
+    const body = await response.arrayBuffer();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    });
+  } catch {
+    return fetch(url, { ...init, headers });
   }
-
-  return fetch(url, { ...init, headers });
 }
 
 async function apiGet<T>(endpoint: string): Promise<T> {

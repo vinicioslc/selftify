@@ -35,19 +35,23 @@ function responseFromBody(
 }
 
 function electronFetch(url: string, init?: RequestInit): Promise<PlatformResponse> | null {
-  const api = (window as any).electronApi?.imageFetch;
+  const api = (window as any).electronApi;
   if (!api) return null;
-  let body: string | undefined;
+  let body: string | number[] | undefined;
   if (init?.body != null) {
     if (typeof init.body === 'string') {
       body = init.body;
     } else if (init.body instanceof URLSearchParams) {
       body = init.body.toString();
+    } else if (init.body instanceof Uint8Array) {
+      body = Array.from(init.body);
     } else if (typeof init.body === 'object' && 'toString' in init.body) {
       body = String(init.body);
     }
   }
-  return api(url, {
+  const pf = api.platformFetch || api.imageFetch;
+  if (!pf) return null;
+  return pf(url, {
     method: init?.method || "GET",
     headers: init?.headers as Record<string, string> | undefined,
     body,

@@ -5,8 +5,164 @@ import fs from 'fs';
 import { execFile, execFileSync } from 'child_process';
 import Store from 'electron-store';
 import { tmpdir } from 'os';
+import https from 'https';
+import http from 'http';
 
 import { TaskQueue } from './queue';
+
+// ── Platform fetch helpers (retry + backoff) ──
+
+type FetchResult = { ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: number[] };
+
+function isRetryableError(err: unknown): boolean {
+  const msg = (err?.message || err?.code || '').toLowerCase();
+  const cause = (err as any)?.cause;
+  const causeMsg = (cause?.message || cause?.code || '').toLowerCase();
+  return (
+    msg.includes('net::err_connection_closed') ||
+    msg.includes('net::err_connection_reset') ||
+    msg.includes('net::err_connection_refused') ||
+    msg.includes('net::err_name_not_resolved') ||
+    msg.includes('net::err_ssl_protocol_error') ||
+    msg.includes('net::err_ssl_bad_record_mac_alert') ||
+    msg.includes('abort') ||
+    msg.includes('econnrefused') ||
+    msg.includes('enotfound') ||
+    msg.includes('etimedout') ||
+    msg.includes('econnreset') ||
+    msg.includes('fetch failed') ||
+    causeMsg.includes('econnreset') ||
+    causeMsg.includes('econnrefused') ||
+    causeMsg.includes('enotfound') ||
+    causeMsg.includes('etimedout') ||
+    causeMsg.includes('tls connection') ||
+    causeMsg.includes('ssl') ||
+    causeMsg.includes('socket disconnected')
+  );
+}
+
+function nodeFetch(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: any; signal?: AbortSignal }
+): Promise<Response> {
+  console.log(`[main:nodeFetch] ${options?.method || 'GET'} ${url.slice(0, 150)}`);
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const isHttps = urlObj.protocol === 'https:';
+    const lib = isHttps ? https : http;
+    
+    const reqOptions: https.RequestOptions = {
+      method: options.method || 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        ...(options.headers || {}),
+      },
+      timeout: 15000,
+      rejectUnauthorized: false,
+      minVersion: 'TLSv1.2',
+    };
+
+    const req = lib.request(url, reqOptions, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks);
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (value) headers[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : value;
+        }
+        
+        resolve(new Response(body, {
+          status: res.statusCode || 200,
+          statusText: res.statusMessage || '',
+          headers,
+        }));
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error(`[main:nodeFetch] error for ${urlObj.host}: ${err.message}`);
+      reject(err);
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+
+    if (options.signal) {
+      options.signal.addEventListener('abort', () => {
+        req.destroy();
+        reject(new Error('Request aborted'));
+      });
+    }
+
+    if (options.body) {
+      req.write(options.body);
+    }
+    req.end();
+  });
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: any; signal?: AbortSignal },
+  retries = 2,
+): Promise<Response> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await nodeFetch(url, options);
+      return response;
+    } catch (err: any) {
+      console.warn(`[main:fetch] attempt ${attempt + 1}/${retries + 1} failed for ${url.slice(0, 120)}: ${err?.message?.slice(0, 100)}`);
+      if (attempt < retries && isRetryableError(err)) {
+        const delay = 1000 * Math.pow(2, attempt);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('unreachable');
+}
+
+async function doPlatformFetch(
+  url: string,
+  options?: { method?: string; headers?: Record<string, string>; body?: any },
+): Promise<FetchResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  let body: BodyInit | undefined;
+  if (options?.body != null) {
+    if (typeof options.body === 'string') {
+      body = options.body;
+    } else if (Array.isArray(options.body)) {
+      body = Buffer.from(options.body);
+    } else {
+      body = String(options.body);
+    }
+  }
+  try {
+    const response = await fetchWithRetry(url, {
+      method: options?.method || 'GET',
+      headers: options?.headers || {},
+      body,
+      signal: controller.signal,
+    });
+    const rawBody = await response.arrayBuffer();
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value: string, key: string) => { headers[key.toLowerCase()] = value; });
+    return { ok: response.ok, status: response.status, statusText: response.statusText, headers, body: Array.from(new Uint8Array(rawBody)) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ── Unified platform fetch handler ──
+
+ipcMain.handle('platform:fetch', async (_event, url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) => {
+  console.log(`[main:platform:fetch] ${options?.method || 'GET'} ${url.slice(0, 150)}`);
+  return doPlatformFetch(url, options);
+});
 
 function warnFs(prefix: string, err: unknown): void {
   console.warn(prefix, err);
@@ -191,29 +347,7 @@ ipcMain.on('settings:set', (_event, key: string, value: any) => {
 // ── YouTube CORS proxy (fetch through main process) ──
 
 ipcMain.handle('yt:fetch', async (_event, { url, init }: { url: string; init?: Record<string, any> }) => {
-  try {
-    let body: BodyInit | undefined;
-    if (init?.body != null) {
-      if (typeof init.body === 'string') {
-        body = init.body;
-      } else if (Array.isArray(init.body)) {
-        body = Buffer.from(init.body);
-      } else {
-        body = String(init.body);
-      }
-    }
-    const response = await fetch(url, {
-      method: init?.method || 'GET',
-      headers: init?.headers || {},
-      body,
-    });
-    const rawBody = await response.arrayBuffer();
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value: string, key: string) => { headers[key] = value; });
-    return { ok: response.ok, status: response.status, statusText: response.statusText, headers, body: Array.from(new Uint8Array(rawBody)) };
-  } catch (err: any) {
-    throw new Error(err.message || 'yt:fetch failed');
-  }
+  return doPlatformFetch(url, init);
 });
 
 // ── YouTube yt-dlp — TaskQueue + cache ──
@@ -731,17 +865,7 @@ ipcMain.handle('local:update-metadata', async (_event, request: UpdateMetadataRe
 
 ipcMain.handle('image:fetch', async (_event, url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) => {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const fetchOpts: any = { method: options?.method || 'GET', signal: controller.signal };
-    if (options?.headers) fetchOpts.headers = options.headers;
-    if (options?.body) fetchOpts.body = options.body;
-    const response = await fetch(url, fetchOpts);
-    clearTimeout(timeout);
-    const rawBody = await response.arrayBuffer();
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value: string, key: string) => { headers[key.toLowerCase()] = value; });
-    return { ok: response.ok, status: response.status, statusText: response.statusText, headers, body: Array.from(new Uint8Array(rawBody)) };
+    return await doPlatformFetch(url, options);
   } catch (err: any) {
     console.debug('[main] image:fetch error:', err?.message ?? err);
     return { ok: false, status: 0, statusText: String(err?.message ?? err), headers: {}, body: [] };
@@ -846,16 +970,13 @@ ipcMain.handle('artwork:search', async (_event, provider: string, input: any) =>
 
 ipcMain.handle('mbz:fetch', async (_event, url: string, reqHeaders?: Record<string, string>) => {
   try {
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'Selftify/1.0.0', Accept: 'application/json', ...reqHeaders },
+    return await doPlatformFetch(url, {
+      headers: { 'User-Agent': 'Selftify/1.0.0 ( https://github.com/selftify )', Accept: 'application/json', ...reqHeaders },
     });
-    const rawBody = await response.arrayBuffer();
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value: string, key: string) => { headers[key] = value; });
-    return { ok: response.ok, status: response.status, statusText: response.statusText, headers, body: Array.from(new Uint8Array(rawBody)) };
   } catch (err: any) {
-    console.error("[main:mbz] fetch failed:", err?.message ?? err, "for URL:", url?.slice(0, 120));
-    throw new Error(err?.message || 'mbz:fetch failed');
+    const msg = err?.message || err?.code || 'unknown';
+    console.error("[main:mbz] fetch failed after retries:", msg, "for URL:", url?.slice(0, 120));
+    throw new Error(`musicbrainz.org unreachable: ${msg}`);
   }
 });
 

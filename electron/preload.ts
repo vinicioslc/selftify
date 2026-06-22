@@ -46,6 +46,8 @@ const api = {
     updateMetadata: (request: { audioPath: string; metadata?: Record<string, unknown> }) =>
       ipcRenderer.invoke('local:update-metadata', request),
   },
+  platformFetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) =>
+    ipcRenderer.invoke('platform:fetch', url, options),
   imageFetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: any }) =>
     ipcRenderer.invoke('image:fetch', url, options),
   artworkSearch: (provider: string, input: any) =>
