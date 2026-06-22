@@ -80,6 +80,10 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     downloadFolder: "",
     enableOnlineSearch: false,
     musicBrainzToken: "",
+    musicBrainzClientId: "",
+    musicBrainzClientSecret: "",
+    musicBrainzRefreshToken: "",
+    musicBrainzTokenExpiresAt: 0,
     youtubeMusicHeaders: "",
   });
   const [loading, setLoading] = useState(false);
@@ -102,7 +106,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
           getIndexer(origin).then((idx) => idx.start(origin))
         );
       }
-      setForm({ folderPath: "", downloadFolder: "", enableOnlineSearch: false, musicBrainzToken: "", youtubeMusicHeaders: "" });
+      setForm({ folderPath: "", downloadFolder: "", enableOnlineSearch: false, musicBrainzToken: "", musicBrainzClientId: "", musicBrainzClientSecret: "", musicBrainzRefreshToken: "", musicBrainzTokenExpiresAt: 0, youtubeMusicHeaders: "" });
     } finally {
       setLoading(false);
     }

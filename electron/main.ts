@@ -7,6 +7,7 @@ import Store from 'electron-store';
 import { tmpdir } from 'os';
 import https from 'https';
 import http from 'http';
+import url from 'url';
 
 import { TaskQueue } from './queue';
 
@@ -978,6 +979,96 @@ ipcMain.handle('mbz:fetch', async (_event, url: string, reqHeaders?: Record<stri
     console.error("[main:mbz] fetch failed after retries:", msg, "for URL:", url?.slice(0, 120));
     throw new Error(`musicbrainz.org unreachable: ${msg}`);
   }
+});
+
+// ── MusicBrainz OAuth2 (temporary HTTP server + BrowserWindow) ──
+
+ipcMain.handle('oauth:musicbrainz:authorize', async (_event, clientId: string) => {
+  let resolved = false;
+
+  return new Promise<{ code: string; redirectUri: string } | null>((resolve) => {
+    const server = http.createServer((req, res) => {
+      if (resolved) return;
+      const parsedUrl = url.parse(req.url || '', true);
+      if (parsedUrl.pathname === '/oauth2/callback') {
+        const code = parsedUrl.query.code as string;
+        if (code) {
+          resolved = true;
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body><h1>Authorization complete!</h1><p>You can close this window and return to Selftify.</p><script>window.close()</script></body></html>');
+          const redirectUri = `http://127.0.0.1:${port}/oauth2/callback`;
+          if (authWindow && !authWindow.isDestroyed()) authWindow.close();
+          server.close();
+          resolve({ code, redirectUri });
+        } else {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Missing authorization code');
+        }
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+      }
+    });
+
+    let port: number;
+    let authWindow: BrowserWindow | null = null;
+
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') {
+        server.close();
+        resolve(null);
+        return;
+      }
+      port = addr.port;
+
+      const redirectUri = `http://127.0.0.1:${port}/oauth2/callback`;
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: 'tag',
+      });
+      const authUrl = `https://musicbrainz.org/oauth2/authorize?${params.toString()}`;
+
+      authWindow = new BrowserWindow({
+        width: 800,
+        height: 700,
+        title: 'MusicBrainz Authorization',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+        },
+      });
+
+      authWindow.loadURL(authUrl);
+
+      const handleRedirect = (_event: Electron.Event | Electron.IpcMainEvent, redirectUrl: string) => {
+        if (resolved) return;
+        if (redirectUrl.startsWith('http://127.0.0.1:') || redirectUrl.startsWith('http://localhost:')) {
+          const parsed = url.parse(redirectUrl, true);
+          const code = parsed.query.code as string;
+          if (code) {
+            resolved = true;
+            server.close();
+            if (authWindow && !authWindow.isDestroyed()) authWindow.close();
+            resolve({ code, redirectUri });
+          }
+        }
+      };
+
+      authWindow.webContents.on('will-redirect', handleRedirect);
+      authWindow.webContents.on('will-navigate', handleRedirect);
+
+      authWindow.on('closed', () => {
+        if (!resolved) {
+          resolved = true;
+          server.close();
+          resolve(null);
+        }
+      });
+    });
+  });
 });
 
 // ── Local file metadata parsing (music-metadata via IPC) ──

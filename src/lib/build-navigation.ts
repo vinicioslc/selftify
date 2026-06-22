@@ -35,6 +35,10 @@ export function buildLocalOrigin(form: {
   downloadFolder: string;
   enableOnlineSearch: boolean;
   musicBrainzToken: string;
+  musicBrainzClientId: string;
+  musicBrainzClientSecret: string;
+  musicBrainzRefreshToken: string;
+  musicBrainzTokenExpiresAt: number;
   youtubeMusicHeaders: string;
 }): Origin {
   return {
@@ -45,6 +49,10 @@ export function buildLocalOrigin(form: {
     downloadFolder: form.downloadFolder || form.folderPath,
     enableOnlineSearch: form.enableOnlineSearch,
     musicBrainzToken: form.musicBrainzToken || undefined,
+    musicBrainzClientId: form.musicBrainzClientId || undefined,
+    musicBrainzClientSecret: form.musicBrainzClientSecret || undefined,
+    musicBrainzRefreshToken: form.musicBrainzRefreshToken || undefined,
+    musicBrainzTokenExpiresAt: form.musicBrainzTokenExpiresAt || undefined,
     youtubeMusicHeaders: form.youtubeMusicHeaders || undefined,
   };
 }

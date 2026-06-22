@@ -1,6 +1,7 @@
 import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
 import { getPlatformService } from "../platform/factory";
 import { CREATE_TABLES, SCHEMA_VERSION } from "./schema";
+import { pruneExpiredRequestCache } from "./repositories/request-cache-repo";
 
 const SAVE_DEBOUNCE_MS = 5000;
 const SAVE_INTERVAL_MS = 60000;
@@ -119,6 +120,15 @@ function startPeriodicSave(): void {
   setInterval(() => {
     if (db) scheduleSave();
   }, SAVE_INTERVAL_MS);
+
+  // Prune expired request cache entries every 5 minutes
+  setInterval(() => {
+    try {
+      pruneExpiredRequestCache();
+    } catch {
+      // silently ignore
+    }
+  }, 5 * 60 * 1000);
 }
 
 function scheduleSave(): void {

@@ -7,6 +7,10 @@ export type ApiContext = {
   credential?: string;
   enableOnlineSearch?: boolean;
   musicBrainzToken?: string;
+  musicBrainzClientId?: string;
+  musicBrainzClientSecret?: string;
+  musicBrainzRefreshToken?: string;
+  musicBrainzTokenExpiresAt?: number;
   youtubeMusicHeaders?: string;
   downloadFolder?: string;
   folderPath?: string;
@@ -47,6 +51,10 @@ function getContext(): ApiContext {
     credential: currentOrigin.folderPath,
     enableOnlineSearch: currentOrigin.enableOnlineSearch,
     musicBrainzToken: currentOrigin.musicBrainzToken,
+    musicBrainzClientId: currentOrigin.musicBrainzClientId,
+    musicBrainzClientSecret: currentOrigin.musicBrainzClientSecret,
+    musicBrainzRefreshToken: currentOrigin.musicBrainzRefreshToken,
+    musicBrainzTokenExpiresAt: currentOrigin.musicBrainzTokenExpiresAt,
     youtubeMusicHeaders: currentOrigin.youtubeMusicHeaders,
     downloadFolder: currentOrigin.downloadFolder,
     folderPath: currentOrigin.folderPath,

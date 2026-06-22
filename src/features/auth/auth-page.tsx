@@ -14,6 +14,10 @@ type AuthForm = {
   downloadFolder: string;
   enableOnlineSearch: boolean;
   musicBrainzToken: string;
+  musicBrainzClientId: string;
+  musicBrainzClientSecret: string;
+  musicBrainzRefreshToken: string;
+  musicBrainzTokenExpiresAt: number;
   youtubeMusicHeaders: string;
 };
 
@@ -30,6 +34,10 @@ export function AuthPage({ onConnected }: AuthPageProps) {
     downloadFolder: "",
     enableOnlineSearch: false,
     musicBrainzToken: "",
+    musicBrainzClientId: "",
+    musicBrainzClientSecret: "",
+    musicBrainzRefreshToken: "",
+    musicBrainzTokenExpiresAt: 0,
     youtubeMusicHeaders: "",
   });
   const [loading, setLoading] = useState(false);

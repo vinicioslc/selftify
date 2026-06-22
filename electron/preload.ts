@@ -66,6 +66,11 @@ const api = {
       ipcRenderer.invoke('mbz:fetch', url, headers),
   },
 
+  musicbrainzOAuth: {
+    authorize: (clientId: string) =>
+      ipcRenderer.invoke('oauth:musicbrainz:authorize', clientId),
+  },
+
   windowControls: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),

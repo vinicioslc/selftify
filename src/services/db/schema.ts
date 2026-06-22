@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const CREATE_TABLES = [
   `CREATE TABLE IF NOT EXISTS _meta (
@@ -118,4 +118,16 @@ export const CREATE_TABLES = [
     created_at  INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cover_cache_names ON cover_cache(artist_name COLLATE NOCASE, album_name COLLATE NOCASE)`,
+
+  `CREATE TABLE IF NOT EXISTS request_cache (
+    cache_key   TEXT PRIMARY KEY,
+    url         TEXT NOT NULL,
+    method      TEXT NOT NULL DEFAULT 'GET',
+    status      INTEGER NOT NULL,
+    headers     TEXT,
+    body        BLOB,
+    content_type TEXT,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL
+  )`,
 ];

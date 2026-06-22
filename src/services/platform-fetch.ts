@@ -1,5 +1,14 @@
 // Platform-aware fetch wrapper: Electron IPC → CapacitorHttp → globalThis.fetch
 // Avoids CORS issues by routing through platform-native HTTP clients
+//
+// All responses are cached in SQLite (request_cache table) with a 30-minute TTL.
+// Cache key = base64(method|url|bodyHash). Only 2xx responses are cached.
+// If the database isn't ready, caching is skipped silently.
+
+import {
+  getCachedRequest,
+  setCachedRequest,
+} from "./db/repositories/request-cache-repo";
 
 export type PlatformResponse = {
   ok: boolean;
@@ -33,6 +42,41 @@ function responseFromBody(
     text: () => Promise.resolve(new TextDecoder().decode(data)),
   };
 }
+
+// ── Cache helpers ────────────────────────────────────────────────
+
+function serializeBody(body: unknown): string {
+  if (body == null) return "";
+  if (typeof body === "string") return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (body instanceof Uint8Array) return Array.from(body).join(",");
+  if (body instanceof Blob) return "[blob]";
+  if (typeof body === "object" && "toString" in body) return String(body);
+  return "";
+}
+
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function computeCacheKey(method: string, url: string, body?: unknown): string {
+  const bodyStr = serializeBody(body);
+  const bodyHash = bodyStr ? simpleHash(bodyStr) : "";
+  const raw = `${method}|${url}|${bodyHash}`;
+  const bytes = new TextEncoder().encode(raw);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// ── Fetch backends ──────────────────────────────────────────────
 
 function electronFetch(url: string, init?: RequestInit): Promise<PlatformResponse> | null {
   const api = (window as any).electronApi;
@@ -101,22 +145,53 @@ export async function noCorsFetch(url: string, init?: RequestInit): Promise<Plat
 }
 
 export async function platformFetch(url: string, init?: RequestInit): Promise<PlatformResponse> {
+  const method = init?.method || "GET";
+  const cacheKey = computeCacheKey(method, url, init?.body);
+
+  // 1. Try cache
   try {
-    return await noCorsFetch(url, init);
-  } catch (err) {
-    if (!(err instanceof NoCorsError)) throw err;
+    const cached = getCachedRequest(cacheKey);
+    if (cached) {
+      console.debug(`[Selftify] cache HIT ${method} ${url.slice(0, 120)}`);
+      return responseFromBody(cached.status, cached.headers, cached.body);
+    }
+  } catch {
+    // DB not ready — skip cache
   }
 
-  // Web fallback (may have CORS)
-  const resp = await fetch(url, init);
-  return {
-    ok: resp.ok,
-    status: resp.status,
-    statusText: resp.statusText,
-    headers: Object.fromEntries(resp.headers.entries()),
-    blob: () => resp.blob(),
-    arrayBuffer: () => resp.arrayBuffer(),
-    json: () => resp.json(),
-    text: () => resp.text(),
-  };
+  // 2. Perform the actual fetch
+  let rawStatus: number;
+  let rawStatusText: string;
+  let rawHeaders: Record<string, string>;
+  let rawBody: Uint8Array;
+
+  try {
+    const pfResp = await noCorsFetch(url, init);
+    rawStatus = pfResp.status;
+    rawStatusText = pfResp.statusText;
+    rawHeaders = pfResp.headers;
+    rawBody = new Uint8Array(await pfResp.arrayBuffer());
+  } catch (err) {
+    if (!(err instanceof NoCorsError)) throw err;
+
+    // Web fallback (may have CORS)
+    const webResp = await fetch(url, init);
+    rawStatus = webResp.status;
+    rawStatusText = webResp.statusText;
+    rawHeaders = Object.fromEntries(webResp.headers.entries());
+    rawBody = new Uint8Array(await webResp.arrayBuffer());
+  }
+
+  // 3. Cache if successful
+  if (rawStatus >= 200 && rawStatus < 300) {
+    try {
+      setCachedRequest(cacheKey, url, method, rawStatus, rawHeaders, rawBody);
+      console.debug(`[Selftify] cache SET ${method} ${url.slice(0, 120)}`);
+    } catch {
+      // DB not ready — skip cache silently
+    }
+  }
+
+  // 4. Return response
+  return responseFromBody(rawStatus, rawHeaders, rawBody);
 }
