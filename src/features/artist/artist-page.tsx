@@ -16,7 +16,7 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Play, Shuffle, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
 import { RotatingBlurBackground } from "../shared/rotating-blur-background";
 import { fetchAlbumCover } from "../../services/image-fetch";
-import { fetchArtistImage } from "../../services/artist-image";
+import { useArtistImage } from "../../hooks/use-artist-image";
 import { AlbumEmptySvg, ArtistEmptySvg, SongEmptySvg } from "../../components/ui/empty-image-svg";
 import {
   DropdownMenu,
@@ -82,14 +82,16 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [allLoaded, setAllLoaded] = useState(false);
-  const [artistImageUrl, setArtistImageUrl] = useState<string | null>(artist.imageUrl);
+  const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
+  const hookImageUrl = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name);
+  const [artistImageOverride, setArtistImageOverride] = useState<string | null>(null);
+  const artistImageUrl = artistImageOverride || hookImageUrl || artist.imageUrl;
   const [loadingAlbumCovers, setLoadingAlbumCovers] = useState<Set<string>>(new Set());
   const [localAlbumNames, setLocalAlbumNames] = useState<Set<string>>(new Set());
   const [imageManagerOpen, setImageManagerOpen] = useState(false);
   const [mbzLoading, setMbzLoading] = useState(false);
   const [isArtistCached, setIsArtistCached] = useState(false);
   const [imageExpanded, setImageExpanded] = useState(false);
-  const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
   const localAlbumImagesRef = useRef<Map<string, string>>(new Map());
   const localSongCountsRef = useRef<Map<string, number>>(new Map());
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -99,24 +101,6 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
     setResolvedMbid(artist.mbz);
     setIsArtistCached(false);
   }, [artist.id]);
-
-  // Fetch artist image if not available
-  useEffect(() => {
-    if (!artist.imageUrl && artist.name) {
-      fetchArtistImage(artist.name, artist.mbz || undefined)
-        .then((url) => {
-          if (url) {
-            console.log(`[artist-page] got artist image URL for "${artist.name}", length=${url.length}, first 50=${url.slice(0, 50)}`);
-            setArtistImageUrl(url);
-          } else {
-            console.warn(`[artist-page] fetchArtistImage returned null for "${artist.name}" — Wikipedia has no image or fetch failed`);
-          }
-        })
-        .catch((err) => {
-          console.error("[artist-page] fetchArtistImage failed:", artist.name, err);
-        });
-    }
-  }, [artist.name, artist.mbz, artist.imageUrl]);
 
   // Check if artist has cached MusicBrainz data; auto-enrich if not
   useEffect(() => {
@@ -214,11 +198,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   }
 
   function handleImageSaved(blobUrl: string) {
-    if (blobUrl) {
-      setArtistImageUrl(blobUrl);
-    } else {
-      setArtistImageUrl(null);
-    }
+    setArtistImageOverride(blobUrl || null);
   }
 
   async function handleFetchMusicBrainz() {

@@ -41,9 +41,8 @@ import {
 } from "../../components/ui/alert-dialog";
 import { DownloadButton } from "../download/download-button";
 import { useDownloadStore } from "../../stores/download.store";
-import { findImages, recordToBlobUrl } from "../../services/image-store";
-import { loadFromArtistDotImg } from "../../services/dot-img-loader";
 import { deleteAlbumFromLibrary } from "../../services/delete-album";
+import { useArtistImage } from "../../hooks/use-artist-image";
 import { moveSongToTrash } from "../../services/move-to-trash";
 import { getAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
 
@@ -77,6 +76,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   const [imageExpanded, setImageExpanded] = useState(false);
   const resolvedCoverUrl = albumImageUrl || coverUrl || album.imageUrl || null;
   const coverUrlRef = useRef<string | null>(resolvedCoverUrl);
+  const artistImageUrl = useArtistImage(undefined, album.albumArtistName);
 
   function handleImageSaved(blobUrl: string) {
     if (blobUrl) {
@@ -409,23 +409,6 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
     setQueue(all, { type: "now" });
   }
 
-  async function resolveArtistImage(artistName: string): Promise<string | null> {
-    try {
-      const artistNorm = artistName.toLowerCase().trim();
-      // 1. Image store
-      const records = await findImages();
-      if (records.length > 0) {
-        return await recordToBlobUrl(records[0]);
-      }
-      // 2. .img/ folder on filesystem
-      const dotImgUrl = await loadFromArtistDotImg(artistName);
-      if (dotImgUrl) return dotImgUrl;
-    } catch {
-      // fall through to album cover
-    }
-    return null;
-  }
-
   const isAlbumPlaying = currentTrack?.albumName === album.name && currentTrack?.albumArtistName === album.albumArtistName;
 
   const handleNavArtist = useCallback((song: Song) => {
@@ -554,15 +537,14 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           <p className="text-lg text-muted-foreground">
             <span
               className="cursor-pointer hover:text-foreground hover:underline"
-              onClick={async () => {
+              onClick={() => {
                 const artistMbzFromTracks = songs.find((s) => s.mbzArtistId)?.mbzArtistId;
-                const artistImage = await resolveArtistImage(album.albumArtistName);
                 onNavigateArtist?.({
                   id: `artist-${album.albumArtistName.toLowerCase().replace(/\s+/g, "-")}`,
                   originId: album.originId,
                   originType: album.originType,
                   name: album.albumArtistName,
-                  imageUrl: artistImage || resolvedCoverUrl,
+                  imageUrl: artistImageUrl || resolvedCoverUrl,
                   mbz: artistMbzFromTracks,
                 });
               }}
