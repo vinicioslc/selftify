@@ -549,7 +549,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="min-w-[180px]">
-                    <DropdownMenuItem onClick={() => setImageManagerOpen(true)}>
+                    <DropdownMenuItem onClick={() => setTimeout(() => setImageManagerOpen(true), 0)}>
                       <span className="text-sm">🖼 Manage Artist Image</span>
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={handleFetchMusicBrainz} disabled={mbzLoading}>

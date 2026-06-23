@@ -517,7 +517,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="min-w-[180px]">
-                <DropdownMenuItem onClick={() => setImageManagerOpen(true)}>
+                <DropdownMenuItem onClick={() => setTimeout(() => setImageManagerOpen(true), 0)}>
                   <span className="text-sm">🖼 Manage Album Cover</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleFetchMusicBrainz} disabled={mbzLoading}>
@@ -526,7 +526,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
-                  onClick={() => setDeleteDialogOpen(true)}
+                  onClick={() => setTimeout(() => setDeleteDialogOpen(true), 0)}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   <span className="text-sm">Delete Album</span>
