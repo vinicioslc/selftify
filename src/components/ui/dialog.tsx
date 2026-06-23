@@ -1,10 +1,30 @@
 import * as React from "react";
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
-const Dialog = DialogPrimitive.Root;
+/**
+ * Wrapper do Dialog Radix que restaura body.style.pointerEvents
+ * sempre que o dialog fecha, resolvendo um bug onde o
+ * @radix-ui/react-dismissable-layer deixa pointer-events: none
+ * preso no body após certos modais fecharem.
+ */
+function Dialog({ onOpenChange, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  const handleOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      // Restaura pointer-events IMEDIATAMENTE (síncrono, não depende de useEffect)
+      document.body.style.pointerEvents = "";
+    }
+    onOpenChange?.(open);
+  }, [onOpenChange]);
+
+  return (
+    <DialogPrimitive.Root onOpenChange={handleOpenChange} {...props}>
+      {children}
+    </DialogPrimitive.Root>
+  );
+}
 const DialogTrigger = DialogPrimitive.Trigger;
 const DialogClose = DialogPrimitive.Close;
 
