@@ -6,7 +6,7 @@ import { Badge } from "../../components/ui/badge";
 import { Slider } from "../../components/ui/slider";
 import { Input } from "../../components/ui/input";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
-import { useSettingsStore, type RankingWeights, type KeywordWeight } from "../../stores/settings.store";
+import { useSettingsStore, type RankingWeights } from "../../stores/settings.store";
 import { getRecentRankings, clearRankingLog } from "../../services/sqlite-db/sqlite-db-ranking-log";
 import { clearAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
 import type { RankingLogEntry } from "../../services/sqlite-db/sqlite-db-ranking-log";
@@ -37,7 +37,7 @@ function ScoreBreakdown({ scores }: { scores: string }) {
 }
 
 export function RankingView() {
-  const { rankingWeights, setRankingWeights, addRankingKeyword, removeRankingKeyword, updateRankingKeyword } = useSettingsStore();
+  const { rankingWeights, setRankingWeights } = useSettingsStore();
   const [rankings, setRankings] = useState<RankingLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [newTerm, setNewTerm] = useState("");
@@ -51,16 +51,18 @@ export function RankingView() {
 
   useEffect(() => { load(); }, []);
 
-  function setWeight(key: "title" | "artist" | "album" | "duration" | "artistOnChannel", value: number) {
+  function setWeight(key: "title" | "artist" | "album" | "duration" | "artistOnChannel" | "channelExactMatch" | "coverPenalty", value: number) {
     setRankingWeights({ ...rankingWeights, [key]: Math.round(value * 10) / 10 });
   }
 
-  const weightFields: { key: "title" | "artist" | "album" | "duration" | "artistOnChannel"; label: string; min: number; max: number }[] = [
+  const weightFields: { key: "title" | "artist" | "album" | "duration" | "artistOnChannel" | "channelExactMatch" | "coverPenalty"; label: string; min: number; max: number }[] = [
     { key: "title", label: "Title match", min: 0, max: 2 },
     { key: "artist", label: "Artist match", min: 0, max: 2 },
     { key: "album", label: "Album match", min: 0, max: 2 },
     { key: "duration", label: "Duration match", min: 0, max: 2 },
     { key: "artistOnChannel", label: "Artist on channel", min: 0, max: 2 },
+    { key: "channelExactMatch", label: "Artist on channel (exact)", min: 0, max: 2 },
+    { key: "coverPenalty", label: "Cover penalty", min: -5, max: 0 },
   ];
 
   function handleAddKeyword() {
@@ -68,23 +70,29 @@ export function RankingView() {
     const weight = parseFloat(newWeight);
     if (!term || isNaN(weight)) return;
     if (rankingWeights.keywords.some((k) => k.term === term)) return;
-    addRankingKeyword({ term, weight });
+    setRankingWeights({ ...rankingWeights, keywords: [...rankingWeights.keywords, { term, weight }] });
     setNewTerm("");
     setNewWeight("1.0");
   }
 
   function handleRemoveKeyword(term: string) {
-    removeRankingKeyword(term);
+    setRankingWeights({ ...rankingWeights, keywords: rankingWeights.keywords.filter((k) => k.term !== term) });
   }
 
   function handleUpdateKeywordWeight(term: string, weight: number) {
-    updateRankingKeyword(term, { weight: Math.round(weight * 10) / 10 });
+    setRankingWeights({
+      ...rankingWeights,
+      keywords: rankingWeights.keywords.map((k) => k.term === term ? { ...k, weight: Math.round(weight * 10) / 10 } : k),
+    });
   }
 
   function handleUpdateKeywordTerm(oldTerm: string, newTerm: string) {
     if (!newTerm.trim() || oldTerm === newTerm) return;
     if (rankingWeights.keywords.some((k) => k.term === newTerm.trim())) return;
-    updateRankingKeyword(oldTerm, { term: newTerm.trim() });
+    setRankingWeights({
+      ...rankingWeights,
+      keywords: rankingWeights.keywords.map((k) => k.term === oldTerm ? { ...k, term: newTerm.trim() } : k),
+    });
   }
 
   return (
@@ -98,7 +106,7 @@ export function RankingView() {
             <div key={key} className="flex items-center gap-4">
               <span className="w-28 text-sm">{label}</span>
               <Slider
-                value={[rankingWeights[key]]}
+                value={[rankingWeights[key] ?? 0]}
                 min={min}
                 max={max}
                 step={0.1}
@@ -115,7 +123,7 @@ export function RankingView() {
               Extra score when video title contains the term (case-insensitive).
             </p>
             <div className="space-y-2">
-              {rankingWeights.keywords.map((kw) => (
+              {(rankingWeights.keywords ?? []).map((kw) => (
                 <div key={kw.term} className="flex items-center gap-2">
                   <Input
                     value={kw.term}

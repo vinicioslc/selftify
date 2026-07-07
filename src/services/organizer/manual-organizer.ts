@@ -4,6 +4,7 @@ import { OriginType } from "../../types/domain-types";
 import { createFileOrganizer } from "./file-organizer";
 import { sanitizeForPath } from "./sanitizer";
 import { getPlatformService } from "../platform/factory";
+import { joinPaths, normalizePath } from "../../lib/path-utils";
 import type { OrganizeResult } from "./file-organizer";
 
 export type OrganizeAllResult = {
@@ -62,7 +63,7 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
         continue;
       }
 
-      const sourcePath = `${libraryRoot}/${track.path}`;
+      const sourcePath = joinPaths(libraryRoot, track.path);
       const extension = track.path.includes(".") ? track.path.slice(track.path.lastIndexOf(".")) : ".mp3";
 
       try {
@@ -85,15 +86,15 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
         } else if (result.targetPath) {
           organizedCount++;
 
-          const newRelPath = `${result.targetAlbumRelDir}/${result.targetFileName}`;
-          const newTrackId = `${artistDir}/${meta.name}/${newRelPath}`;
-          const oldTrackId = `${artistDir}/${meta.name}/${track.path}`;
+          const newRelPath = joinPaths(result.targetAlbumRelDir, result.targetFileName);
+          const newTrackId = joinPaths(artistDir, meta.name, newRelPath);
+          const oldTrackId = joinPaths(artistDir, meta.name, track.path);
 
           db.exec("DELETE FROM tracks WHERE id = ?", [oldTrackId]);
           db.exec(
-            `INSERT INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, genre, mbz_recording_id, mbz_track_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [newTrackId, `${artistDir}/${meta.name}`, newRelPath, track.name, track.artistName, track.albumName, track.trackNumber, track.discNumber, track.duration, track.genre, track.mbzRecordingId, track.mbzTrackId],
+            `INSERT INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, bitrate, genre, mbz_recording_id, mbz_track_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [newTrackId, joinPaths(artistDir, meta.name), newRelPath, track.name, track.artistName, track.albumName, track.trackNumber, track.discNumber, track.duration, track.bitrate ?? null, track.genre, track.mbzRecordingId, track.mbzTrackId],
           );
         } else {
           failedCount++;
@@ -135,11 +136,11 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
       const albumDirBase = sanitize(meta.name);
       const albumDir = albumYear ? `${albumDirBase} (${albumYear})` : albumDirBase;
       const artistDir = sanitize(meta.artistName);
-      const targetAlbumDir = `${libraryRoot}/${artistDir}/${albumDir}`;
+      const targetAlbumDir = joinPaths(libraryRoot, artistDir, albumDir);
 
       const artistEntry = artistMap.get(meta.artistName.toLowerCase());
 
-      await p.deleteFile(`${targetAlbumDir}/album.nfo`).catch(() => {});
+      await p.deleteFile(joinPaths(targetAlbumDir, "album.nfo")).catch(() => {});
 
       await organizer.writeAlbumArtifacts(targetAlbumDir, {
         libraryRoot,
@@ -171,9 +172,9 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
 
   for (const [, artist] of artistMap) {
     try {
-      const targetArtistDir = `${libraryRoot}/${sanitize(artist.name)}`;
+      const targetArtistDir = joinPaths(libraryRoot, sanitize(artist.name));
 
-      await p.deleteFile(`${targetArtistDir}/artist.nfo`).catch(() => {});
+      await p.deleteFile(joinPaths(targetArtistDir, "artist.nfo")).catch(() => {});
 
       await organizer.writeArtistArtifacts(targetArtistDir, {
         artistName: artist.name,

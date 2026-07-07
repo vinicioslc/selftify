@@ -1,3 +1,4 @@
+import { normalizePath, joinPaths } from "../lib/path-utils";
 import type { Song, DownloadTask } from "../types/domain-types";
 import { DownloadStatus, OriginType } from "../types/domain-types";
 import { useDownloadStore } from "../stores/download.store";
@@ -172,7 +173,7 @@ function computeExpectedFilePath(folder: string, meta: MbMetadata, songName: str
   }
 
   const filename = `${prefix}${safeTitle}`;
-  return `${folder}/${safeArtist}/${albumDir}/${filename}.mp3`;
+  return joinPaths(folder, safeArtist, albumDir, `${filename}.mp3`);
 }
 
 async function resolveCoverBytes(
@@ -302,7 +303,7 @@ async function addDownloadedTrackToLibrary(
     return;
   }
 
-  const relPath = audioPath.slice(libraryRoot.length + 1);
+  const relPath = normalizePath(audioPath.slice(libraryRoot.length + 1));
   const artistName = meta.artistName || song.artistName || "Unknown";
   const albumName = meta.albumName || `${song.name} (Single)`;
   const albumId = `${artistName}/${albumName}`;
@@ -330,9 +331,9 @@ async function addDownloadedTrackToLibrary(
 
     // Upsert track
     db.exec(
-      `INSERT OR REPLACE INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, genre, mbz_recording_id, mbz_track_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [trackId, albumId, relPath, song.name, artistName, meta.albumName || null, meta.trackNumber || null, meta.discNumber || null, song.duration || null, (meta.genres || []).join(", ") || null, meta.mbzRecordingId || null, null],
+      `INSERT OR REPLACE INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, bitrate, genre, mbz_recording_id, mbz_track_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [trackId, albumId, relPath, song.name, artistName, meta.albumName || null, meta.trackNumber || null, meta.discNumber || null, song.duration || null, song.bitrate ?? null, (meta.genres || []).join(", ") || null, meta.mbzRecordingId || null, null],
     );
 
     db.flushSave();

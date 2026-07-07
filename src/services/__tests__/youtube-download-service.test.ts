@@ -270,7 +270,7 @@ describe("youtube-download-service", () => {
 
       const result = await searchAndRankAll(makeSong());
       expect(result?.scored).toEqual(scored);
-      expect(result?.selectedIndex).toBe(0);
+      expect(result?.query).toBe("Test Artist Test Song Test Album");
     });
   });
 

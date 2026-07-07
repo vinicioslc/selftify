@@ -1,5 +1,6 @@
 import { getPlatformService } from "../platform/factory";
 import type { DirEntry } from "../platform/types";
+import { joinPaths } from "../../lib/path-utils";
 
 function assertStringPath(path: string, label: string): asserts path is string {
   if (typeof path !== "string") {
@@ -41,7 +42,7 @@ export function clearCache(): void {
 }
 
 function lockPath(libraryRoot: string): string {
-  return `${libraryRoot}/.selftify/${LOCK_NAME}`;
+  return joinPaths(libraryRoot, '.selftify', LOCK_NAME);
 }
 
 export async function acquireScanLock(libraryRoot: string): Promise<boolean> {

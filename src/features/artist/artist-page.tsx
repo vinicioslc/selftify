@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { usePlayerStore } from "../../stores/player.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { useAuthStore } from "../../stores/auth.store";
@@ -15,8 +15,8 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 
 import { Play, Shuffle, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
 import { RotatingBlurBackground } from "../shared/rotating-blur-background";
-import { fetchAlbumCover } from "../../services/image-fetch";
 import { useArtistImage } from "../../hooks/use-artist-image";
+import { useCover } from "../../hooks/use-cover";
 import { AlbumEmptySvg, ArtistEmptySvg, SongEmptySvg } from "../../components/ui/empty-image-svg";
 import {
   DropdownMenu,
@@ -43,35 +43,63 @@ type ArtistAlbum = {
   localSongCount: number;
 };
 
-function fetchAndSetCover(
-  albumId: string,
-  artistName: string,
-  albumName: string,
-  setAlbums: React.Dispatch<React.SetStateAction<ArtistAlbum[]>>,
-  setLoadingAlbumCovers: React.Dispatch<React.SetStateAction<Set<string>>>,
-) {
-  fetchAlbumCover(albumId, undefined, artistName, albumName)
-    .then((url) => {
-      setAlbums((prev) =>
-        prev.map((a) => (a.id === albumId ? { ...a, imageUrl: url || a.imageUrl } : a)),
-      );
-      setLoadingAlbumCovers((prev) => {
-        const next = new Set(prev);
-        next.delete(albumId);
-        return next;
-      });
-    })
-    .catch((err) => {
-      console.error("[artist-page] fetchAlbumCover failed:", albumId, albumName, err);
-      setLoadingAlbumCovers((prev) => {
-        const next = new Set(prev);
-        next.delete(albumId);
-        return next;
-      });
-    });
-}
-
 const PAGE_SIZE = 25;
+
+const MBID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function AlbumCover({ album, artistName, onNavigate }: {
+  album: ArtistAlbum;
+  artistName: string;
+  onNavigate: (album: ArtistAlbum) => void;
+}) {
+  const { coverUrl, source: coverSource, triggerRemote } = useCover({
+    artistName,
+    albumName: album.name,
+    mbzReleaseGroupId: MBID_RE.test(album.id) ? album.id : undefined,
+  });
+
+  const finalUrl = coverUrl || album.imageUrl;
+
+  return (
+    <div
+      className={cn("group cursor-pointer", !album.hasLocal && "opacity-60 transition-opacity hover:opacity-100")}
+      onClick={() => onNavigate(album)}
+    >
+      <div className="relative">
+        <ArtImage
+          src={finalUrl}
+          alt={album.name}
+          fallback={album.name.charAt(0)}
+          emptySvg={<AlbumEmptySvg />}
+          className="aspect-square w-full rounded-[5px] h-auto"
+          lazy={!finalUrl}
+          onLazyLoad={() => triggerRemote()}
+          imageSource={coverSource}
+        />
+        {!album.hasLocal ? (
+          <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100 pointer-events-none">
+            <span className="text-xs font-medium text-white drop-shadow">No local songs</span>
+          </div>
+        ) : album.localSongCount > 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/30 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100 pointer-events-none">
+            <span className="text-xs font-medium text-white drop-shadow">
+              {album.localSongCount} {album.localSongCount === 1 ? "song" : "songs"}
+            </span>
+          </div>
+        ) : null}
+      </div>
+      <div className="px-0.5 pt-2">
+        <p className="truncate text-sm font-medium">{album.name}</p>
+        <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+          {album.releaseYear && <span>{album.releaseYear}</span>}
+          {!album.hasLocal && (
+            <Badge variant="outline" className="px-1 text-[10px] font-normal">remote</Badge>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps) {
   const { setQueue } = usePlayerStore();
@@ -83,10 +111,9 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   const [offset, setOffset] = useState(0);
   const [allLoaded, setAllLoaded] = useState(false);
   const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
-  const hookImageUrl = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name);
+  const { imageUrl: hookImageUrl, source: artistImageSource, triggerRemote: triggerArtistImage } = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name);
   const [artistImageOverride, setArtistImageOverride] = useState<string | null>(null);
   const artistImageUrl = artistImageOverride || hookImageUrl || artist.imageUrl;
-  const [loadingAlbumCovers, setLoadingAlbumCovers] = useState<Set<string>>(new Set());
   const [localAlbumNames, setLocalAlbumNames] = useState<Set<string>>(new Set());
   const [imageManagerOpen, setImageManagerOpen] = useState(false);
   const [mbzLoading, setMbzLoading] = useState(false);
@@ -362,15 +389,6 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
         setAlbums(mapped);
         setOffset(PAGE_SIZE);
 
-        // Fetch remote cover art only for albums without local images
-        const needsCover = mapped.filter((a) => !a.imageUrl && a.id);
-        const loadingIds = new Set(needsCover.map((a) => a.id));
-        setLoadingAlbumCovers(loadingIds);
-
-        for (const album of needsCover) {
-          const albumId = album.id;
-          fetchAndSetCover(albumId, artist.name, album.name, setAlbums, setLoadingAlbumCovers);
-        }
       } catch (err) {
         console.warn("[artist-page] fetch artist albums error:", err);
       } finally {
@@ -414,14 +432,6 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
       });
       setOffset((prev) => prev + PAGE_SIZE);
 
-      // Fetch cover art only for albums without local images
-      const needsCover = newAlbums.filter((a) => !a.imageUrl && a.id);
-      setLoadingAlbumCovers((prev) => new Set([...prev, ...needsCover.map((a) => a.id)]));
-
-      for (const album of needsCover) {
-        const albumId = album.id;
-        fetchAndSetCover(albumId, artist.name, album.name, setAlbums, setLoadingAlbumCovers);
-      }
     } catch (err) {
       console.warn("[artist-page] loadMore error:", err);
     } finally {
@@ -456,55 +466,23 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
     };
   }
 
+  const handleAlbumNav = useCallback((a: ArtistAlbum) => {
+    onNavigateAlbum(albumToAlbumObj(a));
+  }, [onNavigateAlbum]);
+
   function renderAlbumSection(title: string, items: ArtistAlbum[]) {
     if (items.length === 0) return null;
     return (
       <div className="mb-8">
         <h2 className="mb-4 text-lg font-semibold text-foreground">{title}</h2>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 uw:grid-cols-7">
           {items.map((album) => (
-            <div
+            <AlbumCover
               key={album.id}
-              className={cn(
-                "group cursor-pointer",
-                !album.hasLocal && "opacity-60 transition-opacity hover:opacity-100",
-              )}
-              onClick={() => onNavigateAlbum(albumToAlbumObj(album))}
-            >
-              <div className="relative">
-                <ArtImage
-                  src={album.imageUrl}
-                  alt={album.name}
-                  fallback={album.name.charAt(0)}
-                  emptySvg={<AlbumEmptySvg />}
-                  className="aspect-square w-full rounded-[5px]"
-                />
-                {!album.hasLocal ? (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
-                    <span className="text-xs font-medium text-white drop-shadow">
-                      No local songs
-                    </span>
-                  </div>
-                ) : album.localSongCount > 0 ? (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/30 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100">
-                    <span className="text-xs font-medium text-white drop-shadow">
-                      {album.localSongCount} {album.localSongCount === 1 ? "song" : "songs"}
-                    </span>
-                  </div>
-                ) : null}
-              </div>
-              <div className="px-0.5 pt-2">
-                <p className="truncate text-sm font-medium">{album.name}</p>
-                <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                  {album.releaseYear && <span>{album.releaseYear}</span>}
-                  {!album.hasLocal && (
-                    <Badge variant="outline" className="px-1 text-[10px] font-normal">
-                      remote
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            </div>
+              album={album}
+              artistName={artist.name}
+              onNavigate={handleAlbumNav}
+            />
           ))}
         </div>
       </div>
@@ -525,13 +503,16 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
             className={cn("relative", artistImageUrl && "cursor-zoom-in")}
             onClick={() => artistImageUrl && setImageExpanded(!imageExpanded)}
           >
-            <CoverImage
-              src={artistImageUrl}
-              alt={artist.name}
-              fallback={artist.name.charAt(0)}
-              emptySvg={<ArtistEmptySvg />}
-              className="h-40 w-40 shrink-0 shadow-lg md:h-48 md:w-48"
-            />
+          <CoverImage
+            src={artistImageUrl}
+            alt={artist.name}
+            fallback={artist.name.charAt(0)}
+            emptySvg={<ArtistEmptySvg />}
+            className="h-40 w-40 shrink-0 shadow-lg md:h-48 md:w-48"
+            lazy={!artistImageUrl}
+            onLazyLoad={triggerArtistImage}
+            imageSource={artistImageSource}
+          />
             {imageExpanded && artistImageUrl && (
               <ImageOverlay src={artistImageUrl} alt={artist.name} onClose={() => setImageExpanded(false)} />
             )}

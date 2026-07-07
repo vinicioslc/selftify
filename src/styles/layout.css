@@ -2,11 +2,11 @@
 .layout {
   display: grid;
   grid-template-areas:
-    "topbar topbar"
-    "main-content debug"
-    "player player";
+    "topbar"
+    "main-content"
+    "player";
   grid-template-rows: var(--topbar-height) 1fr var(--player-bar-height);
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr;
   gap: 0;
   height: 100%;
   overflow: hidden;
@@ -14,15 +14,11 @@
   box-sizing: border-box;
 }
 
-.layout.debug-hidden {
-  grid-template-columns: 1fr 0px;
-}
-
 /* TopBar drag region */
 .topbar {
   grid-area: topbar;
   -webkit-app-region: drag;
-  z-index: 1002; /* acima de DialogOverlay (1000) e DialogContent (1001) */
+  z-index: 300; /* below DialogOverlay (1000) and DialogContent (1001) */
 }
 
 .topbar button,
@@ -45,6 +41,24 @@
   grid-template-columns: 64px 1fr;
 }
 
+@media (max-width: 768px) {
+  .main-content {
+    grid-template-areas: "content";
+    grid-template-columns: 1fr;
+  }
+  .main-content.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1920px) {
+  .main-content-body > div:last-child {
+    max-width: 1600px;
+    margin: 0 auto;
+    width: 100%;
+  }
+}
+
 .main-content-body {
   grid-area: content;
   display: flex;
@@ -52,13 +66,6 @@
   min-height: 0;
   overflow: hidden;
   background: hsl(var(--background));
-}
-
-.debug-panel {
-  grid-area: debug;
-  width: 320px;
-  min-width: 0;
-  overflow: hidden;
 }
 
 .player-area {
@@ -78,9 +85,23 @@
   padding: 0 1rem;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
+  .playerbar-grid {
+    grid-template-columns: minmax(0, 0.4fr) minmax(0, 1fr) minmax(0, 0.4fr);
+  }
+}
+
+@media (min-width: 641px) and (max-width: 768px) {
   .playerbar-grid {
     grid-template-columns: minmax(0, 0.5fr) minmax(0, 1fr) minmax(0, 0.5fr);
+  }
+}
+
+@media (min-width: 1920px) {
+  .playerbar-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+    max-width: 1800px;
+    margin: 0 auto;
   }
 }
 

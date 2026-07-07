@@ -8,6 +8,7 @@ import * as albumRepo from "../../services/db/repositories/album-repo";
 import * as artistRepo from "../../services/db/repositories/artist-repo";
 import { getLibraryRoot, ensureDb } from "../../services/db/ensure-db";
 import type { SqliteDbAlbumMeta, SqliteDbArtistMeta } from "../../services/sqlite-db/sqlite-db-types";
+import { joinPaths, fileNameFromPath } from "../../lib/path-utils";
 
 export function createLocalController(ctx: ApiContext): ServerController {
   async function loadAllAlbumMetas(): Promise<{ meta: SqliteDbAlbumMeta; artistDir: string }[]> {
@@ -218,12 +219,13 @@ export function createLocalController(ctx: ApiContext): ServerController {
     },
 
     getStreamUrl: async (songId) => {
+      // Try local file path first
       const albums = await loadAllAlbumMetas();
       for (const { meta } of albums) {
         for (const track of meta.tracks) {
           if (!track.path) continue;
           const idWithAlbum = `${ctx.originId}:${meta.name}:${track.path}`;
-          const shortId = `${ctx.originId}:${track.path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? track.path}`;
+          const shortId = `${ctx.originId}:${fileNameFromPath(track.path).replace(/\.[^.]+$/, "") || track.path}`;
           if (songId !== idWithAlbum && songId !== shortId) continue;
           try {
             const { getPlatformService } = await import("../../services/platform/factory");
@@ -234,43 +236,31 @@ export function createLocalController(ctx: ApiContext): ServerController {
             if (track.path.includes("/")) {
               relPath = track.path;
             } else {
-              relPath = `${meta.artistName}/${meta.name}/${track.path}`;
+              relPath = joinPaths(meta.artistName, meta.name, track.path);
             }
-            let data = await p.readFile(`${root}/${relPath}`);
+            let data = await p.readFile(joinPaths(root, relPath));
             if (data) return URL.createObjectURL(new Blob([data.buffer as ArrayBuffer]));
             if (!data && track.path.includes("/")) {
               const parts = track.path.split("/");
               const fileName = parts.pop()!;
               const artistName = parts[0];
               console.debug(`[Selftify] getStreamUrl: stored path failed, trying fallbacks for ${fileName}`);
-              // Try (releaseYear) suffix
               if (meta.releaseYear) {
-                const yearSuffixed = `${artistName}/${meta.name} (${meta.releaseYear})/${fileName}`;
-                console.debug(`[Selftify] getStreamUrl: trying yearSuffixed=${yearSuffixed}`);
-                data = await p.readFile(`${root}/${yearSuffixed}`);
-                if (data) console.debug(`[Selftify] getStreamUrl: yearSuffixed FOUND`);
+                const yearSuffixed = joinPaths(artistName, `${meta.name} (${meta.releaseYear})`, fileName);
+                data = await p.readFile(joinPaths(root, yearSuffixed));
               }
-              // Try album name from metadata (no year)
               if (!data) {
-                const fallbackRel = `${meta.artistName}/${meta.name}/${fileName}`;
-                console.debug(`[Selftify] getStreamUrl: trying metadataFallback=${fallbackRel}`);
-                data = await p.readFile(`${root}/${fallbackRel}`);
-                if (data) console.debug(`[Selftify] getStreamUrl: metadataFallback FOUND`);
+                const fallbackRel = joinPaths(meta.artistName, meta.name, fileName);
+                data = await p.readFile(joinPaths(root, fallbackRel));
               }
-              // Scan artist directory for album subdirs matching meta.name
               if (!data) {
                 try {
-                  console.debug(`[Selftify] getStreamUrl: scanning ${root}/${artistName} for dirs matching "${meta.name}"`);
-                  const entries = await p.readDirectory(`${root}/${artistName}`);
+                  const entries = await p.readDirectory(joinPaths(root, artistName));
                   for (const entry of entries) {
                     if (entry.isDirectory && entry.name.startsWith(meta.name)) {
-                      const candidate = `${root}/${artistName}/${entry.name}/${fileName}`;
-                      console.debug(`[Selftify] getStreamUrl: trying scanned candidate=${candidate}`);
+                      const candidate = joinPaths(root, artistName, entry.name, fileName);
                       data = await p.readFile(candidate);
-                      if (data) {
-                        console.debug(`[Selftify] getStreamUrl: scanned candidate FOUND`);
-                        break;
-                      }
+                      if (data) break;
                     }
                   }
                 } catch (err) {
@@ -289,6 +279,19 @@ export function createLocalController(ctx: ApiContext): ServerController {
           }
         }
       }
+
+      // Not a local file — try YouTube resolution
+      try {
+        const { usePlayerStore } = await import("../../stores/player.store");
+        const currentTrack = usePlayerStore.getState().currentTrack;
+        if (currentTrack?.id === songId && currentTrack.youtubeVideoId) {
+          const { getStreamUrl } = await import("../../services/youtube-download-service");
+          return getStreamUrl(currentTrack);
+        }
+      } catch (err) {
+        console.debug("[local-controller] YouTube stream resolution failed:", err);
+      }
+
       return null;
     },
 

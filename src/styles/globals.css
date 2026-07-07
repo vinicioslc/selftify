@@ -92,7 +92,13 @@ body,
   --topbar-height: 38px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
+  :root {
+    --player-bar-height: 64px;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 768px) {
   :root {
     --player-bar-height: 72px;
   }

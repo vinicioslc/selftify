@@ -1,8 +1,8 @@
 import type { Song, Origin } from "../types/domain-types";
 import { OriginType } from "../types/domain-types";
 import { scoreYouTubeResults, persistRanking, type YoutubeSearchVideo, type YoutubeSearchScoredVideo } from "./youtube-ranking";
-import { getMbzYtMapping, setMbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
-import { useSettingsStore } from "../stores/settings.store";
+import { getMbzYtMapping, setMbzYtMapping, deleteMbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
+import { useSettingsStore, type YtSearchFields } from "../stores/settings.store";
 import { useAuthStore } from "../stores/auth.store";
 import { useStatusStore } from "../stores/status.store";
 import type { CandidateData, SqliteDbMbzYtMapping } from "./sqlite-db/sqlite-db-types";
@@ -30,6 +30,7 @@ type YoutubeDownloadRequest = {
   searchQuery: string;
   videoId: string;
   downloadFolder: string;
+  cookies?: string;
   metadata: {
     title: string;
     artist: string;
@@ -52,11 +53,21 @@ function getElectronApi(): ElectronApi | null {
   return null;
 }
 
+function buildYtSearchQuery(song: Song, fields: YtSearchFields): string {
+  const parts: string[] = [];
+  if (fields.artistName && song.artistName) parts.push(song.artistName);
+  if (fields.songName && song.name) parts.push(song.name);
+  if (fields.albumName && song.albumName) parts.push(song.albumName);
+  if (fields.releaseYear && song.releaseYear) parts.push(String(song.releaseYear));
+  if (fields.genres && song.genres?.length) parts.push(song.genres[0]);
+  return parts.join(" ");
+}
+
 export async function searchAndRank(
   song: Song,
 ): Promise<{ videoId: string; title: string } | null> {
-  const parts = [song.artistName, song.name, song.albumName].filter(Boolean);
-  const query = parts.join(" ");
+  const fields = useSettingsStore.getState().ytSearchFields;
+  const query = buildYtSearchQuery(song, fields);
   const api = getElectronApi();
   const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
   const addMsg = (text: string, level: "info" | "success" | "warn" | "danger" = "info") =>
@@ -125,6 +136,29 @@ export async function searchAndRank(
       const root = getLibraryRoot();
       if (root) {
         const now = Date.now();
+        const candidatesData: CandidateData[] = ranked.map((r) => ({
+          videoId: r.video.id,
+          title: r.video.title,
+          uploader: r.video.uploader || "",
+          duration:
+            typeof r.video.duration === "object" && r.video.duration
+              ? r.video.duration.seconds
+              : typeof r.video.duration === "number"
+                ? r.video.duration
+                : undefined,
+          score: r.breakdown.score,
+          titleMatch: r.breakdown.titleMatch,
+          artistMatch: r.breakdown.artistMatch,
+          albumMatch: r.breakdown.albumMatch,
+          artistOnChannel: r.breakdown.artistOnChannel,
+          channelExactMatch: r.breakdown.channelExactMatch,
+          isCover: r.breakdown.isCover,
+          exactDuration: r.breakdown.exactDuration,
+          closestDuration: r.breakdown.closestDuration,
+          keywordScore: r.breakdown.keywordScore,
+          diff: r.diff,
+          source: "ranking" as const,
+        }));
         await setMbzYtMapping(root, {
           mbzRecordingId: song.mbzRecordingId,
           songName: song.name,
@@ -132,7 +166,7 @@ export async function searchAndRank(
           albumName: song.albumName,
           selectedVideoId: best.video.id,
           selectedType: "auto",
-          candidates: [],
+          candidates: candidatesData,
           createdAt: now,
           updatedAt: now,
         });
@@ -151,24 +185,11 @@ export async function searchAndRank(
 
 export async function researchSong(song: Song): Promise<void> {
   if (!song.mbzRecordingId) return;
-  const result = await searchAndRank(song);
-  if (result && song.mbzRecordingId) {
-    const root = getLibraryRoot();
-    if (root) {
-      const now = Date.now();
-      await setMbzYtMapping(root, {
-        mbzRecordingId: song.mbzRecordingId,
-        songName: song.name,
-        artistName: song.artistName,
-        albumName: song.albumName,
-        selectedVideoId: result.videoId,
-        selectedType: "auto",
-        candidates: [],
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
+  const root = getLibraryRoot();
+  if (root) {
+    await deleteMbzYtMapping(root, song.mbzRecordingId);
   }
+  await searchAndRank(song);
 }
 
 export async function fetchCustomVideoInfo(url: string): Promise<CandidateData | null> {
@@ -187,8 +208,9 @@ export async function fetchCustomVideoInfo(url: string): Promise<CandidateData |
 
   const api = getElectronApi();
   if (!api) return null;
+  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
   try {
-    const videoInfo = await api.yt.search(videoId, undefined);
+    const videoInfo = await api.yt.search(videoId, cookies);
     if (!videoInfo || videoInfo.length === 0) return null;
     const v = videoInfo[0];
     return {
@@ -203,6 +225,8 @@ export async function fetchCustomVideoInfo(url: string): Promise<CandidateData |
       artistMatch: false,
       albumMatch: false,
       artistOnChannel: false,
+      channelExactMatch: false,
+      isCover: false,
       exactDuration: false,
       closestDuration: false,
       source: "custom",
@@ -212,9 +236,9 @@ export async function fetchCustomVideoInfo(url: string): Promise<CandidateData |
   }
 }
 
-export async function searchAndRankAll(song: Song): Promise<{ scored: YoutubeSearchScoredVideo[] } | null> {
-  const parts = [song.artistName, song.name, song.albumName].filter(Boolean);
-  const query = parts.join(" ");
+export async function searchAndRankAll(song: Song, customQuery?: string): Promise<{ scored: YoutubeSearchScoredVideo[]; query: string } | null> {
+  const fields = useSettingsStore.getState().ytSearchFields;
+  const query = customQuery ?? buildYtSearchQuery(song, fields);
   const api = getElectronApi();
   const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
   if (!api) return null;
@@ -231,7 +255,7 @@ export async function searchAndRankAll(song: Song): Promise<{ scored: YoutubeSea
     const scored = scoreYouTubeResults(videos, {
       title: song.name, artist: song.artistName, album: song.albumName, duration: song.duration ?? undefined,
     }, weights);
-    return { scored };
+    return { scored, query };
   } catch {
     return null;
   }
@@ -309,12 +333,13 @@ export async function getStreamUrl(song: Song): Promise<string | null> {
 export async function downloadAndGetPath(song: Song, downloadFolder: string): Promise<string | null> {
   const api = getElectronApi();
   if (!api) return null;
+  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
   const match = await searchAndRank(song);
   if (!match) return null;
   try {
     return await api.yt.download({
       searchQuery: `${song.artistName} ${song.name}`,
-      videoId: match.videoId, downloadFolder,
+      videoId: match.videoId, downloadFolder, cookies,
       metadata: {
         title: song.name, artist: song.artistName, album: song.albumName,
         albumArtist: song.albumArtistName, trackNumber: song.trackNumber,

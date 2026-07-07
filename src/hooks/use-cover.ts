@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { coverEventBus, makeCoverKey } from "../services/cover-event-bus";
-import { resolveAlbumCover, resolveAlbumCoverLocalOnly, resolveAlbumCoverRemote, type CoverInput } from "../services/cover-resolver";
+import { resolveAlbumCover, resolveAlbumCoverLocalOnly, resolveAlbumCoverRemote, type CoverInput, type CoverSource } from "../services/cover-resolver";
 
 export type { CoverInput };
 
 const blobCache = new Map<string, string>();
+const sourceCache = new Map<string, CoverSource>();
 
 function releaseBlobUrl(url: string | null | undefined) {
   if (url && url.startsWith("blob:")) {
@@ -19,8 +20,9 @@ function getActiveKey(input: CoverInput): string | null {
   return key2 || key3 || key1;
 }
 
-export function useCover(input: CoverInput, options?: { deferRemote?: boolean }) {
+export function useCover(input: CoverInput) {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [source, setSource] = useState<CoverSource | null>(null);
   const [loading, setLoading] = useState(true);
   const prevKeyRef = useRef<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
@@ -28,10 +30,10 @@ export function useCover(input: CoverInput, options?: { deferRemote?: boolean })
   const inputRef = useRef(input);
   inputRef.current = input;
 
-  const resolveCover = useCallback(async (mode: "local" | "full" | "remote") => {
+  const resolveCover = useCallback(async (mode: "local" | "remote") => {
     const activeKey = getActiveKey(inputRef.current);
     if (!activeKey) {
-      if (mountedRef.current && mode !== "remote") { setCoverUrl(null); setLoading(false); }
+      if (mountedRef.current && mode !== "remote") { setCoverUrl(null); setSource(null); setLoading(false); }
       return;
     }
     const cached = blobCache.get(activeKey);
@@ -42,24 +44,23 @@ export function useCover(input: CoverInput, options?: { deferRemote?: boolean })
     if (mode === "remote" && !mountedRef.current) return;
     setLoading(true);
     const resolveFn = mode === "local" ? resolveAlbumCoverLocalOnly
-      : mode === "remote" ? resolveAlbumCoverRemote
-      : resolveAlbumCover;
+      : resolveAlbumCoverRemote;
     const result = await resolveFn(inputRef.current);
     if (!mountedRef.current) { if (result.blobUrl) releaseBlobUrl(result.blobUrl); return; }
     if (result.blobUrl) {
       blobCache.set(activeKey, result.blobUrl);
+      sourceCache.set(activeKey, result.source);
       setCoverUrl(result.blobUrl);
+      setSource(result.source);
     } else if (mode !== "remote") {
       setCoverUrl(null);
+      setSource(null);
     }
     if (mountedRef.current) setLoading(false);
   }, []);
 
-  const resolveModeRef = useRef<"local" | "full">(options?.deferRemote ? "local" : "full");
-  resolveModeRef.current = options?.deferRemote ? "local" : "full";
-
   const resolve = useCallback(() => {
-    resolveCover(resolveModeRef.current);
+    resolveCover("local");
   }, [resolveCover]);
 
   const triggerRemote = useCallback(() => resolveCover("remote"), [resolveCover]);
@@ -73,11 +74,14 @@ export function useCover(input: CoverInput, options?: { deferRemote?: boolean })
       const old = blobCache.get(prevKeyRef.current);
       if (old) {
         blobCache.delete(prevKeyRef.current);
+        sourceCache.delete(prevKeyRef.current);
         releaseBlobUrl(old);
       }
     }
 
     prevKeyRef.current = activeKey;
+    const cachedSource = activeKey ? sourceCache.get(activeKey) : undefined;
+    if (cachedSource) setSource(cachedSource);
 
     resolve();
 
@@ -112,7 +116,7 @@ export function useCover(input: CoverInput, options?: { deferRemote?: boolean })
     resolve,
   ]);
 
-  return { coverUrl, loading, triggerRemote };
+  return { coverUrl, source, loading, triggerRemote };
 }
 
 export function clearCoverCache(

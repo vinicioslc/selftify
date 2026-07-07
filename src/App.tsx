@@ -18,13 +18,15 @@ import { ArtistPage } from "./features/artist/artist-page";
 import { PlaylistListPage } from "./features/playlist/playlist-list-page";
 import { PlaylistDetailPage } from "./features/playlist/playlist-detail-page";
 import { useState, useEffect, useCallback } from "react";
-import { AlertTriangle } from "lucide-react";
+import { Menu, AlertTriangle, X } from "lucide-react";
+import { Button } from "./components/ui/button";
+import { useIsMobile } from "./hooks/use-media-query";
 import type { AppView } from "./types/types";
 import type { Album, AlbumArtist, Playlist } from "./types/domain-types";
 import { OriginType } from "./types/domain-types";
 import "./styles/layout.css";
 import { QueueModal } from "./features/player/queue-modal";
-import { YoutubeRankingDebug } from "./features/debug/youtube-ranking-debug";
+
 import { DownloadQueuePanel } from "./features/download/download-queue-panel";
 import { getPlatformService } from "./services/platform/factory";
 import { CookieEditDialog } from "./features/settings/cookie-edit-dialog";
@@ -60,29 +62,18 @@ export function App() {
   });
   const [navHistory, setNavHistory] = useState<NavEntry[]>([]);
   const [navFuture, setNavFuture] = useState<NavEntry[]>([]);
-  const [showDebugPanel, setShowDebugPanel] = useState(false);
   const [showCookieToast, setShowCookieToast] = useState(false);
   const [showCookieDialog, setShowCookieDialog] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<string | undefined>(undefined);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   function handleOpenSettings(tab?: string) {
     setSettingsTab(tab);
     setSettingsOpen(true);
   }
-
-  // Toggle debug panel with Ctrl+Shift+D
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.ctrlKey && e.shiftKey && e.key === "D") {
-        e.preventDefault();
-        setShowDebugPanel((v) => !v);
-      }
-    }
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, []);
 
   // Listen for yt-dlp cookie invalid warnings from Electron main process
   useEffect(() => {
@@ -277,29 +268,44 @@ export function App() {
       {!hasServers ? (
         <AuthPage onConnected={() => setCurrentView("home")} />
       ) : (
-        <div className={`layout ${showDebugPanel ? "" : "debug-hidden"}`}>
-        <TopBar currentView={currentView} onToggleDebug={() => setShowDebugPanel((v) => !v)} />
+        <div className="layout">
+        <TopBar currentView={currentView} />
         <div className={`main-content ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-          <div style={{ gridArea: "sidebar" }}>
+          <div className="hidden md:block" style={{ gridArea: "sidebar" }}>
             <Sidebar currentView={currentView} onNavigate={navigateTo} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={handleOpenSettings} />
           </div>
           <div className="main-content-body">
-            <NavBar canGoBack={navHistory.length > 0} canGoForward={navFuture.length > 0} onBack={handleGoBack} onForward={handleGoForward} />
+            <NavBar canGoBack={navHistory.length > 0} canGoForward={navFuture.length > 0} onBack={handleGoBack} onForward={handleGoForward}>
+              {isMobile && (
+                <Button variant="ghost" size="icon" onClick={() => setMobileSidebarOpen(true)} className="h-7 w-7 md:hidden">
+                  <Menu className="h-4 w-4" />
+                </Button>
+              )}
+            </NavBar>
             <div className="relative z-10 flex-1 overflow-hidden">
               {renderView()}
             </div>
           </div>
         </div>
-        {showDebugPanel && (
-          <div className="debug-panel">
-            <YoutubeRankingDebug onClose={() => setShowDebugPanel(false)} />
-          </div>
-        )}
         <div className="player-area">
           <PlayerBar currentView={currentView} onNavigate={navigateTo} onGoBack={handleGoBack} onOpenQueue={() => setQueueOpen(true)} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
         </div>
         <FullScreenPlayer onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
         <DownloadQueuePanel />
+
+        {mobileSidebarOpen && (
+          <div className="fixed inset-0 z-[400] md:hidden">
+            <div className="absolute inset-0 bg-black/60" onClick={() => setMobileSidebarOpen(false)} />
+            <div className="relative h-full w-[280px] animate-in slide-in-from-left duration-200 bg-sidebar border-r border-sidebar-border shadow-2xl">
+              <div className="absolute right-2 top-2 z-10">
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-sidebar-foreground" onClick={() => setMobileSidebarOpen(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <Sidebar currentView={currentView} onNavigate={(v) => { setMobileSidebarOpen(false); navigateTo(v); }} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={(t) => { setMobileSidebarOpen(false); handleOpenSettings(t); }} />
+            </div>
+          </div>
+        )}
 
         {showCookieToast && (
           <button

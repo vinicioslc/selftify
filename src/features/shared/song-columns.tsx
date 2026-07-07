@@ -93,11 +93,29 @@ export function durationColumn(): ColumnDef<Song> {
   };
 }
 
+export function qualityColumn(): ColumnDef<Song> {
+  return {
+    id: "quality",
+    label: "Quality",
+    width: "72px",
+    sortable: true,
+    sortValue: (s) => s.bitrate ?? 0,
+    render: (song) => (
+      <span className="text-xs text-muted-foreground tabular-nums">
+        {song.bitrate ? `${song.bitrate} kbps` : "\u2014"}
+      </span>
+    ),
+  };
+}
+
 /** Convenience: all standard columns in one call (source badge optional) */
 export function songColumns(options: SongColumnsOptions): ColumnDef<Song>[] {
   const cols: ColumnDef<Song>[] = [];
   if (options.showSourceBadge) cols.push(sourceBadgeColumn());
   cols.push(songTitleColumn(options));
   cols.push(durationColumn());
+  cols.push(qualityColumn());
   return cols;
 }
+
+

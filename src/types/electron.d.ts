@@ -45,6 +45,8 @@ export interface ElectronSettingsApi {
 
 export interface ElectronYtApi {
   fetch(url: string, init?: any): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: number[] }>;
+  checkVersion(): Promise<{ found: boolean; version: string | null }>;
+  update(): Promise<{ success: boolean; message: string }>;
 }
 
 export interface ElectronWindowControlsApi {
@@ -73,6 +75,17 @@ export interface ElectronLyricsApi {
   getRemoteLyricsByRemoteId: (query: any) => Promise<any>;
 }
 
+export interface ElectronDownloadApi {
+  enqueueSong(song: any): Promise<any>;
+  enqueueMultiple(songs: any[]): Promise<any[]>;
+  cancelTask(taskId: string): Promise<void>;
+  retryTask(taskId: string): Promise<void>;
+  getAllTasks(): Promise<any[]>;
+  clearCompleted(): Promise<void>;
+  updateTask(taskId: string, partial: any): Promise<void>;
+  onTaskUpdate(callback: (task: any) => void): () => void;
+}
+
 export interface ElectronApi {
   mpv: ElectronMpvApi;
   db: ElectronDbApi;
@@ -89,6 +102,9 @@ export interface ElectronApi {
   wikiSearch: (query: string) => Promise<string | null>;
   onCookiesInvalid: (callback: () => void) => () => void;
   onDownloadProgress: (callback: (event: { taskId: string; percent: number; step: string }) => void) => () => void;
+  download: ElectronDownloadApi;
+  onMediaAction: (callback: (action: string) => void) => () => void;
+  sendMediaPlaybackState: (playing: boolean) => void;
 }
 
 declare global {

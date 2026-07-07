@@ -34,6 +34,7 @@ export interface SqliteDbAlbumTrack {
   trackNumber: number | null;
   discNumber: number | null;
   duration: number | null;
+  bitrate?: number;
   genre: string | null;
   mbzRecordingId: string | null;
   mbzTrackId: string | null;
@@ -51,6 +52,8 @@ export interface YouTubeCandidate {
   artistMatch: boolean;
   albumMatch: boolean;
   artistOnChannel: boolean;
+  channelExactMatch: boolean;
+  isCover: boolean;
   exactDuration: boolean;
   closestDuration: boolean;
   keywordScore: number;
@@ -126,6 +129,8 @@ export interface CandidateData {
   artistMatch: boolean;
   albumMatch: boolean;
   artistOnChannel: boolean;
+  channelExactMatch: boolean;
+  isCover: boolean;
   exactDuration: boolean;
   closestDuration: boolean;
   keywordScore: number;

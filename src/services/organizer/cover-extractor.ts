@@ -1,4 +1,5 @@
 import { cachedRead, cachedWrite, cachedExists, cachedCreateDirectory } from "../sqlite-db/sqlite-db-cache";
+import { joinPaths } from "../../lib/path-utils";
 
 export async function writeCoverToAlbumDir(
   libraryRoot: string,
@@ -7,11 +8,11 @@ export async function writeCoverToAlbumDir(
 ): Promise<boolean> {
   if (!coverRelPath) return false;
 
-  const coverPath = `${targetAlbumDir}/cover.jpg`;
+  const coverPath = joinPaths(targetAlbumDir, "cover.jpg");
   const exists = await cachedExists(coverPath);
   if (exists) return true;
 
-  const sqliteDbImagePath = `${libraryRoot}/${coverRelPath}`;
+  const sqliteDbImagePath = joinPaths(libraryRoot, coverRelPath);
   const imageData = await cachedRead(sqliteDbImagePath);
   if (!imageData) return false;
 

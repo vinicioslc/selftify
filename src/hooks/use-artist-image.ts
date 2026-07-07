@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { fetchImageAsBlobUrl } from "../services/image-fetch";
+import { fetchImageAsBlobUrl, tagImageSource } from "../services/image-fetch";
 import { findImages, recordToBlobUrl } from "../services/image-store";
 import { platformFetch } from "../services/platform-fetch";
 import { artistImageResolver } from "../services/artist-image/providers/artist-resolver";
@@ -92,6 +92,7 @@ async function resolveArtistImageRemote(mbid: string | undefined, name: string):
     sources.push(
       queryWikidata(mbid).then(async (imageUrl) => {
         if (!imageUrl) return null;
+        tagImageSource(imageUrl, { artistName: name });
         return fetchImageAsBlobUrl(imageUrl);
       }),
     );
@@ -100,6 +101,7 @@ async function resolveArtistImageRemote(mbid: string | undefined, name: string):
   sources.push(
     artistImageResolver.searchAll({ artist: name, musicbrainzId: mbid }).then(async (candidates) => {
       if (candidates.length === 0) return null;
+      tagImageSource(candidates[0].url, { artistName: name });
       return fetchImageAsBlobUrl(candidates[0].url);
     }),
   );
@@ -107,6 +109,7 @@ async function resolveArtistImageRemote(mbid: string | undefined, name: string):
   sources.push(
     queryWikipedia(name).then(async (imageUrl) => {
       if (!imageUrl) return null;
+      tagImageSource(imageUrl, { artistName: name });
       return fetchImageAsBlobUrl(imageUrl);
     }),
   );
@@ -121,20 +124,29 @@ async function resolveArtistImageRemote(mbid: string | undefined, name: string):
   return null;
 }
 
-export function useArtistImage(mbid: string | undefined, name: string, options?: { deferRemote?: boolean }): string | null {
-  const [url, setUrl] = useState<string | null>(null);
+export type ArtistImageSource = "local" | "remote" | null;
+
+export function useArtistImage(mbid: string | undefined, name: string): {
+  imageUrl: string | null;
+  source: ArtistImageSource;
+  triggerRemote: () => void;
+} {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [source, setSource] = useState<ArtistImageSource>(null);
+  const [triggered, setTriggered] = useState(false);
 
   useEffect(() => {
-    if (!name) { setUrl(null); return; }
+    if (!name) { setImageUrl(null); setSource(null); return; }
     const cacheKey = mbid || name;
 
     const cached = resultCache.get(cacheKey);
     if (cached !== undefined) {
-      if (cached) setUrl(cached);
+      if (cached) setImageUrl(cached);
       return;
     }
 
-    setUrl(null);
+    setImageUrl(null);
+    setSource(null);
     let cancelled = false;
 
     async function run() {
@@ -142,43 +154,46 @@ export function useArtistImage(mbid: string | undefined, name: string, options?:
       if (cancelled) return;
       if (localUrl) {
         resultCache.set(cacheKey, localUrl);
-        setUrl(localUrl);
+        setImageUrl(localUrl);
+        setSource("local");
         return;
       }
 
-      if (options?.deferRemote) {
-        resultCache.set(cacheKey, null);
-        setUrl(null);
-        return;
-      }
-
-      const remoteUrl = await resolveArtistImageRemote(mbid, name);
-      if (cancelled) return;
-      if (remoteUrl) {
-        resultCache.set(cacheKey, remoteUrl);
-        setUrl(remoteUrl);
-      } else {
-        resultCache.set(cacheKey, null);
-        setUrl(null);
-      }
+      resultCache.set(cacheKey, null);
+      setImageUrl(null);
+      setSource(null);
     }
 
     run();
     return () => { cancelled = true; };
-  }, [mbid, name, options?.deferRemote]);
+  }, [mbid, name]);
 
-  return url;
+  const triggerRemote = useCallback(async () => {
+    if (triggered) return;
+    setTriggered(true);
+    const cacheKey = mbid || name;
+    const remoteUrl = await resolveArtistImageRemote(mbid, name);
+    if (remoteUrl) {
+      resultCache.set(cacheKey, remoteUrl);
+      setImageUrl(remoteUrl);
+      setSource("remote");
+    }
+  }, [triggered, mbid, name]);
+
+  return { imageUrl, source, triggerRemote };
 }
 
 export function useLazyArtistImage(mbid: string | undefined, name: string): {
   imageUrl: string | null;
+  source: ArtistImageSource;
   triggerRemote: () => void;
 } {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [source, setSource] = useState<ArtistImageSource>(null);
   const [triggered, setTriggered] = useState(false);
 
   useEffect(() => {
-    if (!name) { setImageUrl(null); return; }
+    if (!name) { setImageUrl(null); setSource(null); return; }
     const cacheKey = mbid || name;
     const cached = resultCache.get(cacheKey);
     if (cached !== undefined) {
@@ -186,6 +201,7 @@ export function useLazyArtistImage(mbid: string | undefined, name: string): {
       return;
     }
     setImageUrl(null);
+    setSource(null);
     let cancelled = false;
 
     async function run() {
@@ -193,6 +209,7 @@ export function useLazyArtistImage(mbid: string | undefined, name: string): {
       if (!cancelled && localUrl) {
         resultCache.set(cacheKey, localUrl);
         setImageUrl(localUrl);
+        setSource("local");
       }
     }
     run();
@@ -207,8 +224,9 @@ export function useLazyArtistImage(mbid: string | undefined, name: string): {
     if (remoteUrl) {
       resultCache.set(cacheKey, remoteUrl);
       setImageUrl(remoteUrl);
+      setSource("remote");
     }
   }, [triggered, mbid, name]);
 
-  return { imageUrl, triggerRemote };
+  return { imageUrl, source, triggerRemote };
 }

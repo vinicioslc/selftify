@@ -12,6 +12,7 @@ const CREATE_TRACKS_TABLE = `
     track_number      INTEGER,
     disc_number       INTEGER,
     duration          INTEGER,
+    bitrate           INTEGER,
     genre             TEXT,
     mbz_recording_id  TEXT,
     mbz_track_id      TEXT

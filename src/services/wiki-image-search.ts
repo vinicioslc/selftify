@@ -1,3 +1,4 @@
+import { sanitizeForPath } from "../services/organizer/sanitizer";
 import { platformFetch } from "./platform-fetch";
 
 const WIKI_API = "https://en.wikipedia.org/w/api.php";
@@ -43,10 +44,4 @@ export async function searchWikipedia(query: string, logSource: string): Promise
   }
 }
 
-export function sanitizeForPath(name: string): string {
-  return name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[/\\?%*:|"<>]/g, "_")
-    .trim();
-}
+

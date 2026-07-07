@@ -4,6 +4,24 @@ import { LyricSource } from "../types/lyrics-types";
 
 export type VisualizerType = "butterchurn" | "audiomotion" | "none";
 
+export type CoverPriority = "filesystem" | "embedded";
+
+export type YtSearchFields = {
+  artistName: boolean;
+  songName: boolean;
+  albumName: boolean;
+  releaseYear: boolean;
+  genres: boolean;
+};
+
+export const DEFAULT_YT_SEARCH_FIELDS: YtSearchFields = {
+  artistName: true,
+  songName: true,
+  albumName: true,
+  releaseYear: false,
+  genres: false,
+};
+
 export type LyricsSettings = {
   fetch: boolean;
   sources: LyricSource[];
@@ -36,11 +54,17 @@ export const DEFAULT_LYRICS_SETTINGS: LyricsSettings = {
   enableNeteaseTranslation: false,
 };
 
+export type RankKeyword = { term: string; weight: number };
+
 export type RankingWeights = {
   title: number;
   artist: number;
   album: number;
   duration: number;
+  artistOnChannel: number;
+  channelExactMatch: number;
+  coverPenalty: number;
+  keywords: RankKeyword[];
 };
 
 export type ArtworkProviderSetting = {
@@ -79,7 +103,9 @@ type SettingsState = {
   searchTimeoutMs: number;
   streamTimeoutMs: number;
   cacheTtlMinutes: number;
+  coverPriority: CoverPriority;
   rankingWeights: RankingWeights;
+  ytSearchFields: YtSearchFields;
   artworkProviders: ArtworkProviders;
   lyrics: LyricsSettings;
 
@@ -105,6 +131,8 @@ type SettingsState = {
   setStreamTimeoutMs: (ms: number) => void;
   setCacheTtlMinutes: (min: number) => void;
   setRankingWeights: (weights: RankingWeights) => void;
+  setCoverPriority: (priority: CoverPriority) => void;
+  setYtSearchFields: (fields: Partial<YtSearchFields>) => void;
   toggleSidebar: () => void;
   isArtworkProviderEnabled: (name: string) => boolean;
   getArtworkPaceMs: (name: string) => number;
@@ -134,7 +162,9 @@ export const useSettingsStore = create<SettingsState>()(
       searchTimeoutMs: 60000,
       streamTimeoutMs: 60000,
       cacheTtlMinutes: 60,
-      rankingWeights: { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5 },
+      coverPriority: "filesystem",
+      rankingWeights: { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, channelExactMatch: 1.0, coverPenalty: -3, keywords: [] },
+      ytSearchFields: { ...DEFAULT_YT_SEARCH_FIELDS },
       artworkProviders: { ...DEFAULT_ARTWORK_PROVIDERS },
       lyrics: { ...DEFAULT_LYRICS_SETTINGS },
 
@@ -161,6 +191,9 @@ export const useSettingsStore = create<SettingsState>()(
       setStreamTimeoutMs: (streamTimeoutMs) => set({ streamTimeoutMs }),
       setCacheTtlMinutes: (cacheTtlMinutes) => set({ cacheTtlMinutes }),
       setRankingWeights: (rankingWeights) => set({ rankingWeights }),
+      setCoverPriority: (coverPriority) => set({ coverPriority }),
+      setYtSearchFields: (fields) =>
+        set((state) => ({ ytSearchFields: { ...state.ytSearchFields, ...fields } })),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       isArtworkProviderEnabled: (name) => get().artworkProviders[name]?.enabled ?? true,
       getArtworkPaceMs: (name) => get().artworkProviders[name]?.paceMs ?? 1000,
@@ -174,6 +207,21 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "ytmusic-settings",
+      merge: (persisted, current) => {
+        const p = persisted as Partial<SettingsState> | undefined;
+        const merged = { ...current, ...p };
+        if (p?.rankingWeights && typeof p.rankingWeights === "object") {
+          merged.rankingWeights = { ...current.rankingWeights, ...p.rankingWeights };
+        } else {
+          merged.rankingWeights = { ...current.rankingWeights };
+        }
+        if (p?.ytSearchFields && typeof p.ytSearchFields === "object") {
+          merged.ytSearchFields = { ...current.ytSearchFields, ...p.ytSearchFields };
+        } else {
+          merged.ytSearchFields = { ...current.ytSearchFields };
+        }
+        return merged;
+      },
     }
   )
 );

@@ -12,8 +12,10 @@ import { artistImageResolver } from "../../services/artist-image/providers/artis
 import { ARTIST_PROVIDER_META } from "../../services/artist-image/providers/types";
 import type { ArtistCandidate } from "../../services/artist-image/providers/types";
 import { fetchImageAsBlobUrl } from "../../services/image-fetch";
-import { searchWikipedia, sanitizeForPath } from "../../services/wiki-image-search";
+import { searchWikipedia } from "../../services/wiki-image-search";
+import { sanitizeForPath } from "../../services/organizer/sanitizer";
 import { importFromDotImg, clearDotImgDir } from "../../services/dot-img";
+import { joinPaths } from "../../lib/path-utils";
 import { cn } from "../../lib/utils";
 
 type Props = {
@@ -81,11 +83,11 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
 
     if (saveOrigin?.folderPath) {
       const ext = getExt(blob.type);
-      const filePath = `${saveOrigin.folderPath}/${sanitizeForPath(artist.name)}/.img/${hash}.${ext}`;
+      const filePath = joinPaths(saveOrigin.folderPath, sanitizeForPath(artist.name), ".img", `${hash}.${ext}`);
 
       const exists = await p.fileExists(filePath).catch(() => false);
       if (!exists) {
-        await p.createDirectory(`${saveOrigin.folderPath}/${sanitizeForPath(artist.name)}/.img`).catch(() => {});
+        await p.createDirectory(joinPaths(saveOrigin.folderPath, sanitizeForPath(artist.name), ".img")).catch(() => {});
         await p.writeFile(filePath, new Uint8Array(arrayBuffer));
       }
     }
@@ -117,7 +119,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
           const { getPlatformService } = await import("../../services/platform/factory");
           const p = await getPlatformService();
           const artistDir = sanitizeForPath(artist.name);
-          const blobUrl = await importFromDotImg(`${artistOrigin.folderPath}/${artistDir}/.img`, p, { artistName: artistNorm });
+          const blobUrl = await importFromDotImg(joinPaths(artistOrigin.folderPath, artistDir, ".img"), p, { artistName: artistNorm });
           if (blobUrl) setPreviewUrl(blobUrl);
         } catch {
           // .img folder doesn't exist
@@ -249,7 +251,7 @@ export function ArtistImageManager({ open, onOpenChange, artist, currentImageUrl
       const removeOrigin = origins.find((o) => o.id === artist.originId) ?? fallbackOrigin;
       if (removeOrigin?.folderPath) {
         const artistDir = sanitizeForPath(artist.name);
-        await clearDotImgDir(`${removeOrigin.folderPath}/${artistDir}/.img`, p);
+        await clearDotImgDir(joinPaths(removeOrigin.folderPath, artistDir, ".img"), p);
       }
       setPreviewUrl(null);
       setSaved(false);

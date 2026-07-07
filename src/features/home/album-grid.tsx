@@ -13,7 +13,7 @@ export function AlbumGrid({ albums, onPlayAlbum, onNavigateAlbum }: AlbumGridPro
   if (albums.length === 0) return null;
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 uw:grid-cols-7">
       {albums.map((album) => (
         <div
           key={album.id}

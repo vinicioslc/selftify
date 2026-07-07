@@ -1,5 +1,5 @@
 import { useAuthStore } from "../../stores/auth.store";
-import { useSettingsStore, VisualizerType } from "../../stores/settings.store";
+import { useSettingsStore, VisualizerType, type YtSearchFields } from "../../stores/settings.store";
 import { buildLocalOrigin } from "../../lib/build-navigation";
 import { Origin } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
@@ -12,7 +12,7 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
 import { useState, useEffect } from "react";
-import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe, Database } from "lucide-react";
+import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe, Database, RefreshCw, Download } from "lucide-react";
 import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
 import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
 import { OriginEditDialog } from "./origin-edit-dialog";
@@ -27,6 +27,45 @@ const PROVIDER_META: Record<string, { label: string; description: string; domain
   itunes: { label: "iTunes Search", description: "Apple Music / iTunes Store album art", domain: "itunes.apple.com" },
   deezer: { label: "Deezer", description: "Deezer album covers", domain: "api.deezer.com" },
 };
+
+const YT_SEARCH_FIELD_META: { key: keyof YtSearchFields; label: string; description: string }[] = [
+  { key: "artistName", label: "Artist Name", description: "e.g. Metallica" },
+  { key: "songName", label: "Song Title", description: "e.g. Enter Sandman" },
+  { key: "albumName", label: "Album Name", description: "e.g. Metallica" },
+  { key: "releaseYear", label: "Release Year", description: "e.g. 1991 — helps disambiguate albums with the same name" },
+  { key: "genres", label: "Genre", description: "e.g. Thrash Metal — first genre tag from MusicBrainz" },
+];
+
+function buildSearchPreview(fields: YtSearchFields): string {
+  const demo: Record<string, string | undefined> = {
+    artistName: "Metallica",
+    songName: "Enter Sandman",
+    albumName: "Metallica",
+    releaseYear: "1991",
+    genres: "Thrash Metal",
+  };
+  const parts: string[] = [];
+  for (const { key } of YT_SEARCH_FIELD_META) {
+    if (fields[key]) {
+      const val = demo[key];
+      if (val) parts.push(val);
+    }
+  }
+  return parts.join(" — ") || "";
+}
+
+const COVER_PRIORITY_OPTIONS: { value: "filesystem" | "embedded"; label: string; description: string }[] = [
+  {
+    value: "filesystem",
+    label: "File system (.img/ folder)",
+    description: "Prefer cover images from the .img/ folder inside each album directory. Falls back to embedded MP3 cover art if not found.",
+  },
+  {
+    value: "embedded",
+    label: "Embedded (MP3 tags)",
+    description: "Prefer cover art extracted from audio file metadata tags. Falls back to .img/ folder if not found.",
+  },
+];
 
 type SettingsPageProps = {
   initialTab?: string;
@@ -49,6 +88,8 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     searchTimeoutMs, setSearchTimeoutMs,
     streamTimeoutMs, setStreamTimeoutMs,
     cacheTtlMinutes, setCacheTtlMinutes,
+    ytSearchFields, setYtSearchFields,
+    coverPriority, setCoverPriority,
     artworkProviders, isArtworkProviderEnabled, getArtworkPaceMs, setArtworkProvider,
   } = useSettingsStore();
 
@@ -74,6 +115,11 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   const [clearingImageCache, setClearingImageCache] = useState(false);
   const [organizing, setOrganizing] = useState(false);
   const [syncingMetadata, setSyncingMetadata] = useState(false);
+  const [ytDlpVersion, setYtDlpVersion] = useState<string | null>(null);
+  const [ytDlpFound, setYtDlpFound] = useState(false);
+  const [checkingYtDlp, setCheckingYtDlp] = useState(false);
+  const [updatingYtDlp, setUpdatingYtDlp] = useState(false);
+  const [ytDlpUpdateMsg, setYtDlpUpdateMsg] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     folderPath: "",
@@ -147,6 +193,54 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
     }
   }
 
+  async function handleCheckYtDlp() {
+    if (!window.electronApi) return;
+    setCheckingYtDlp(true);
+    setYtDlpUpdateMsg(null);
+    try {
+      const result = await window.electronApi.yt.checkVersion();
+      setYtDlpFound(result.found);
+      setYtDlpVersion(result.version);
+      useStatusStore.getState().addMessage(
+        result.found ? `yt-dlp v${result.version}` : "yt-dlp not found",
+        result.found ? "info" : "warn",
+        "Settings"
+      );
+    } catch (err) {
+      setYtDlpFound(false);
+      setYtDlpVersion(null);
+      useStatusStore.getState().addMessage("Failed to check yt-dlp", "danger", "Settings");
+    } finally {
+      setCheckingYtDlp(false);
+    }
+  }
+
+  async function handleUpdateYtDlp() {
+    if (!window.electronApi) return;
+    setUpdatingYtDlp(true);
+    setYtDlpUpdateMsg(null);
+    useStatusStore.getState().addMessage("Updating yt-dlp...", "info", "Settings");
+    try {
+      const result = await window.electronApi.yt.update();
+      setYtDlpUpdateMsg(result.message);
+      useStatusStore.getState().addMessage(
+        result.success ? "yt-dlp updated" : "yt-dlp update failed",
+        result.success ? "success" : "danger",
+        "Settings"
+      );
+      if (result.success) {
+        const version = await window.electronApi.yt.checkVersion();
+        setYtDlpFound(version.found);
+        setYtDlpVersion(version.version);
+      }
+    } catch (err) {
+      setYtDlpUpdateMsg("Update failed");
+      useStatusStore.getState().addMessage("yt-dlp update failed", "danger", "Settings");
+    } finally {
+      setUpdatingYtDlp(false);
+    }
+  }
+
   return (
     <div className="flex flex-col">
       <div className="shrink-0 px-6 pt-6">
@@ -167,6 +261,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                   <TabsTrigger value="visualizer">Visualizer</TabsTrigger>
                   <TabsTrigger value="network">Network</TabsTrigger>
                   <TabsTrigger value="ranking">Ranking</TabsTrigger>
+                  <TabsTrigger value="search">Search</TabsTrigger>
                   <TabsTrigger value="artwork">Artwork</TabsTrigger>
                   <TabsTrigger value="appearance">Appearance</TabsTrigger>
                 </TabsList>
@@ -587,12 +682,116 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                     </Button>
                     <p className="mt-1 text-xs text-muted-foreground">Remove cached album, artist, and search thumbnails so they are fetched again</p>
                   </div>
+                  <Separator />
+                  <div className="space-y-3">
+                    <div>
+                      <p className="font-medium">yt-dlp</p>
+                      <p className="text-sm text-muted-foreground">
+                        {ytDlpFound
+                          ? `Version ${ytDlpVersion}`
+                          : ytDlpVersion === null && !checkingYtDlp
+                            ? "Click check to detect"
+                            : "Not found"}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" className="gap-2" onClick={handleCheckYtDlp} disabled={checkingYtDlp || updatingYtDlp}>
+                        <RefreshCw className={`h-4 w-4 ${checkingYtDlp ? "animate-spin" : ""}`} />
+                        {checkingYtDlp ? "Checking..." : "Check Version"}
+                      </Button>
+                      {ytDlpFound && (
+                        <Button variant="outline" size="sm" className="gap-2" onClick={handleUpdateYtDlp} disabled={updatingYtDlp}>
+                          <Download className={`h-4 w-4 ${updatingYtDlp ? "animate-spin" : ""}`} />
+                          {updatingYtDlp ? "Updating..." : "Update"}
+                        </Button>
+                      )}
+                    </div>
+                    {ytDlpUpdateMsg && (
+                      <p className="text-xs text-muted-foreground whitespace-pre-wrap">{ytDlpUpdateMsg}</p>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
 
             <TabsContent value="ranking" className="space-y-4">
               <RankingView />
+            </TabsContent>
+
+            <TabsContent value="search" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">YouTube Search Fields</CardTitle>
+                  <CardDescription>
+                    Control which MusicBrainz fields are included when searching YouTube via yt-dlp.
+                    Fields marked OFF are omitted from the search query but still used internally for ranking.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {YT_SEARCH_FIELD_META.map(({ key, label, description }) => (
+                    <div key={key} className="flex items-center justify-between rounded-lg border p-3">
+                      <div className="flex-1">
+                        <p className="font-medium">{label}</p>
+                        <p className="text-xs text-muted-foreground">{description}</p>
+                      </div>
+                      <Switch
+                        id={`yt-field-${key}`}
+                        checked={ytSearchFields[key]}
+                        onCheckedChange={(v) => setYtSearchFields({ [key]: v })}
+                      />
+                    </div>
+                  ))}
+
+                  <Separator />
+
+                  <div>
+                    <p className="mb-1 text-sm font-medium">Query Preview</p>
+                    <p className="rounded-md bg-muted px-3 py-2 font-mono text-xs">
+                      {buildSearchPreview(ytSearchFields) || <span className="italic text-muted-foreground">No fields selected — search will fail</span>}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Example using <em>Metallica — Enter Sandman — Metallica (1991)</em>
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Cover Image Priority</CardTitle>
+                  <CardDescription>
+                    Choose which cover image source takes precedence during playback.
+                    "File system" checks the <code>.img/</code> folder first; "Embedded" uses the cover art extracted from audio file tags.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-3">
+                    {COVER_PRIORITY_OPTIONS.map(({ value, label, description }) => (
+                      <div
+                        key={value}
+                        className={`flex items-start gap-3 rounded-lg border p-4 cursor-pointer transition-colors ${
+                          coverPriority === value ? "border-primary" : ""
+                        }`}
+                        onClick={() => setCoverPriority(value)}
+                      >
+                        <div className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 ${
+                          coverPriority === value
+                            ? "border-primary bg-primary"
+                            : "border-muted-foreground"
+                        }`}>
+                          {coverPriority === value && (
+                            <div className="h-full w-full rounded-full bg-primary" />
+                          )}
+                        </div>
+                        <div>
+                          <p className="font-medium">{label}</p>
+                          <p className="text-xs text-muted-foreground">{description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="artwork" className="space-y-4">

@@ -3,9 +3,10 @@ import * as artistRepo from "../../services/db/repositories/artist-repo";
 import * as configRepo from "../../services/db/repositories/config-repo";
 import type { SqliteDbAlbumMeta, SqliteDbAlbumTrack, SqliteDbConfig } from "../../services/sqlite-db/sqlite-db-types";
 import { getLibraryRoot, ensureDb } from "../../services/db/ensure-db";
+import { joinPaths, fileNameFromPath, isAbsolutePath, normalizePath, splitPath } from "../../lib/path-utils";
 
 function trackToId(path: string): string {
-  return path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? path;
+  return fileNameFromPath(path).replace(/\.[^.]+$/, "") || path;
 }
 
 export async function getSongByMbid(mbid: string): Promise<SqliteDbAlbumTrack & { albumDir: string } | null> {
@@ -15,7 +16,7 @@ export async function getSongByMbid(mbid: string): Promise<SqliteDbAlbumTrack & 
   const albums = albumRepo.getAllAlbums();
   for (const { meta, artistDir } of albums) {
     const track = meta.tracks.find((t) => t.mbzRecordingId === mbid);
-    if (track) return { ...track, albumDir: `${artistDir}/${meta.name}` };
+    if (track) return { ...track, albumDir: joinPaths(artistDir, meta.name) };
   }
   return null;
 }
@@ -24,11 +25,11 @@ export async function getSongById(id: string): Promise<SqliteDbAlbumTrack & { al
   const ready = await ensureDb();
   if (!ready) return null;
 
-  const relativePath = id.startsWith("/") ? id.slice(1) : id;
+  const relativePath = isAbsolutePath(id) ? id.slice(1) : id;
   const albums = albumRepo.getAllAlbums();
   for (const { meta, artistDir } of albums) {
     const track = meta.tracks.find((t) => t.path === relativePath || t.path === id);
-    if (track) return { ...track, albumDir: `${artistDir}/${meta.name}` };
+    if (track) return { ...track, albumDir: joinPaths(artistDir, meta.name) };
   }
   return null;
 }
@@ -101,7 +102,7 @@ export async function getSongByNameAndArtist(
         t.name.toLowerCase() === songName.toLowerCase() &&
         t.artistName.toLowerCase() === artistName.toLowerCase(),
     );
-    if (track) return { ...track, albumDir: `${artistDir}/${meta.name}` };
+    if (track) return { ...track, albumDir: joinPaths(artistDir, meta.name) };
   }
   return null;
 }
@@ -153,19 +154,19 @@ export async function getAlbumDir(artist: string, album: string): Promise<string
   // Try to get the actual filesystem path from the first track's path
   if (meta.tracks.length > 0 && meta.tracks[0].path && meta.tracks[0].path.includes("/")) {
     // After file organizer: path = "Artist/Album (Year)/file.ext"
-    const parts = meta.tracks[0].path.split("/");
+    const parts = splitPath(meta.tracks[0].path);
     if (parts.length >= 2) {
-      return `${root}/${parts[0]}/${parts[1]}`;
+      return joinPaths(root, parts[0], parts[1]);
     }
   }
 
   // Before organizer or no tracks: construct from sanitized names
   const { sanitizeForPath } = await import("../../services/organizer/sanitizer");
   const artistDir = sanitizeForPath(artist);
-  const albumDir = meta.releaseYear
-    ? `${sanitizeForPath(album)} (${meta.releaseYear})`
-    : sanitizeForPath(album);
-  return `${root}/${artistDir}/${albumDir}`;
+  const albumDir = sanitizeForPath(album);
+  return meta.releaseYear
+    ? joinPaths(root, artistDir, `${albumDir} (${meta.releaseYear})`)
+    : joinPaths(root, artistDir, albumDir);
 }
 
 export async function getConfig(): Promise<SqliteDbConfig | null> {

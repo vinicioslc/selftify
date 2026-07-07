@@ -42,7 +42,7 @@ import { moveSongToTrash } from "../../services/move-to-trash";
 type SearchMode = "local" | "musicbrainz" | "youtube";
 
 function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavigate?: (artist: AlbumArtist) => void }) {
-  const imageUrl = useArtistImage(artist.mbz, artist.name);
+  const { imageUrl, triggerRemote } = useArtistImage(artist.mbz, artist.name);
   return (
     <div
       className="flex cursor-pointer flex-col items-center gap-2 transition-opacity hover:opacity-80"
@@ -54,6 +54,8 @@ function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavig
         fallback={artist.name.charAt(0)}
         emptySvg={<ArtistEmptySvg />}
         className="h-20 w-20 rounded-md"
+        lazy={!imageUrl}
+        onLazyLoad={triggerRemote}
       />
       <p className="max-w-20 truncate text-center text-xs font-medium">{artist.name}</p>
     </div>
@@ -97,6 +99,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     candidates: YoutubeSearchScoredVideo[] | null;
     selectedVideoId: string | null;
     loading: boolean;
+    searchQuery: string;
   };
   const [expandedCandidates, setExpandedCandidates] = useState<Map<string, ExpandedState>>(new Map());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -397,9 +400,10 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       setExpandedIds((prev) => new Set(prev).add(songId));
       return;
     }
+    const defaultQuery = [song.artistName, song.name, song.albumName].filter(Boolean).join(" ");
     setExpandedCandidates((prev) => {
       const next = new Map(prev);
-      next.set(songId, { candidates: null, selectedVideoId: null, loading: true });
+      next.set(songId, { candidates: null, selectedVideoId: null, loading: true, searchQuery: defaultQuery });
       return next;
     });
     setExpandedIds((prev) => new Set(prev).add(songId));
@@ -409,16 +413,16 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       setExpandedCandidates((prev) => {
         const next = new Map(prev);
         if (result && result.scored.length > 0) {
-          next.set(songId, { candidates: result.scored, selectedVideoId: result.scored[0].video.id, loading: false });
+          next.set(songId, { candidates: result.scored, selectedVideoId: result.scored[0].video.id, loading: false, searchQuery: result.query });
         } else {
-          next.set(songId, { candidates: [], selectedVideoId: null, loading: false });
+          next.set(songId, { candidates: [], selectedVideoId: null, loading: false, searchQuery: defaultQuery });
         }
         return next;
       });
     } catch {
       setExpandedCandidates((prev) => {
         const next = new Map(prev);
-        next.set(songId, { candidates: [], selectedVideoId: null, loading: false });
+        next.set(songId, { candidates: [], selectedVideoId: null, loading: false, searchQuery: defaultQuery });
         return next;
       });
     }
@@ -439,6 +443,55 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
         if (saved) {
           setSavedMbzYtMapping({ ...saved, selectedVideoId: videoId, selectedType: "manual", updatedAt: Date.now() });
         }
+      });
+    }
+  }
+
+  function handleSearchQueryChange(songId: string, newQuery: string) {
+    setExpandedCandidates((prev) => {
+      const next = new Map(prev);
+      const entry = next.get(songId);
+      if (entry) {
+        next.set(songId, { ...entry, searchQuery: newQuery });
+      }
+      return next;
+    });
+  }
+
+  async function handleReSearchCandidates(songId: string) {
+    const allSongs = [...localResults, ...(mbResults?.songs ?? []), ...ytResults.songs];
+    const song = allSongs.find((s) => s.id === songId);
+    if (!song) return;
+    const entry = expandedCandidates.get(songId);
+    if (!entry || !entry.searchQuery.trim()) return;
+
+    setExpandedCandidates((prev) => {
+      const next = new Map(prev);
+      const e = next.get(songId);
+      if (e) next.set(songId, { ...e, candidates: null, loading: true });
+      return next;
+    });
+
+    try {
+      const result = await searchAndRankAll(song, entry.searchQuery.trim());
+      setExpandedCandidates((prev) => {
+        const next = new Map(prev);
+        const e = next.get(songId);
+        if (e) {
+          if (result && result.scored.length > 0) {
+            next.set(songId, { ...e, candidates: result.scored, selectedVideoId: result.scored[0].video.id, loading: false, searchQuery: result.query });
+          } else {
+            next.set(songId, { ...e, candidates: [], selectedVideoId: null, loading: false });
+          }
+        }
+        return next;
+      });
+    } catch {
+      setExpandedCandidates((prev) => {
+        const next = new Map(prev);
+        const e = next.get(songId);
+        if (e) next.set(songId, { ...e, candidates: [], selectedVideoId: null, loading: false });
+        return next;
       });
     }
   }
@@ -707,60 +760,82 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   const renderMbExpanded = useCallback(
     (song: Song) => {
       const state = expandedCandidates.get(song.id);
-      if (!state || state.loading) {
-        return (
-          <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Searching YouTube...
-          </div>
-        );
-      }
-      if (!state.candidates || state.candidates.length === 0) {
-        return (
-          <div className="py-1 text-sm text-muted-foreground">
-            No YouTube matches found
-          </div>
-        );
-      }
+      if (!state) return null;
       return (
-        <div className="space-y-0.5">
-          {state.candidates.map((scored) => {
-            const v = scored.video;
-            const bd = scored.breakdown;
-            const isSelected = state.selectedVideoId === v.id;
-            return (
-              <label
-                key={v.id}
-                className={cn(
-                  "flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent/50",
-                  isSelected && "bg-accent/30",
-                )}
-              >
-                <input
-                  type="radio"
-                  name={`candidate-${song.id}`}
-                  checked={isSelected}
-                  onChange={() => handleSelectCandidate(song, v.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  className="h-3.5 w-3.5 accent-primary"
-                />
-                <span className="flex-1 truncate font-medium">{v.title}</span>
-                <span className="hidden truncate text-muted-foreground sm:inline max-w-[120px]">
-                  {v.uploader}
-                </span>
-                <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {bd.score.toFixed(1)}
-                </span>
-                <span className="flex shrink-0 gap-1 text-[10px] text-muted-foreground">
-                  {bd.titleMatch && <span className="font-bold text-green-500" title="Title match">T</span>}
-                  {bd.artistMatch && <span className="font-bold text-blue-500" title="Artist match">A</span>}
-                  {bd.albumMatch && <span className="font-bold text-amber-500" title="Album match">Al</span>}
-                  {bd.exactDuration && <span className="font-bold text-purple-500" title="Exact duration">D</span>}
-                  {bd.closestDuration && <span className="font-bold text-purple-400" title="Closest duration">~D</span>}
-                </span>
-              </label>
-            );
-          })}
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={state.searchQuery}
+              onChange={(e) => handleSearchQueryChange(song.id, e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleReSearchCandidates(song.id)}
+              placeholder="YouTube search term..."
+              className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 px-3"
+              onClick={(e) => { e.stopPropagation(); handleReSearchCandidates(song.id); }}
+              disabled={state.loading || !state.searchQuery.trim()}
+              title="Search YouTube with this term"
+            >
+              {state.loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="h-4 w-4" />
+              )}
+              <span>{state.loading ? "Searching..." : "Search"}</span>
+            </Button>
+          </div>
+          {state.loading ? null : !state.candidates || state.candidates.length === 0 ? (
+            <div className="py-1 text-sm text-muted-foreground">
+              No YouTube matches found
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {state.candidates.map((scored) => {
+                const v = scored.video;
+                const bd = scored.breakdown;
+                const isSelected = state.selectedVideoId === v.id;
+                return (
+                  <label
+                    key={v.id}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent/50",
+                      isSelected && "bg-accent/30",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name={`candidate-${song.id}`}
+                      checked={isSelected}
+                      onChange={() => handleSelectCandidate(song, v.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-3.5 w-3.5 accent-primary"
+                    />
+                    <span className="flex-1 truncate font-medium">{v.title}</span>
+                    <span className="hidden truncate text-muted-foreground sm:inline max-w-[120px]">
+                      {v.uploader}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                      {bd.score.toFixed(1)}
+                    </span>
+                    <span className="flex shrink-0 gap-1 text-[10px] text-muted-foreground">
+                      {bd.titleMatch && <span className="font-bold text-green-500" title="Title match">T</span>}
+                      {bd.artistMatch && <span className="font-bold text-blue-500" title="Artist match">A</span>}
+                      {bd.channelExactMatch && <span className="font-bold text-indigo-500" title="Artist on channel exactly">ChE</span>}
+                      {bd.isCover && <span className="font-bold text-rose-500" title="Cover song">Cv</span>}
+                      {bd.albumMatch && <span className="font-bold text-amber-500" title="Album match">Al</span>}
+                      {bd.exactDuration && <span className="font-bold text-purple-500" title="Exact duration">D</span>}
+                      {bd.closestDuration && <span className="font-bold text-purple-400" title="Closest duration">~D</span>}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </div>
       );
     },
@@ -973,7 +1048,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
             {mbResults.albums.length > 0 && (
               <section className="space-y-3">
                 <h2 className="text-lg font-semibold">Albums</h2>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 uw:grid-cols-7">
                   {mbResults.albums.map((album) => (
                     <Card
                       key={album.id}

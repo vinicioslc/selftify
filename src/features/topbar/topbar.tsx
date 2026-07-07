@@ -22,6 +22,21 @@ const viewLabels: Record<AppView, string> = {
   "artist-detail": "Artist",
 };
 
+const viewPaths: Record<AppView, string> = {
+  home: "/",
+  search: "/search",
+  "local-albums": "/library/albums",
+  "local-artists": "/library/artists",
+  "local-songs": "/library/songs",
+  playlists: "/playlists",
+  "playlist-detail": "/playlist",
+  settings: "/settings",
+  "settings-visualizer": "/settings/visualizer",
+  "now-playing": "/now-playing",
+  "album-detail": "/album",
+  "artist-detail": "/artist",
+};
+
 const levelConfig: Record<StatusLevel, { label: string; dot: string }> = {
   info: { label: "Info", dot: "bg-blue-500" },
   success: { label: "Success", dot: "bg-green-500" },
@@ -50,7 +65,7 @@ function StatusDot({ level }: { level: StatusLevel }) {
   );
 }
 
-export function TopBar({ currentView, onToggleDebug }: { currentView: AppView; onToggleDebug?: () => void }) {
+export function TopBar({ currentView }: { currentView: AppView }) {
   const messages = useStatusStore((s) => s.messages);
   const clearMessages = useStatusStore((s) => s.clearMessages);
   const { isElectron, isMaximized, minimize, maximize, close } =
@@ -65,10 +80,16 @@ export function TopBar({ currentView, onToggleDebug }: { currentView: AppView; o
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       {/* Left: identity */}
-      <div className="flex items-center gap-2 text-sm font-medium text-foreground/70 shrink-0">
+      <div className="flex items-center gap-1 text-sm font-medium text-foreground/70 shrink-0">
         <span className="text-primary font-semibold tracking-wide">Selftify</span>
         <span className="text-foreground/40">/</span>
         <span className="text-foreground/50 text-xs">{viewLabels[currentView]}</span>
+        <button
+          data-no-drag
+          onClick={() => navigator.clipboard.writeText(viewPaths[currentView])}
+          className="text-foreground/30 text-[10px] font-mono hidden md:inline hover:text-foreground/60 transition-colors ml-1"
+          title="Copy path"
+        >{viewPaths[currentView]}</button>
       </div>
 
       {/* Center: status */}
@@ -94,7 +115,7 @@ export function TopBar({ currentView, onToggleDebug }: { currentView: AppView; o
           <PopoverContent
             align="center"
             sideOffset={6}
-            className="w-96 p-0"
+            className="min-w-[28rem] w-[32rem] resize-x overflow-auto p-0"
             data-no-drag
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           >
@@ -126,19 +147,6 @@ export function TopBar({ currentView, onToggleDebug }: { currentView: AppView; o
 
       {/* Right: window controls */}
       <div className="flex items-center gap-0.5 shrink-0">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 rounded-none text-red-500 hover:text-red-400 hover:bg-accent"
-          onClick={onToggleDebug}
-          data-no-drag
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          aria-label="Toggle YouTube debug panel"
-        >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-          </svg>
-        </Button>
         {isElectron && (
           <>
             <WindowButton

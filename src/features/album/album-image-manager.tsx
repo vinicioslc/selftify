@@ -14,10 +14,12 @@ import { artworkResolver } from "../../services/artwork/artwork-resolver";
 import { ARTWORK_PROVIDER_META } from "../../services/artwork/providers/meta";
 import type { ArtworkCandidate } from "../../services/artwork/providers/types";
 import { fetchImageAsBlobUrl } from "../../services/image-fetch";
-import { searchWikipedia, sanitizeForPath } from "../../services/wiki-image-search";
+import { searchWikipedia } from "../../services/wiki-image-search";
+import { sanitizeForPath } from "../../services/organizer/sanitizer";
 import { invalidateAlbumCaches } from "../../services/invalidate-caches";
 import { importFromDotImg, clearDotImgDir } from "../../services/dot-img";
 
+import { joinPaths } from "../../lib/path-utils";
 import { cn } from "../../lib/utils";
 
 type Props = {
@@ -106,11 +108,11 @@ async function saveImageToStoreAndDisk(
 
   if (albumOrigin?.folderPath) {
     const albumAbsDir = await getAlbumAbsDir(album, albumOrigin.folderPath);
-    const filePath = `${albumAbsDir}/.img/${hash}.jpg`;
+    const filePath = joinPaths(albumAbsDir, ".img", `${hash}.jpg`);
 
     const exists = await p.fileExists(filePath).catch(() => false);
     if (!exists) {
-      await p.createDirectory(`${albumAbsDir}/.img`).catch(() => {});
+      await p.createDirectory(joinPaths(albumAbsDir, ".img")).catch(() => {});
       await p.writeFile(filePath, new Uint8Array(arrayBuffer));
     }
 
@@ -157,7 +159,7 @@ async function getAlbumAbsDir(album: Album, folderPath: string): Promise<string>
     const result = await getAlbumDir(album.albumArtistName, album.name);
     if (result) return result;
   } catch {}
-  const base = `${folderPath}/${sanitizeForPath(album.albumArtistName)}/${sanitizeForPath(album.name)}`;
+  const base = joinPaths(folderPath, sanitizeForPath(album.albumArtistName), sanitizeForPath(album.name));
   return album.releaseYear ? `${base} (${album.releaseYear})` : base;
 }
 
@@ -217,7 +219,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
         const { getPlatformService } = await import("../../services/platform/factory");
         const p = await getPlatformService();
         const albumAbsDir = await getAlbumAbsDir(album, localOrigin.folderPath);
-        const blobUrl = await importFromDotImg(`${albumAbsDir}/.img`, p, { artistName: artistNameNorm, albumName: albumNameNorm });
+        const blobUrl = await importFromDotImg(joinPaths(albumAbsDir, ".img"), p, { artistName: artistNameNorm, albumName: albumNameNorm });
         if (blobUrl) setPreviewUrl(blobUrl);
       } catch {
         // .img folder doesn't exist — normal
@@ -410,7 +412,7 @@ export function AlbumImageManager({ open, onOpenChange, album, currentImageUrl, 
       const albumOrigin = origins.find((o) => o.id === album.originId) ?? fallbackOrigin;
       if (albumOrigin?.folderPath) {
         const albumAbsDir = await getAlbumAbsDir(album, albumOrigin.folderPath);
-        await clearDotImgDir(`${albumAbsDir}/.img`, p);
+        await clearDotImgDir(joinPaths(albumAbsDir, ".img"), p);
       }
       setPreviewUrl(null);
       setSaved(false);

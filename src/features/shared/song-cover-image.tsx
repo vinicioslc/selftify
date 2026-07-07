@@ -18,7 +18,6 @@ export function SongCoverImage({ song, alt, fallback, className }: SongCoverImag
       mbzReleaseGroupId: song.mbzReleaseGroupId,
       mbzReleaseId: song.mbzAlbumId,
     },
-    { deferRemote: true },
   );
 
   const finalUrl = coverUrl || song.imageUrl;

@@ -11,6 +11,7 @@ interface TrackRow {
   track_number: number | null;
   disc_number: number | null;
   duration: number | null;
+  bitrate: number | null;
   genre: string | null;
   mbz_recording_id: string | null;
   mbz_track_id: string | null;
@@ -25,6 +26,7 @@ function rowToTrack(row: TrackRow): SqliteDbAlbumTrack {
     trackNumber: row.track_number,
     discNumber: row.disc_number,
     duration: row.duration,
+    bitrate: row.bitrate ?? undefined,
     genre: row.genre,
     mbzRecordingId: row.mbz_recording_id,
     mbzTrackId: row.mbz_track_id,
@@ -41,9 +43,9 @@ export function getTracksByAlbum(albumId: string): SqliteDbAlbumTrack[] {
 export function upsertTrack(track: SqliteDbAlbumTrack, albumId: string): void {
   const id = `${albumId}/${track.path}`;
   exec(
-    `INSERT OR REPLACE INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, genre, mbz_recording_id, mbz_track_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, albumId, track.path, track.name, track.artistName, track.albumName, track.trackNumber, track.discNumber, track.duration, track.genre, track.mbzRecordingId, track.mbzTrackId],
+    `INSERT OR REPLACE INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, bitrate, genre, mbz_recording_id, mbz_track_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, albumId, track.path, track.name, track.artistName, track.albumName, track.trackNumber, track.discNumber, track.duration, track.bitrate ?? null, track.genre, track.mbzRecordingId, track.mbzTrackId],
   );
 }
 

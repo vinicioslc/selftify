@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const CREATE_TABLES = [
   `CREATE TABLE IF NOT EXISTS _meta (
@@ -57,6 +57,7 @@ export const CREATE_TABLES = [
     track_number      INTEGER,
     disc_number       INTEGER,
     duration          INTEGER,
+    bitrate           INTEGER,
     genre             TEXT,
     mbz_recording_id  TEXT,
     mbz_track_id      TEXT

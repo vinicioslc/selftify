@@ -47,6 +47,43 @@ describe("scoreYouTubeResults", () => {
     expect(result[0].breakdown.score).toBeGreaterThan(0);
   });
 
+  it("should set channelExactMatch when channel equals artist name", () => {
+    const videos = [makeVideo({ id: "v1", uploader: "Test Artist" })];
+    const result = scoreYouTubeResults(videos, EXPECTED);
+    expect(result[0].breakdown.channelExactMatch).toBe(true);
+  });
+
+  it("should not set channelExactMatch when channel differs from artist name", () => {
+    const videos = [makeVideo({ id: "v1", uploader: "Different Channel" })];
+    const result = scoreYouTubeResults(videos, EXPECTED);
+    expect(result[0].breakdown.channelExactMatch).toBe(false);
+  });
+
+  it("should set channelExactMatch with diacritics in artist name", () => {
+    const videos = [makeVideo({ id: "v1", uploader: "Café Artíst" })];
+    const result = scoreYouTubeResults(videos, { title: "Test", artist: "Café Artíst", duration: 240 });
+    expect(result[0].breakdown.channelExactMatch).toBe(true);
+  });
+
+  it("should set isCover when title contains 'cover'", () => {
+    const videos = [makeVideo({ id: "v1", title: "Awesome Song (Cover)" })];
+    const result = scoreYouTubeResults(videos, EXPECTED);
+    expect(result[0].breakdown.isCover).toBe(true);
+    expect(result[0].breakdown.score).toBeLessThan(0);
+  });
+
+  it("should set isCover when title contains 'covers'", () => {
+    const videos = [makeVideo({ id: "v1", title: "Covers Medley 2024" })];
+    const result = scoreYouTubeResults(videos, EXPECTED);
+    expect(result[0].breakdown.isCover).toBe(true);
+  });
+
+  it("should not set isCover for unrelated title", () => {
+    const videos = [makeVideo({ id: "v1", title: "Original Song" })];
+    const result = scoreYouTubeResults(videos, EXPECTED);
+    expect(result[0].breakdown.isCover).toBe(false);
+  });
+
   it("should handle custom keywords", () => {
     const videos = [makeVideo({ id: "v1", title: "Test Song CD Audio" })];
     const result = scoreYouTubeResults(videos, EXPECTED, {
@@ -55,6 +92,8 @@ describe("scoreYouTubeResults", () => {
       album: 1.0,
       duration: 0.5,
       artistOnChannel: 0.3,
+      channelExactMatch: 1.0,
+      coverPenalty: -3,
       keywords: [{ term: "CD Audio", weight: 1.0 }],
     });
     expect(result[0].breakdown.keywordScore).toBe(1.0);

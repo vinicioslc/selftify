@@ -1,6 +1,7 @@
 import { OriginType } from "../../types/domain-types";
 import type { Song, Album, AlbumArtist } from "../../types/domain-types";
 import type { SqliteDbAlbumMeta, SqliteDbAlbumTrack, SqliteDbArtistMeta } from "./sqlite-db-types";
+import { joinPaths } from "../../lib/path-utils";
 
 function trackFallbackId(track: SqliteDbAlbumTrack): string {
   return track.path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? track.path;
@@ -13,24 +14,38 @@ export function sqliteDbTrackToSong(
   albumMeta?: SqliteDbAlbumMeta,
   imageUrl?: string | null,
 ): Song {
+  // If track.name is empty or looks like a full path (contains / or \),
+  // fall back to the filename stem from track.path
+  let displayName = track.name;
+  if (
+    !displayName ||
+    displayName.includes("/") ||
+    displayName.includes("\\") ||
+    /^[A-Za-z]__/.test(displayName)
+  ) {
+    const stem = track.path.split("/").pop()?.split("\\").pop()?.replace(/\.[^/.]+$/, "") || "";
+    displayName = stem || "Unknown Track";
+  }
+
   return {
     id: albumMeta
       ? `${originId}:${albumMeta.name}:${track.path}`
       : `${originId}:${trackFallbackId(track)}`,
     originId,
     originType,
-    name: track.name,
+    name: displayName,
     artistName: track.artistName,
     albumName: track.albumName || albumMeta?.name || undefined,
     albumArtistName: albumMeta?.albumArtist || undefined,
     trackNumber: track.trackNumber || undefined,
     discNumber: track.discNumber || undefined,
     duration: track.duration,
+    bitrate: track.bitrate,
     imageUrl: imageUrl ?? null,
     path: albumMeta
       ? track.path.includes("/")
         ? track.path
-        : `${albumMeta.artistName}/${albumMeta.name}/${track.path}`
+        : joinPaths(albumMeta.artistName, albumMeta.name, track.path)
       : track.path,
     genres: track.genre ? [track.genre] : [],
     releaseYear: albumMeta?.releaseYear || undefined,

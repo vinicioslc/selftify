@@ -6,6 +6,8 @@ import { useAuthStore } from "../../stores/auth.store";
 import { PlayerStatus } from "../../types/domain-types";
 import { OriginType } from "../../types/domain-types";
 import { getController } from "../../api/controller";
+import { joinPaths } from "../../lib/path-utils";
+import { initMediaSession, initElectronMediaControls } from "../../services/media-session";
 import {
   connectMediaElement,
   connectStreamAudio,
@@ -36,7 +38,7 @@ function resolveLocalPath(trackPath: string): string {
   if (trackPath.startsWith("/")) return trackPath;
   const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
   if (origin?.folderPath) {
-    return `${origin.folderPath}/${trackPath}`;
+    return joinPaths(origin.folderPath, trackPath);
   }
   return trackPath;
 }
@@ -370,6 +372,16 @@ export function WebAudioProvider({ children }: { children: React.ReactNode }) {
       setOutputDevice(audio, activeAudioOutputs[0]).catch(() => {});
     }
   }, [activeAudioOutputs]);
+
+  // ── Media Session (OS media controls: Windows SMTC, media keys, thumbar buttons) ──
+  useEffect(() => {
+    const cleanupMediaSession = initMediaSession();
+    const cleanupElectron = initElectronMediaControls();
+    return () => {
+      cleanupMediaSession();
+      cleanupElectron();
+    };
+  }, []);
 
   return <>{children}</>;
 }

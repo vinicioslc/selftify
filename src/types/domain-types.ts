@@ -1,5 +1,6 @@
 export enum OriginType {
   LOCAL = "local",
+  YOUTUBE = "youtube",
 }
 
 export enum PlayerStatus {
@@ -45,6 +46,7 @@ export type Song = {
   trackNumber?: number;
   discNumber?: number;
   duration: number | null;
+  bitrate?: number;
   imageUrl: string | null;
   path?: string;
   genres?: string[];

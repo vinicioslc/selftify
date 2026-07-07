@@ -1,5 +1,6 @@
 import { getAlbumDir, getSongsByArtist } from "../api/local/local-queries";
 import { platformFetch } from "./platform-fetch";
+import { joinPaths } from "../lib/path-utils";
 
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp"];
 
@@ -17,7 +18,7 @@ export async function loadFromAlbumDotImg(artist: string, album: string): Promis
 
     const { getPlatformService } = await import("./platform/factory");
     const p = await getPlatformService();
-    const imgDir = `${albumDir}/.img`;
+    const imgDir = joinPaths(albumDir, ".img");
 
     let entries: { name: string; path: string }[];
     try {
@@ -68,7 +69,7 @@ export async function loadFromArtistDotImg(artist: string): Promise<string | nul
 
     const { getPlatformService } = await import("./platform/factory");
     const p = await getPlatformService();
-    const imgDir = `${artistDir}/.img`;
+    const imgDir = joinPaths(artistDir, ".img");
 
     let entries: { name: string; path: string }[];
     try {

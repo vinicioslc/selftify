@@ -1,7 +1,9 @@
 import { getPlatformService } from "../platform/factory";
 import { cachedRead, cachedReadDirectory, cachedWrite, cachedDelete, cachedExists, cachedCreateDirectory, cachedRename } from "../sqlite-db/sqlite-db-cache";
 import { sanitizeForPath } from "./sanitizer";
+import { joinPaths } from "../../lib/path-utils";
 import type { DirEntry } from "../platform/types";
+import { findBestCover, writeCoverToAlbumDir } from "./cover-utils";
 
 export interface OrganizeContext {
   libraryRoot: string;
@@ -98,8 +100,8 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
     ].filter(Boolean);
     const targetFileName = `${parts.join(" - ")}${ctx.extension}`;
 
-    const targetAlbumRelDir = `${artistDir}/${albumDir}`;
-    const targetPath = `${libraryRoot}/${targetAlbumRelDir}/${targetFileName}`;
+    const targetAlbumRelDir = joinPaths(artistDir, albumDir);
+    const targetPath = joinPaths(libraryRoot, targetAlbumRelDir, targetFileName);
 
     return { artistDir, albumDir, targetFileName, targetAlbumRelDir, targetPath };
   }
@@ -197,7 +199,7 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
       const targetDir = paths.targetPath.substring(0, paths.targetPath.lastIndexOf("/"));
       for (const sidecar of sidecars) {
         const sidecarName = sidecar.split("/").pop() || "";
-        const targetSidecarPath = `${targetDir}/${sidecarName}`;
+        const targetSidecarPath = joinPaths(targetDir, sidecarName);
         const ok = await moveFile(sidecar, targetSidecarPath);
         if (ok) {
           movedSidecars.push(sidecar);
@@ -254,17 +256,13 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
   ): Promise<string[]> {
     const created: string[] = [];
 
-    if (params.coverRelPath) {
-      const { writeCoverToAlbumDir } = await import("./cover-extractor");
-      const wrote = await writeCoverToAlbumDir(
-        params.libraryRoot,
-        targetAlbumDir,
-        params.coverRelPath,
-      );
-      if (wrote) created.push(`${targetAlbumDir}/cover.jpg`);
+    const coverSource = await findBestCover(params.libraryRoot, targetAlbumDir, params.coverRelPath);
+    if (coverSource) {
+      const wrote = await writeCoverToAlbumDir(targetAlbumDir, coverSource);
+      if (wrote) created.push(joinPaths(targetAlbumDir, "cover.jpg"));
     }
 
-    const nfoPath = `${targetAlbumDir}/album.nfo`;
+    const nfoPath = joinPaths(targetAlbumDir, "album.nfo");
     const nfoExists = await cachedExists(nfoPath);
     if (!nfoExists) {
       const { generateAlbumNfoXml } = await import("./nfo-generator");
@@ -279,7 +277,7 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
         albumArtistMbid: params.albumArtistMbid,
         type: params.type,
         duration: params.tracks.reduce((sum, t) => sum + (t.duration || 0), 0),
-        thumb: params.coverRelPath ? "cover.jpg" : null,
+        thumb: coverSource ? "cover.jpg" : null,
         tracks: params.tracks.map((t) => ({
           title: t.title,
           trackNumber: t.trackNumber,
@@ -312,7 +310,7 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
   ): Promise<string[]> {
     const created: string[] = [];
 
-    const nfoPath = `${targetArtistDir}/artist.nfo`;
+    const nfoPath = joinPaths(targetArtistDir, "artist.nfo");
     const nfoExists = await cachedExists(nfoPath);
     if (!nfoExists) {
       const { generateArtistNfoXml } = await import("./nfo-generator");

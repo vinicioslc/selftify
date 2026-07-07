@@ -2,18 +2,12 @@ import type { PlatformService } from "./platform/types";
 import { storeImage as indexDbStoreImage, md5Hash, findImages, updateImageMeta as indexDbUpdateImageMeta } from "./image-store";
 import { getPlatformService } from "./platform/factory";
 import { getArtistsFromSongs, getAlbumsFromSongs, getSongsByAlbum } from "../api/local/local-queries";
+import { joinPaths } from "../lib/path-utils";
+import { sanitizeForPath } from "./organizer/sanitizer";
 
 export const IMG_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const BATCH_SIZE = 5;
 const COVER_SIZE = 1024;
-
-function sanitizeForPath(name: string): string {
-  return name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[/\\?%*:|"<>]/g, "_")
-    .trim();
-}
 
 export function isImageFile(name: string): boolean {
   const lower = name.toLowerCase();
@@ -78,7 +72,7 @@ async function preloadArtistImage(
 ): Promise<void> {
   try {
     const artistDir = sanitizeForPath(artistName);
-    const imgDirPath = `${folderPath}/${artistDir}/.img`;
+    const imgDirPath = joinPaths(folderPath, artistDir, ".img");
     const found = await findFirstImageInDir(p, imgDirPath);
     if (!found) return;
 
@@ -124,9 +118,9 @@ async function preloadAlbumImage(
       const artistDir = sanitizeForPath(artistName);
       const albumDirBase = sanitizeForPath(albumName);
       const albumDir = releaseYear ? `${albumDirBase} (${releaseYear})` : albumDirBase;
-      albumDirResolved = `${folderPath}/${artistDir}/${albumDir}`;
+      albumDirResolved = joinPaths(folderPath, artistDir, albumDir);
     }
-    const imgDirPath = `${albumDirResolved}/.img`;
+    const imgDirPath = joinPaths(albumDirResolved, ".img");
     const found = await findFirstImageInDir(p, imgDirPath);
     if (!found) return;
 

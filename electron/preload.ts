@@ -24,10 +24,12 @@ const api = {
     search: (query: string, cookies?: string) => ipcRenderer.invoke('yt:search', cookies ? { query, cookies } : query),
     download: (request: any) => ipcRenderer.invoke('yt:download', request),
     getStreamUrl: (videoId: string, cookies?: string) => ipcRenderer.invoke('yt:stream-url', cookies ? { videoId, cookies } : videoId),
-    getVideoInfo: (videoId: string) => ipcRenderer.invoke('yt:get-video-info', videoId),
+    getVideoInfo: (videoId: string, cookies?: string) => ipcRenderer.invoke('yt:get-video-info', cookies ? { videoId, cookies } : videoId),
     downloadMp3: (request: any) => ipcRenderer.invoke('yt:download-mp3', request),
     processCover: (request: any) => ipcRenderer.invoke('yt:process-cover', request),
     embedArtwork: (request: any) => ipcRenderer.invoke('yt:embed-artwork', request),
+    checkVersion: () => ipcRenderer.invoke('yt:check-version'),
+    update: () => ipcRenderer.invoke('yt:update'),
   },
   onCookiesInvalid: (callback: () => void) => {
     const handler = () => callback();
@@ -38,6 +40,29 @@ const api = {
     const handler = (_event: any, data: { taskId: string; percent: number; step: string }) => callback(data);
     ipcRenderer.on('download:progress', handler);
     return () => { ipcRenderer.removeListener('download:progress', handler); };
+  },
+  onMediaAction: (callback: (action: string) => void) => {
+    const handler = (_event: any, action: string) => callback(action);
+    ipcRenderer.on('media:action', handler);
+    return () => { ipcRenderer.removeListener('media:action', handler); };
+  },
+  sendMediaPlaybackState: (playing: boolean) => {
+    ipcRenderer.send('media:playback-state', playing);
+  },
+
+  download: {
+    enqueueSong: (song) => ipcRenderer.invoke('download:enqueue', song),
+    enqueueMultiple: (songs) => ipcRenderer.invoke('download:enqueue-multiple', songs),
+    cancelTask: (taskId) => ipcRenderer.invoke('download:cancel', taskId),
+    retryTask: (taskId) => ipcRenderer.invoke('download:retry', taskId),
+    getAllTasks: () => ipcRenderer.invoke('download:list'),
+    clearCompleted: () => ipcRenderer.invoke('download:clear-completed'),
+    updateTask: (taskId, partial) => ipcRenderer.invoke('download:update-task', taskId, partial),
+    onTaskUpdate: (callback: (task: any) => void) => {
+      const handler = (_event: any, task: any) => callback(task);
+      ipcRenderer.on('download:task-update', handler);
+      return () => { ipcRenderer.removeListener('download:task-update', handler); };
+    },
   },
   local: {
     parseFile: (filePath: string) => ipcRenderer.invoke('local:parse-file', filePath),

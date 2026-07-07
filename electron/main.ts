@@ -1,5 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import { join } from 'path';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, shell } from 'electron';
+import { join, dirname } from 'path';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import fs from 'fs';
 import { execFile, execFileSync } from 'child_process';
@@ -10,6 +10,8 @@ import http from 'http';
 import url from 'url';
 
 import { TaskQueue } from './queue';
+import { initDownloadDb, closeDownloadDb } from './download-db';
+import { registerDownloadQueueHandlers } from './download-queue-service';
 
 // ── Platform fetch helpers (retry + backoff) ──
 
@@ -170,15 +172,10 @@ function warnFs(prefix: string, err: unknown): void {
 }
 
 let mainWindow: BrowserWindow | null = null;
-
-const store = new Store<any>({
-  defaults: {
-    window_width: 1200,
-    window_height: 800,
-  },
-});
+let store: Store<any> | null = null;
 
 function createWindow(): void {
+  if (!store) throw new Error('store not initialized');
   mainWindow = new BrowserWindow({
     width: store.get('window_width', 1200) as number,
     height: store.get('window_height', 800) as number,
@@ -327,6 +324,10 @@ ipcMain.handle('fs:create-directory', async (_event, dirPath: string) => {
 
 ipcMain.handle('fs:rename-file', async (_event, oldPath: string, newPath: string) => {
   try {
+    const destDir = dirname(newPath);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
     fs.renameSync(oldPath, newPath);
     return true;
   } catch (err) {
@@ -356,7 +357,7 @@ ipcMain.handle('yt:fetch', async (_event, { url, init }: { url: string; init?: R
 const ytQueue = new TaskQueue();
 const ytSearchCache = new Map<string, { items: YtDlpSearchItem[]; ts: number }>();
 const ytStreamCache = new Map<string, { url: string; ts: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 55 * 60 * 1000; // 55 minutes (URLs expire ~6h)
 const COOKIE_FILE = join(tmpdir(), 'selftify-cookies.txt');
 
 function ensureCookieFile(cookies?: string): boolean {
@@ -392,6 +393,7 @@ interface YoutubeDownloadRequest {
   searchQuery: string;
   videoId: string;
   downloadFolder: string;
+  cookies?: string;
   metadata: {
     title: string;
     artist: string;
@@ -465,7 +467,7 @@ ytQueue.register('yt:stream-url', async (payload: unknown) => {
   const target = `https://music.youtube.com/watch?v=${videoId}`;
   const args = withCookieArgs([
     '--print', 'url',
-    '--format', 'bestaudio[ext=webm]/bestaudio',
+    '--format', 'bestaudio/best',
     '--no-playlist',
     target,
   ], cookieStr);
@@ -490,14 +492,14 @@ ytQueue.register('yt:download', async (payload: unknown) => {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const outputPath = join(outputDir, `${trackNum}${title}.%(ext)s`);
-  const args = [
+  const args = withCookieArgs([
     `https://music.youtube.com/watch?v=${request.videoId}`,
     '--extract-audio',
     '--audio-format', 'm4a',
     '--output', outputPath,
     '--no-playlist',
     '--embed-metadata',
-  ];
+  ], request.cookies);
 
   return new Promise<string>((resolve, reject) => {
     execFile(ytDlpBin, args, { timeout: 120000 }, (error) => {
@@ -512,13 +514,15 @@ ytQueue.register('yt:download', async (payload: unknown) => {
 });
 
 ytQueue.register('yt:get-video-info', async (payload: unknown) => {
-  const videoId = payload as string;
-  const args = [
+  const p = payload as { videoId: string; cookies?: string };
+  const videoId = typeof payload === 'string' ? payload : p.videoId;
+  const cookieStr = typeof payload === 'string' ? undefined : p.cookies;
+  const args = withCookieArgs([
     `https://music.youtube.com/watch?v=${videoId}`,
     '--dump-json',
     '--no-download',
     '--no-playlist',
-  ];
+  ], cookieStr);
   return execYtDlp<any>(args, (stdout) => JSON.parse(stdout));
 });
 
@@ -564,6 +568,11 @@ function execYtDlp<T>(args: string[], parse: (stdout: string) => T): Promise<T> 
       const stderrTrimmed = (stderr || '').trim();
       if (stderrTrimmed) {
         console.warn('[yt-dlp] stderr:', stderrTrimmed.slice(0, 500));
+      }
+
+      // Detect cookie/auth errors and notify frontend
+      if (stderrTrimmed && /HTTP Error 403|Sign in to confirm|Sign in if you|This (video|content).*unavailable|cookies.*required/i.test(stderrTrimmed)) {
+        try { mainWindow?.webContents.send('yt:cookies-invalid'); } catch { /* window might be closed */ }
       }
 
       if (error) {
@@ -613,8 +622,30 @@ ipcMain.handle('yt:stream-url', async (_event, payload: string | { videoId: stri
   return ytQueue.add<string | null>('yt:stream-url', payload);
 });
 
-ipcMain.handle('yt:get-video-info', async (_event, videoId: string): Promise<any | null> => {
-  return ytQueue.add<any | null>('yt:get-video-info', videoId);
+ipcMain.handle('yt:get-video-info', async (_event, payload: string | { videoId: string; cookies?: string }): Promise<any | null> => {
+  return ytQueue.add<any | null>('yt:get-video-info', payload);
+});
+
+ipcMain.handle('yt:check-version', async (): Promise<{ found: boolean; version: string | null }> => {
+  try {
+    const version = execFileSync(ytDlpBin, ['--version'], { timeout: 10000 }).toString().trim();
+    return { found: true, version };
+  } catch {
+    return { found: false, version: null };
+  }
+});
+
+ipcMain.handle('yt:update', async (): Promise<{ success: boolean; message: string }> => {
+  return new Promise((resolve) => {
+    execFile(ytDlpBin, ['-U'], { timeout: 120000 }, (error, stdout, stderr) => {
+      if (error) {
+        resolve({ success: false, message: error.message });
+      } else {
+        const output = (stdout || stderr || '').trim();
+        resolve({ success: true, message: output });
+      }
+    });
+  });
 });
 
 // ── Download Queue ──
@@ -622,6 +653,7 @@ ipcMain.handle('yt:get-video-info', async (_event, videoId: string): Promise<any
 interface DownloadMp3Request {
   videoId: string;
   downloadFolder: string;
+  cookies?: string;
   metadata: {
     title: string;
     artist: string;
@@ -669,11 +701,11 @@ ytQueue.register('yt:download-mp3', async (payload: unknown) => {
   fs.mkdirSync(outputDir, { recursive: true });
   const outputPath = join(outputDir, `${filename}.%(ext)s`);
   return new Promise<string>((resolve, reject) => {
-    const args = [
+    const args = withCookieArgs([
       `https://music.youtube.com/watch?v=${p.videoId}`,
       '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
       '--output', outputPath, '--no-playlist', '--no-embed-metadata', '--no-embed-thumbnail',
-    ];
+    ], p.cookies);
     execFile(ytDlpBin, args, { timeout: 180000 }, (error) => {
       if (error) { reject(new Error(`yt-dlp download failed: ${error.message}`)); return; }
       resolve(join(outputDir, `${filename}.mp3`));
@@ -743,6 +775,7 @@ ytQueue.register('yt:embed-artwork', async (payload: unknown) => {
 interface DownloadMp3Request {
   videoId: string;
   downloadFolder: string;
+  cookies?: string;
   metadata: {
     title: string;
     artist: string;
@@ -1103,7 +1136,7 @@ ipcMain.handle('local:parse-file', async (_event, filePath: string) => {
       trackNumber: c.track?.no || null,
       discNumber: c.disk?.no || null,
       duration: f.duration ? f.duration * 1000 : null,
-      bitrate: f.bitrate || null,
+      bitrate: f.bitrate ? Math.round(f.bitrate / 1000) : null,
       sampleRate: f.sampleRate || null,
       genre: c.genre?.[0] || null,
       year: c.year || null,
@@ -1137,7 +1170,36 @@ ipcMain.handle('wiki:search', async (_event, query: string) => {
 
 // ── Window Controls IPC ──
 
-ipcMain.on('window:minimize', () => {
+function createThumbarIcon(svgPath: string, size: number = 32): Electron.NativeImage {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svgPath}</svg>`;
+  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`).resize({ width: size, height: size });
+}
+
+function updateThumbarButtons(playing: boolean): void {
+  if (!mainWindow || process.platform !== "win32") return;
+  const playPauseIcon = playing
+    ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+    : '<polygon points="6,4 20,12 6,20"/>';
+  mainWindow.setThumbarButtons([
+    {
+      tooltip: "Previous",
+      icon: createThumbarIcon('<polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20"/>'),
+      click: () => mainWindow?.webContents.send("media:action", "previous"),
+    },
+    {
+      tooltip: playing ? "Pause" : "Play",
+      icon: createThumbarIcon(playPauseIcon),
+      click: () => mainWindow?.webContents.send("media:action", "playpause"),
+    },
+    {
+      tooltip: "Next",
+      icon: createThumbarIcon('<polygon points="5,4 15,12 5,20"/><line x1="19" y1="4" x2="19" y2="20"/>'),
+      click: () => mainWindow?.webContents.send("media:action", "next"),
+    },
+  ]);
+}
+
+ipcMain.on("window:minimize", () => {
   mainWindow?.minimize();
 });
 
@@ -1184,7 +1246,39 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window);
   });
 
+  // ── Initialize persistent store (must be before createWindow, after app is ready) ──
+  store = new Store<any>({
+    defaults: {
+      window_width: 1200,
+      window_height: 800,
+    },
+  });
+
   createWindow();
+
+  // ── Global media shortcuts ──
+  globalShortcut.register('MediaPlayPause', () => {
+    mainWindow?.webContents.send('media:action', 'playpause');
+  });
+  globalShortcut.register('MediaNextTrack', () => {
+    mainWindow?.webContents.send('media:action', 'next');
+  });
+  globalShortcut.register('MediaPreviousTrack', () => {
+    mainWindow?.webContents.send('media:action', 'previous');
+  });
+  globalShortcut.register('MediaStop', () => {
+    mainWindow?.webContents.send('media:action', 'pause');
+  });
+
+  // ── IPC: renderer notifies main of playback state for thumbar button icons ──
+  ipcMain.on('media:playback-state', (_event, playing: boolean) => {
+    updateThumbarButtons(playing);
+  });
+
+  updateThumbarButtons(false);
+
+  initDownloadDb();
+  registerDownloadQueueHandlers(ipcMain, () => mainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1193,4 +1287,9 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  closeDownloadDb();
 });

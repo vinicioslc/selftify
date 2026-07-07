@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useSettingsStore, type RankingWeights } from "../settings.store";
 
-const WEIGHT_KEYS = ["title", "artist", "album", "duration", "artistOnChannel"] as const;
+const WEIGHT_KEYS = ["title", "artist", "album", "duration", "artistOnChannel", "channelExactMatch", "coverPenalty"] as const;
 const REQUIRED_KEYS: (keyof RankingWeights)[] = [...WEIGHT_KEYS, "keywords"];
 
 /**
@@ -10,7 +10,7 @@ const REQUIRED_KEYS: (keyof RankingWeights)[] = [...WEIGHT_KEYS, "keywords"];
 function simulateMigrate(persisted: unknown): RankingWeights | undefined {
   const state = (persisted || {}) as Partial<{ rankingWeights: unknown }>;
   const defaults: RankingWeights = {
-    title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, keywords: [],
+    title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, channelExactMatch: 1.0, coverPenalty: -3, keywords: [],
   };
   if (!state.rankingWeights) return undefined;
   const rw = state.rankingWeights as Record<string, unknown>;
@@ -29,6 +29,8 @@ describe("SettingsStore — rankingWeights", () => {
         album: 1.0,
         duration: 0.5,
         artistOnChannel: 0.3,
+        channelExactMatch: 1.0,
+        coverPenalty: -3,
         keywords: [],
       },
     });
@@ -56,6 +58,8 @@ describe("SettingsStore — rankingWeights", () => {
       album: 1.5,
       duration: 0.8,
       artistOnChannel: 0.5,
+      channelExactMatch: 1.0,
+      coverPenalty: -3,
       keywords: [],
     });
     const { rankingWeights } = useSettingsStore.getState();
@@ -64,6 +68,8 @@ describe("SettingsStore — rankingWeights", () => {
     expect(rankingWeights.album).toBe(1.5);
     expect(rankingWeights.duration).toBe(0.8);
     expect(rankingWeights.artistOnChannel).toBe(0.5);
+    expect(rankingWeights.channelExactMatch).toBe(1.0);
+    expect(rankingWeights.coverPenalty).toBe(-3);
   });
 
   it("should survive setRankingWeights with partial keys (merge with defaults)", () => {
@@ -73,6 +79,8 @@ describe("SettingsStore — rankingWeights", () => {
       album: 0.0,
       duration: 0.0,
       artistOnChannel: 0.0,
+      channelExactMatch: 0.0,
+      coverPenalty: 0.0,
       keywords: [],
     });
     const { rankingWeights } = useSettingsStore.getState();

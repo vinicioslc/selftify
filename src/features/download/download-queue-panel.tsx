@@ -68,7 +68,7 @@ export function DownloadQueuePanel() {
           </div>
         )}
 
-        <ScrollArea className="flex-1 -mx-6 px-6">
+        <ScrollArea className="flex-1 min-h-0 -mx-6 px-6">
           {tasks.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <DownloadIcon className="h-12 w-12 text-muted-foreground/30 mb-3" />

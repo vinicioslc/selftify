@@ -3,6 +3,7 @@ import { loadFromAlbumDotImg } from "./dot-img-loader";
 import { useSettingsStore } from "../stores/settings.store";
 import { sqliteDbImageToObjectUrl } from "./sqlite-db/sqlite-db-image";
 import { getLibraryRoot } from "./db/ensure-db";
+import { platformFetch } from "./platform-fetch";
 
 export type CoverInput = {
   artistName?: string | null;
@@ -24,7 +25,11 @@ async function cacheToStore(
   meta: { artistName?: string; albumName?: string; mbzArtistId?: string; mbzReleaseGroupId?: string; mbzReleaseId?: string },
 ): Promise<void> {
   try {
-    const resp = await fetch(blobUrl);
+    // blob: URLs are browser-local — use native fetch(), no IPC needed
+    const resp = blobUrl.startsWith("blob:")
+      ? await fetch(blobUrl)
+      : await platformFetch(blobUrl, { method: "GET" });
+    if (!resp.ok) return;
     const blob = await resp.blob();
     const arrayBuffer = await blob.arrayBuffer();
     const hash = await md5Hash(arrayBuffer);
@@ -78,15 +83,17 @@ async function findSqliteDbAlbumImage(artistName: string, albumName: string): Pr
 }
 
 export async function resolveCover(input: CoverInput): Promise<CoverResult> {
+  const coverPriority = useSettingsStore.getState().coverPriority;
+
   // ── Step 1: .img/ folder (filesystem) ──
-  if (input.artistName && input.albumName) {
+  if (coverPriority !== "embedded" && input.artistName && input.albumName) {
     try {
       const dotImgUrl = await loadFromAlbumDotImg(input.artistName, input.albumName);
       if (dotImgUrl) {
         cacheToStore(dotImgUrl, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch(() => {});
+        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
         return { source: "img-folder", blobUrl: dotImgUrl };
       }
     } catch {
@@ -137,7 +144,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
         cacheToStore(result.url, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch(() => {});
+        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
         return { source: "deezer", blobUrl: result.url };
       }
     } catch {
@@ -154,7 +161,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
         cacheToStore(result.url, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch(() => {});
+        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
         return { source: "itunes", blobUrl: result.url };
       }
     } catch {
@@ -170,14 +177,16 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
  * Never falls back to artist-only or cross-album images.
  */
 export async function resolveAlbumCoverLocalOnly(input: CoverInput): Promise<CoverResult> {
-  if (input.artistName && input.albumName) {
+  const coverPriority = useSettingsStore.getState().coverPriority;
+
+  if (coverPriority !== "embedded" && input.artistName && input.albumName) {
     try {
       const dotImgUrl = await loadFromAlbumDotImg(input.artistName, input.albumName);
       if (dotImgUrl) {
         cacheToStore(dotImgUrl, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch(() => {});
+        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
         return { source: "img-folder", blobUrl: dotImgUrl };
       }
     } catch {
@@ -219,7 +228,7 @@ export async function resolveAlbumCoverRemote(input: CoverInput): Promise<CoverR
         cacheToStore(result.url, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch(() => {});
+        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
         return { source: "deezer", blobUrl: result.url };
       }
     } catch {
@@ -234,7 +243,7 @@ export async function resolveAlbumCoverRemote(input: CoverInput): Promise<CoverR
         cacheToStore(result.url, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch(() => {});
+        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
         return { source: "itunes", blobUrl: result.url };
       }
     } catch {

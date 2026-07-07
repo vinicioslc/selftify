@@ -793,3 +793,29 @@ track.path = getRelativePath(...).replace(`${artistDir}/.../`, "")
 ### Rescan after path changes
 
 If the path storage convention is changed, a full rescan is required to repopulate `track.path` for all existing entries. The database does not auto-migrate old entries. Use the rescan UI button or do a fresh scan after a schema/logic change.
+
+---
+
+## Recommended Engineering Reasoning Flow
+
+Follow these steps in order when debugging or implementing a feature:
+
+1. **Map the full flow before touching code** — Search (rg) both sides (frontend + backend) to understand ALL points where the feature appears: controller, service, store, validator, routes, component, existing tests.
+
+2. **Read canonical specs and docs** — Before implementing, consult `specs/` (UX, API, UI) and `AGENTS.md` to understand contracts, rules, and project patterns.
+
+3. **Identify the two layers of the problem** — Recognize whether a bug has a backend front (permission/validation exists but is wrong) and a frontend front (UI only disables a button, no real guard) — plan the fix in each.
+
+4. **Verify permissions and authorization** — Check Permission/Role models, seeders, and existing authorization tests to understand who CAN and who CANNOT do the action.
+
+5. **Check the validator contract** — The validator is a common blind spot. Verify whether the field is in the validated schema with the correct values, and whether a silent filter is swallowing the value.
+
+6. **Dig into the concrete bug in the data layer** — Don't accept "it works on the surface." Read the store, API wrapper, and backend return to find the real problem (e.g., wrong unwrap in `update()` that leaves `undefined` in the local cache).
+
+7. **Fix in layers** — Create/alter in this order: (a) functional test describing expected behavior, (b) backend fix if needed, (c) frontend store/api fix, (d) component/UI fix, (e) update the UX spec.
+
+8. **Format and validate** — Run formatter on touched files, then run focused tests before declaring done.
+
+9. **Don't loosen assertions** — If a test fails due to middleware/seed noise, adjust the fixture — not the assertion.
+
+**Summary**: Understand the full flow (data → API → store → UI), find the real cause instead of the symptom, fix in each layer with a corresponding test, and only touch code after reading specs and permissions.

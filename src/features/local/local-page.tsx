@@ -18,7 +18,8 @@ import { DataTable } from "../shared/data-table";
 import { songColumns } from "../shared/song-columns";
 import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
 import { moveSongToTrash } from "../../services/move-to-trash";
-import { CoverImage } from "../../components/ui/art-image";
+import { CoverImage, ArtImage } from "../../components/ui/art-image";
+import { AlbumEmptySvg } from "../../components/ui/empty-image-svg";
 import { ContextMenuOverlay } from "../../components/ui/context-menu-overlay";
 import {
   DropdownMenuItem,
@@ -577,7 +578,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                     <p className="text-sm text-muted-foreground">No artists found in your library.</p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                  <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 uw:grid-cols-7">
                     {artists.map((artist) => (
                       <div
                         key={artist.id}
@@ -618,33 +619,35 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                     <p className="text-sm text-muted-foreground">No albums found in your library.</p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                  <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 uw:grid-cols-7">
                     {albums.map((album) => (
                       <div
                         key={album.id}
-                        className="group cursor-pointer rounded-lg border p-3 transition-colors hover:bg-accent/50"
+                        className="group cursor-pointer"
                         onClick={() => onNavigateAlbum?.(album)}
                       >
-                        <div className="relative mb-2">
-                          <CoverImage
+                        <div className="relative">
+                          <ArtImage
                             src={album.imageUrl}
                             alt={album.name}
                             fallback={album.name.charAt(0).toUpperCase()}
-                            className="aspect-square w-full rounded-lg"
+                            emptySvg={<AlbumEmptySvg />}
+                            className="aspect-square w-full rounded-[5px] h-auto"
                           />
-                          <Button
-                            size="icon"
-                            className="absolute bottom-2 right-2 h-8 w-8 rounded-full bg-primary shadow-lg opacity-0 transition-all group-hover:opacity-100 group-hover:translate-y-0 translate-y-2 hover:scale-105 hover:bg-primary/90"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePlayAlbum(album);
-                            }}
-                          >
-                            <Play className="h-3.5 w-3.5 fill-current" />
-                          </Button>
+                          {album.songCount != null && album.songCount > 0 && (
+                            <div className="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/30 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100 pointer-events-none">
+                              <span className="text-xs font-medium text-white drop-shadow">
+                                {album.songCount} {album.songCount === 1 ? "song" : "songs"}
+                              </span>
+                            </div>
+                          )}
                         </div>
-                        <p className="truncate text-sm font-medium">{album.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{album.albumArtistName}</p>
+                        <div className="px-0.5 pt-2">
+                          <p className="truncate text-sm font-medium">{album.name}</p>
+                          <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                            {album.releaseYear && <span>{album.releaseYear}</span>}
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -660,7 +663,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                   <p className="text-sm text-muted-foreground">No genres found in your library.</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 uw:grid-cols-7">
                   {genres.map((genre) => {
                     const count = songs.filter((s) => s.genres?.includes(genre)).length;
                     return (

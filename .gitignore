@@ -16,5 +16,14 @@ USER_INSTRUCTIONS.md
 # Legacy codebase
 legacy/*
 
+# Playwright integration test results
+test-results/
+
 # OpenCode config
 .opencode/
+opencode.json
+
+# Server
+server/node_modules/
+server/dist/
+server/*.tsbuildinfo

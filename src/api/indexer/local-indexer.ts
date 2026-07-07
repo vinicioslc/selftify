@@ -17,6 +17,7 @@ import * as trackRepo from "../../services/db/repositories/track-repo";
 import type { OrganizationQueue } from "../../services/organizer/organization-queue";
 import { createOrganizationQueue } from "../../services/organizer/organization-queue";
 import { createFileOrganizer, sanitizeForPath } from "../../services/organizer";
+import { joinPaths, fileNameFromPath } from "../../lib/path-utils";
 
 function publishStatus(text: string, level: "info" | "success" | "warn" | "danger" = "info", source = "Local Scan") {
   try {
@@ -67,6 +68,9 @@ export function createLocalIndexer(): Indexer {
 
   let libraryRoot = "";
   let newFilesPaths: string[] = [];
+  let fileQueue: string[] = [];
+  let fileQueueIndex = 0;
+  let lastKnownFileCount = -1;
   const processedPaths = new Set<string>();
 
   const pendingAlbums = new Map<string, AccumulatingAlbum>();
@@ -93,8 +97,10 @@ export function createLocalIndexer(): Indexer {
   }
 
   function getRelativePath(root: string, fullPath: string): string {
-    if (!fullPath.startsWith(root)) return fullPath;
-    return fullPath.slice(root.length).replace(/^\/+/, "");
+    const nRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+    const nFull = fullPath.replace(/\\/g, "/");
+    if (!nFull.startsWith(nRoot)) return nFull;
+    return nFull.slice(nRoot.length).replace(/^\//, "");
   }
 
   function getArtistAndAlbumDirs(relPath: string): { artistDir: string; albumDir: string | null } {
@@ -144,6 +150,8 @@ export function createLocalIndexer(): Indexer {
     scanning = false;
     scannedCount = 0;
     newFilesPaths = [];
+    fileQueue = [];
+    fileQueueIndex = 0;
     pendingAlbums.clear();
     uniqueArtists.clear();
     processedPaths.clear();
@@ -186,6 +194,7 @@ export function createLocalIndexer(): Indexer {
     } catch (err) {
       console.error("[indexer] start failed:", err);
       publishStatus("Scan failed to start. Check logs.", "danger");
+      await releaseScanLock(libraryRoot);
       setState({ status: "idle" });
     }
   }
@@ -229,6 +238,7 @@ export function createLocalIndexer(): Indexer {
     } catch (err) {
       console.error("[indexer] incrementalScan failed:", err);
       publishStatus("Incremental scan failed. Try a full rescan.", "danger");
+      await releaseScanLock(libraryRoot);
       setState({ status: "idle" });
     }
   }
@@ -274,7 +284,7 @@ export function createLocalIndexer(): Indexer {
   async function discoverAndEnqueue(root: string): Promise<number> {
     const pending = [root];
     const visited = new Set<string>();
-    const allFileTasks: { type: "file"; path: string }[] = [];
+    const discovered: string[] = [];
     let count = 0;
 
     while (pending.length > 0) {
@@ -302,12 +312,14 @@ export function createLocalIndexer(): Indexer {
           if (e.name !== ".img" && e.name !== ".trash") pending.push(e.path);
         } else if (e.isFile) {
           if (isAudioFile(e.name)) {
-            allFileTasks.push({ type: "file", path: e.path });
+            discovered.push(e.path);
             count++;
           }
         }
       }
     }
+
+    fileQueue = discovered;
 
     if (count > 0) {
       publishStatus(`Found ${count} audio files`, "info");
@@ -340,24 +352,44 @@ export function createLocalIndexer(): Indexer {
 
   async function processBatch() {
     let files = 0;
-    const pending = [libraryRoot];
-    const visited = new Set<string>();
 
-    while (pending.length > 0 && files < FILE_BATCH) {
+    // Drain fileQueue (fresh scan) — use index pointer to avoid rescanning
+    while (fileQueueIndex < fileQueue.length && files < FILE_BATCH) {
       if (aborted || paused) return;
-      const dir = pending.shift()!;
-      if (visited.has(dir)) continue;
-      visited.add(dir);
+      const path = fileQueue[fileQueueIndex++];
+      if (!path || processedPaths.has(path)) continue;
+      processedPaths.add(path);
+      await processFile(path);
+      files++;
+    }
 
-      let entries: DirEntry[];
-      try { entries = await cachedReadDirectory(dir); } catch { continue; }
+    // Drain newFilesPaths (incremental scan)
+    while (newFilesPaths.length > 0 && files < FILE_BATCH) {
+      if (aborted || paused) return;
+      const path = newFilesPaths.shift()!;
+      if (!path || processedPaths.has(path)) continue;
+      processedPaths.add(path);
+      await processFile(path);
+      files++;
+    }
 
-      for (const e of entries) {
-        if (!e.name || aborted) continue;
-        if (e.isDirectory) {
-          if (e.name !== ".img" && e.name !== ".trash" && e.name !== ".selftify") pending.push(e.path);
-        } else if (isAudioFile(e.name)) {
-          if (!processedPaths.has(e.path)) {
+    // Fallback tree walk (if no queue and no incremental paths)
+    if (fileQueueIndex >= fileQueue.length && newFilesPaths.length === 0) {
+      const pending = [libraryRoot];
+      const visited = new Set<string>();
+      while (pending.length > 0 && files < FILE_BATCH) {
+        if (aborted || paused) return;
+        const dir = pending.shift()!;
+        if (visited.has(dir)) continue;
+        visited.add(dir);
+        let entries: DirEntry[];
+        try { entries = await cachedReadDirectory(dir); } catch { continue; }
+        for (const e of entries) {
+          if (!e.name || aborted) continue;
+          if (e.isDirectory) {
+            if (e.name !== ".img" && e.name !== ".trash" && e.name !== ".selftify") pending.push(e.path);
+          } else if (isAudioFile(e.name)) {
+            if (processedPaths.has(e.path)) continue;
             processedPaths.add(e.path);
             await processFile(e.path);
             files++;
@@ -378,12 +410,12 @@ export function createLocalIndexer(): Indexer {
 
       const relPath = getRelativePath(libraryRoot, filePath);
       const { artistDir, albumDir } = getArtistAndAlbumDirs(relPath);
-      const fileName = filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Unknown";
+      const fileName = fileNameFromPath(filePath).replace(/\.[^/.]+$/, "") || "Unknown";
 
       let meta: {
         name: string | null; artist: string | null; album: string | null;
         albumArtist: string | null; trackNumber: number | null; discNumber: number | null;
-        duration: number | null; genre: string | null; year: number | null;
+        duration: number | null; bitrate: number | null; genre: string | null; year: number | null;
         mbzRecordingId: string | null; mbzTrackId: string | null;
         mbzAlbumId: string | null; mbzReleaseGroupId: string | null; mbzArtistId: string | null;
         picture: { data: number[]; format: string } | null;
@@ -423,6 +455,7 @@ export function createLocalIndexer(): Indexer {
               album: c.album || null, albumArtist: c.albumartist || null,
               trackNumber: c.track?.no || null, discNumber: c.disk?.no || null,
               duration: f.duration ? f.duration * 1000 : null,
+              bitrate: f.bitrate ? Math.round(f.bitrate / 1000) : null,
               genre: c.genre?.[0] || null, year: c.year || null,
               mbzRecordingId: c.musicbrainz_recordingid || null,
               mbzTrackId: c.musicbrainz_trackid || null,
@@ -455,6 +488,7 @@ export function createLocalIndexer(): Indexer {
         trackNumber: meta?.trackNumber ?? null,
         discNumber: meta?.discNumber ?? null,
         duration: meta?.duration ?? null,
+        bitrate: meta?.bitrate ?? undefined,
         genre: meta?.genre ?? null,
         mbzRecordingId: meta?.mbzRecordingId ?? null,
         mbzTrackId: meta?.mbzTrackId ?? null,
@@ -516,7 +550,7 @@ export function createLocalIndexer(): Indexer {
 
       const track = sourcePathToTrackMap.get(result.sourcePath);
       if (track) {
-        track.path = `${result.targetAlbumRelDir}/${result.targetFileName}`;
+        track.path = joinPaths(result.targetAlbumRelDir, result.targetFileName);
       }
 
       const albumKey = result.targetAlbumRelDir;
@@ -549,7 +583,7 @@ export function createLocalIndexer(): Indexer {
       const album = pendingAlbums.get(albumKey);
       if (!album) continue;
 
-      const targetAlbumDir = `${libraryRoot}/${albumRelDir}`;
+      const targetAlbumDir = joinPaths(libraryRoot, albumRelDir);
 
       if (!organizeDryRun) {
         try {
@@ -575,7 +609,7 @@ export function createLocalIndexer(): Indexer {
             albumArtistMbid: album.mbzArtistId,
           });
 
-          const artistTargetDir = `${libraryRoot}/${artistDir}`;
+          const artistTargetDir = joinPaths(libraryRoot, artistDir);
           const artistKey = artistDir.toLowerCase().trim();
           const artistEntry = uniqueArtists.get(artistKey);
           await organizer.writeArtistArtifacts(artistTargetDir, {
@@ -666,6 +700,8 @@ export function createLocalIndexer(): Indexer {
       configRepo.setConfig("artistCount", String(uniqueArtists.size));
       configRepo.setConfig("albumCount", String(pendingAlbums.size));
 
+      lastKnownFileCount = totalDiscovered > 0 ? totalDiscovered : totalSongs;
+
       await flushSave();
 
       setState({ status: "done", progress: { total: totalSongs, done: totalSongs, currentItem: "" } });
@@ -688,12 +724,12 @@ export function createLocalIndexer(): Indexer {
 
   async function checkChanges() {
     try {
-      const root = libraryRoot;if (!root) { scheduleWatch(); return; }
+      const root = libraryRoot;
+      if (!root) { scheduleWatch(); return; }
 
       const fsPaths = new Set<string>();
       const pending = [root];
       const visited = new Set<string>();
-      const newFiles: string[] = [];
 
       while (pending.length > 0) {
         const dir = pending.shift()!;
@@ -710,9 +746,12 @@ export function createLocalIndexer(): Indexer {
         }
       }
 
-      if (newFiles.length > 0) {
+      if (lastKnownFileCount >= 0 && fsPaths.size !== lastKnownFileCount) {
+        lastKnownFileCount = fsPaths.size;
         setState({ status: "indexing" });
         paused = false; aborted = false;
+        publishStatus("File changes detected. Re-indexing\u2026", "info");
+        totalDiscovered = fsPaths.size;
         run();
       }
     } catch (err) {

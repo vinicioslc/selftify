@@ -1,6 +1,7 @@
 import { getPlatformService } from "./platform/factory";
 import { useStatusStore } from "../stores/status.store";
 import type { Origin } from "../types/domain-types";
+import { joinPaths, fileNameFromPath, stripTrailingSlash, isAbsolutePath, normalizePath } from "../lib/path-utils";
 
 function addMsg(text: string, level: "info" | "success" | "warn" | "danger" = "info") {
   useStatusStore.getState().addMessage(text, level, "Library");
@@ -28,7 +29,7 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
     return false;
   }
 
-  const trashDir = root.replace(/\/+$/, "") + "/.trash";
+  const trashDir = joinPaths(stripTrailingSlash(root), ".trash");
 
   // Ensure .trash directory exists
   try {
@@ -48,8 +49,8 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
   }
 
   // Build target path inside .trash
-  const fileName = filePath.split("/").pop() || filePath.split("\\").pop() || "unknown";
-  const destPath = trashDir + "/" + fileName;
+  const fileName = fileNameFromPath(normalizePath(filePath));
+  const destPath = joinPaths(trashDir, fileName);
 
   // If a file with the same name already exists in .trash, append timestamp
   let finalDest = destPath;
@@ -57,10 +58,10 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
     const dotIdx = fileName.lastIndexOf(".");
     const base = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
     const ext = dotIdx > 0 ? fileName.slice(dotIdx) : "";
-    finalDest = trashDir + "/" + base + "_" + Date.now() + ext;
+    finalDest = joinPaths(trashDir, `${base}_${Date.now()}${ext}`);
   }
 
-  const absPath = filePath.startsWith("/") ? filePath : `${root}/${filePath}`;
+  const absPath = isAbsolutePath(filePath) ? filePath : joinPaths(root, filePath);
 
   const fileExists = await p.fileExists(absPath);
 
@@ -83,7 +84,7 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
 
   // Remove entry from the database
   try {
-    const relPath = filePath.startsWith("/") ? filePath.slice(root.length + 1) : filePath;
+    const relPath = isAbsolutePath(filePath) ? normalizePath(filePath.slice(root.length + 1)) : normalizePath(filePath);
     const { deleteTrack } = await import("./db/repositories/track-repo");
     deleteTrack(relPath);
     const { flushSave } = await import("./db/database");

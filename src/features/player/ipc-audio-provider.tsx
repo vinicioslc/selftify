@@ -4,13 +4,14 @@ import { useSettingsStore } from "../../stores/settings.store";
 import { useAuthStore } from "../../stores/auth.store";
 import { PlayerStatus, OriginType } from "../../types/domain-types";
 import { getController } from "../../api/controller";
+import { joinPaths } from "../../lib/path-utils";
 import * as electronAudio from "../../services/electron-audio";
 import { fadeVolume, type FadeHandle } from "../../services/audio-engine";
 
 function resolveLocalPath(trackPath: string): string {
   if (trackPath.startsWith("/")) return trackPath;
   const origin = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL);
-  if (origin?.folderPath) return `${origin.folderPath}/${trackPath}`;
+  if (origin?.folderPath) return joinPaths(origin.folderPath, trackPath);
   return trackPath;
 }
 

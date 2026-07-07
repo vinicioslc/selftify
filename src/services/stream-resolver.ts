@@ -9,6 +9,7 @@ import { useStatusStore } from "../stores/status.store";
 import { sqliteDbTrackToSong } from "./sqlite-db/sqlite-db-resolver";
 import { getPlatformService } from "./platform/factory";
 import { getLibraryRoot } from "./db/ensure-db";
+import { joinPaths, isAbsolutePath, normalizePath } from "../lib/path-utils";
 
 export type ResolveResult = {
   song: Song;
@@ -69,7 +70,7 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
     // Only check file existence for local files, not stream URLs
     if (song.originType === OriginType.LOCAL && !song.path.startsWith("http")) {
       const root = getLibraryRoot();
-      const absPath = song.path.startsWith("/") ? song.path : root ? `${root}/${song.path}` : song.path;
+      const absPath = isAbsolutePath(song.path) ? song.path : root ? joinPaths(root, song.path) : song.path;
       const p = await getPlatformService();
       const exists = absPath ? await p.fileExists(absPath) : false;
       if (!exists) {
@@ -78,7 +79,7 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
         try {
           const { deleteTrack } = await import("./db/repositories/track-repo");
           const { flushSave } = await import("./db/database");
-          const relPath = song.path.startsWith("/") && root ? song.path.slice(root.length + 1) : song.path;
+          const relPath = isAbsolutePath(song.path) && root ? normalizePath(song.path.slice(root.length + 1)) : normalizePath(song.path);
           deleteTrack(relPath);
           await flushSave();
         } catch (err) {

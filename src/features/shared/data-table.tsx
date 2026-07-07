@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { cn } from "../../lib/utils";
 import { Settings2, Check, ArrowUp, ChevronRight } from "lucide-react";
+import { Skeleton } from "../../components/ui/skeleton";
 
 export type ColumnDef<T> = {
   id: string;
@@ -234,8 +235,55 @@ export function DataTable<T>({
 
   if (loading) {
     return (
-      <div className={cn("flex items-center justify-center py-12", className)}>
-        <p className="text-sm text-muted-foreground">Loading...</p>
+      <div className={cn("space-y-2", className)}>
+        {/* Skeleton header row */}
+        <div
+          className="mb-1 grid gap-2 px-2"
+          style={{ gridTemplateColumns: gridTemplate }}
+        >
+          {visibleColumns.map((col, i) => (
+            <div key={col.id} className={cn("px-2 py-1", col.id === "track" && "text-right")}>
+              <Skeleton className="h-3 w-3/4" />
+            </div>
+          ))}
+        </div>
+        {/* Skeleton body rows */}
+        {Array.from({ length: 8 }).map((_, rowIdx) => (
+          <div
+            key={rowIdx}
+            className="grid gap-2 rounded-lg px-2 py-2"
+            style={{ gridTemplateColumns: gridTemplate }}
+          >
+            {visibleColumns.map((col, colIdx) => (
+              <div
+                key={col.id}
+                className={cn(
+                  "min-w-0 flex items-center",
+                  col.id === "track" && "text-right",
+                  col.id === "title" && "gap-3",
+                )}
+              >
+                {col.id === "title" ? (
+                  <>
+                    <Skeleton className="h-10 w-10 shrink-0 rounded-md" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-3/5" />
+                      <Skeleton className="h-3 w-2/5" />
+                    </div>
+                  </>
+                ) : col.id === "duration" || col.id === "quality" ? (
+                  <Skeleton className="h-3 w-12" />
+                ) : col.id === "source" ? (
+                  <Skeleton className="h-4 w-4 rounded-full" />
+                ) : col.id === "addToPlaylist" || col.id === "download" ? (
+                  <Skeleton className="h-7 w-7 rounded-md" />
+                ) : (
+                  <Skeleton className="h-4 w-3/4" />
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
     );
   }

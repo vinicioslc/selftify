@@ -1,9 +1,10 @@
 import type { SqliteDbConfig } from "./sqlite-db-types";
 import { DIR_SELFTIFY, NAME_ROOT } from "./sqlite-db-types";
 import { cachedRead, cachedWrite, cachedExists, cachedCreateDirectory } from "./sqlite-db-cache";
+import { joinPaths } from "../../lib/path-utils";
 
 function configPath(libraryRoot: string): string {
-  return `${libraryRoot}/${DIR_SELFTIFY}/${NAME_ROOT}`;
+  return joinPaths(libraryRoot, DIR_SELFTIFY, NAME_ROOT);
 }
 
 export function createDefaultConfig(libraryName: string): SqliteDbConfig {
@@ -47,7 +48,7 @@ export async function writeConfig(
 }
 
 export async function ensureSelftifyDir(libraryRoot: string): Promise<void> {
-  const dir = `${libraryRoot}/${DIR_SELFTIFY}`;
+  const dir = joinPaths(libraryRoot, DIR_SELFTIFY);
   const exists = await cachedExists(dir);
   if (!exists) {
     await cachedCreateDirectory(dir);

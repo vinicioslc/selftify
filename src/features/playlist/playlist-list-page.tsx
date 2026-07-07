@@ -162,7 +162,7 @@ export function PlaylistListPage({ onNavigatePlaylist, onNavigateAlbum, onNaviga
 
           {/* Playlist Grid */}
           {!loading && playlists.length > 0 && (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 uw:grid-cols-5">
               {playlists.map((playlist) => (
                 <Card
                   key={playlist.id}

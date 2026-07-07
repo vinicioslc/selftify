@@ -145,6 +145,16 @@ export async function noCorsFetch(url: string, init?: RequestInit): Promise<Plat
 }
 
 export async function platformFetch(url: string, init?: RequestInit): Promise<PlatformResponse> {
+  // blob: and data: URLs are browser-internal — no CORS issues, no IPC needed
+  if (url.startsWith("blob:") || url.startsWith("data:")) {
+    const webResp = await fetch(url, init);
+    return responseFromBody(
+      webResp.status,
+      Object.fromEntries(webResp.headers.entries()),
+      new Uint8Array(await webResp.arrayBuffer()),
+    );
+  }
+
   const method = init?.method || "GET";
   const cacheKey = computeCacheKey(method, url, init?.body);
 

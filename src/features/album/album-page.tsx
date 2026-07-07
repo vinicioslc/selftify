@@ -59,7 +59,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   const [loading, setLoading] = useState(true);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [songInfoSong, setSongInfoSong] = useState<Song | null>(null);
-  const { coverUrl, loading: coverLoading } = useCover({
+  const { coverUrl, source: coverSource, loading: coverLoading, triggerRemote } = useCover({
     artistName: album.albumArtistName,
     albumName: album.name,
     mbzReleaseGroupId: album.mbzReleaseGroupId,
@@ -76,7 +76,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   const [imageExpanded, setImageExpanded] = useState(false);
   const resolvedCoverUrl = albumImageUrl || coverUrl || album.imageUrl || null;
   const coverUrlRef = useRef<string | null>(resolvedCoverUrl);
-  const artistImageUrl = useArtistImage(undefined, album.albumArtistName);
+  const { imageUrl: artistImageUrl, triggerRemote: triggerArtistImage } = useArtistImage(undefined, album.albumArtistName);
 
   function handleImageSaved(blobUrl: string) {
     if (blobUrl) {
@@ -349,7 +349,18 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
             }
           }
 
-          const mergedList = Array.from(merged.values()).sort(
+          // Secondary dedup by track number: if two songs share the same track number,
+          // prefer the one with a path (local file) over a stub (MBZ-only no path).
+          const trackDedup = new Map<string, Song>();
+          for (const song of merged.values()) {
+            const trackKey = `${song.discNumber ?? 1}:${song.trackNumber ?? 999}`;
+            const existing = trackDedup.get(trackKey);
+            if (!existing || (song.path && !existing.path)) {
+              trackDedup.set(trackKey, song);
+            }
+          }
+
+          const mergedList = Array.from(trackDedup.values()).sort(
             (a, b) => (a.trackNumber ?? 999) - (b.trackNumber ?? 999) || a.name.localeCompare(b.name),
           );
           setSongs(mergedList);
@@ -395,8 +406,10 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
       const origin = useAuthStore.getState().currentOrigin;
       if (!origin) return;
       await moveSongToTrash(song.path, origin);
-      setSongs((prev) => prev.filter((s) => s.id !== song.id));
-      addMsg(`Moved "${song.name}" to trash`, "success", "Album");
+      setSongs((prev) => prev.map((s) =>
+        s.id === song.id ? { ...s, path: undefined } : s,
+      ));
+      addMsg(`"${song.name}" — local file deleted, will stream if available`, "info", "Album");
     } catch (err) {
       addMsg(`Failed to delete "${song.name}"`, "danger", "Album");
     }
@@ -494,6 +507,9 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           fallback={album.name.charAt(0)}
           emptySvg={<AlbumEmptySvg />}
           className="h-48 w-48 shrink-0 rounded-lg md:h-56 md:w-56"
+          lazy={!resolvedCoverUrl}
+          onLazyLoad={triggerRemote}
+          imageSource={coverSource}
         />
           {coverLoading && !resolvedCoverUrl && (
             <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/80">

@@ -13,8 +13,10 @@ export type YoutubeSearchScoreBreakdown = {
   albumMatch: boolean;
   artistMatch: boolean;
   artistOnChannel: boolean;
+  channelExactMatch: boolean;
   exactDuration: boolean;
   closestDuration: boolean;
+  isCover: boolean;
   keywordScore: number;
   score: number;
 };
@@ -30,6 +32,14 @@ function normalizeText(text: string): string {
   return text.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
+function stripAccents(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizeForComparison(text: string): string {
+  return normalizeText(stripAccents(text));
+}
+
 function getDurationSeconds(video: YoutubeSearchVideo): number {
   if (typeof video.duration === "number") return video.duration;
   if (video.duration && typeof video.duration === "object" && "seconds" in video.duration) {
@@ -43,7 +53,7 @@ export function scoreYouTubeResults(
   expected: { album?: string; artist?: string; duration?: number; title: string },
   weights?: RankingWeights,
 ): YoutubeSearchScoredVideo[] {
-  const w = weights ?? { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, keywords: [] };
+  const w = { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, artistOnChannel: 0.3, channelExactMatch: 1.0, coverPenalty: -3, keywords: [], ...weights };
   const expectedTitle = normalizeText(expected.title);
   const expectedArtist = normalizeText(expected.artist || "");
   const expectedAlbum = normalizeText(expected.album || "");
@@ -55,9 +65,13 @@ export function scoreYouTubeResults(
     const diff = expectedDuration > 0 ? Math.abs(duration - expectedDuration) : Number.POSITIVE_INFINITY;
 
     let keywordScore = 0;
+    const channelName = normalizeText(video.uploader || "");
     for (const kw of w.keywords) {
-      if (kw.term && videoTitle.includes(normalizeText(kw.term))) {
-        keywordScore += kw.weight;
+      if (kw.term) {
+        const normTerm = normalizeText(kw.term);
+        if (videoTitle.includes(normTerm) || channelName.includes(normTerm)) {
+          keywordScore += kw.weight;
+        }
       }
     }
 
@@ -65,8 +79,10 @@ export function scoreYouTubeResults(
       albumMatch: false,
       artistMatch: false,
       artistOnChannel: false,
+      channelExactMatch: false,
       closestDuration: false,
       exactDuration: false,
+      isCover: false,
       keywordScore,
       score: 0,
       titleMatch: false,
@@ -91,10 +107,18 @@ export function scoreYouTubeResults(
         breakdown.artistOnChannel = true;
         breakdown.score += w.artistOnChannel;
       }
+      if (normalizeForComparison(video.uploader || "") === normalizeForComparison(expected.artist || "")) {
+        breakdown.channelExactMatch = true;
+        breakdown.score += w.channelExactMatch;
+      }
     }
     if (expectedDuration > 0 && duration === expectedDuration) {
       breakdown.exactDuration = true;
       breakdown.score += w.duration;
+    }
+    if (/\bcover(?:s|ed|ing)?\b/i.test(video.title || "")) {
+      breakdown.isCover = true;
+      breakdown.score += w.coverPenalty;
     }
     breakdown.score += keywordScore;
     return { breakdown, diff, originalIndex, video };

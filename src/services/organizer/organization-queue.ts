@@ -1,5 +1,6 @@
 import { cachedRead, cachedWrite, cachedExists } from "../sqlite-db/sqlite-db-cache";
 import { fileIdFromPath } from "../../lib/sqlite-db-helpers";
+import { joinPaths } from "../../lib/path-utils";
 import type { FileOrganizer, OrganizeContext, OrganizeResult } from "./file-organizer";
 
 export interface OrgTask {
@@ -29,7 +30,7 @@ export interface OrganizationQueue {
 }
 
 function queuePath(libraryRoot: string): string {
-  return `${libraryRoot}/.selftify/org-queue.json`;
+  return joinPaths(libraryRoot, ".selftify", "org-queue.json");
 }
 
 export function createOrganizationQueue(libraryRoot: string): OrganizationQueue {

@@ -4,14 +4,9 @@ import { OriginType } from "../../types/domain-types";
 import { sanitizeForPath } from "./sanitizer";
 import { getPlatformService } from "../platform/factory";
 import { isAudioFile } from "../../lib/sqlite-db-helpers";
-import { isImageFile } from "../image-preloader";
+import { joinPaths } from "../../lib/path-utils";
 import type { SqliteDbImage, SqliteDbAlbumTrack } from "../sqlite-db/sqlite-db-types";
-
-const IMAGE_PRIORITY = [
-  "cover.jpg", "cover.png", "cover.webp",
-  "folder.jpg", "folder.png",
-  "front.jpg", "front.png",
-];
+import { getCoverForAlbum } from "./cover-utils";
 
 export type SyncMetadataResult = {
   albumsProcessed: number;
@@ -154,8 +149,7 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
     const { meta, artistDir } = albums[i];
     const albumDirBase = sanitizeForPath(meta.name);
     const albumDir = meta.releaseYear ? `${albumDirBase} (${meta.releaseYear})` : albumDirBase;
-    const targetAlbumDir = `${libraryRoot}/${artistDir}/${albumDir}`;
-    const imgDir = `${targetAlbumDir}/.img`;
+    const targetAlbumDir = joinPaths(libraryRoot, artistDir, albumDir);
 
     try {
       const dirExists = await p.fileExists(targetAlbumDir);
@@ -164,24 +158,9 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
         continue;
       }
 
-      // ── Pick cover image from .img/ if present ──
-      let coverPath: string | null = null;
-      const imgDirExists = await p.fileExists(imgDir);
-      if (imgDirExists) {
-        const imgEntries = await p.readDirectory(imgDir);
-        const imageFiles = imgEntries.filter((e) => e.isFile && isImageFile(e.name));
-        if (imageFiles.length > 0) {
-          imageFiles.sort((a, b) => {
-            const aIdx = IMAGE_PRIORITY.indexOf(a.name.toLowerCase());
-            const bIdx = IMAGE_PRIORITY.indexOf(b.name.toLowerCase());
-            if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-            if (aIdx !== -1) return -1;
-            if (bIdx !== -1) return 1;
-            return a.name.localeCompare(b.name);
-          });
-          coverPath = imageFiles[0].path;
-        }
-      }
+      // ── Pick best cover (prefers .img/ over DB) ──
+      const coverResult = await getCoverForAlbum(libraryRoot, targetAlbumDir, meta.images?.[0]?.id || null);
+      const coverPath = coverResult?.path ?? null;
 
       // ── Find audio files in the album directory ──
       const albumDirEntries = await p.readDirectory(targetAlbumDir);
@@ -203,7 +182,7 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
       // ── Update metadata on each audio file ──
       let albumUpdatedCount = 0;
       for (const audioFile of audioFiles) {
-        const relPath = `${artistDir}/${albumDir}/${audioFile.name}`;
+        const relPath = joinPaths(artistDir, albumDir, audioFile.name);
         const dbTrack = trackByRelPath.get(relPath);
 
         const success = await updateAudioMetadata(
@@ -227,32 +206,24 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
       }
 
       // ── Update DB album images + cover_cache if cover was found ──
-      if (coverPath) {
-        const raw = await p.readFile(coverPath);
-        if (raw) {
-          const { sha256Hash, saveSqliteDbImage } = await import("../sqlite-db/sqlite-db-image");
-          const hash = await sha256Hash(raw.buffer as ArrayBuffer);
-          const mime = coverPath.toLowerCase().endsWith(".png")
-            ? "image/png"
-            : coverPath.toLowerCase().endsWith(".webp")
-              ? "image/webp"
-              : "image/jpeg";
-          const imageRelPath = await saveSqliteDbImage(libraryRoot, "album", hash, raw, mime);
+      if (coverResult) {
+        const { sha256Hash, saveSqliteDbImage } = await import("../sqlite-db/sqlite-db-image");
+        const hash = await sha256Hash(coverResult.data.buffer as ArrayBuffer);
+        const imageRelPath = await saveSqliteDbImage(libraryRoot, "album", hash, coverResult.data, coverResult.mime);
 
-          const newImage: SqliteDbImage = {
-            id: imageRelPath,
-            url: imageRelPath,
-            width: null,
-            height: null,
-            format: mime as "image/jpeg" | "image/png" | "image/webp",
-          };
-          meta.images = [newImage, ...(meta.images || [])];
-          db.exec(
-            "UPDATE albums SET images = ?, updated_at = ? WHERE id = ?",
-            [JSON.stringify(meta.images), Date.now(), `${artistDir}/${meta.name}`],
-          );
-          upsertCoverCache(meta.artistName, meta.name, hash, mime, coverPath);
-        }
+        const newImage: SqliteDbImage = {
+          id: imageRelPath,
+          url: imageRelPath,
+          width: null,
+          height: null,
+          format: coverResult.mime as "image/jpeg" | "image/png" | "image/webp",
+        };
+        meta.images = [newImage, ...(meta.images || [])];
+        db.exec(
+          "UPDATE albums SET images = ?, updated_at = ? WHERE id = ?",
+          [JSON.stringify(meta.images), Date.now(), `${artistDir}/${meta.name}`],
+        );
+        upsertCoverCache(meta.artistName, meta.name, hash, coverResult.mime, coverResult.path);
       }
 
       if (albumUpdatedCount > 0) {
@@ -262,7 +233,7 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
         // ── Regenerate album.nfo ──
         try {
           const artistEntry = artistMap.get(meta.artistName.toLowerCase());
-          await p.deleteFile(`${targetAlbumDir}/album.nfo`).catch(() => {});
+          await p.deleteFile(joinPaths(targetAlbumDir, "album.nfo")).catch(() => {});
           await organizer.writeAlbumArtifacts(targetAlbumDir, {
             libraryRoot,
             albumName: meta.name,
@@ -304,8 +275,8 @@ export async function syncAlbumMetadata(): Promise<SyncMetadataResult> {
   addMsg("Updating artist metadata files...", "info");
   for (const [, artist] of artistMap) {
     try {
-      const targetArtistDir = `${libraryRoot}/${sanitize(artist.name)}`;
-      await p.deleteFile(`${targetArtistDir}/artist.nfo`).catch(() => {});
+      const targetArtistDir = joinPaths(libraryRoot, sanitize(artist.name));
+      await p.deleteFile(joinPaths(targetArtistDir, "artist.nfo")).catch(() => {});
       await organizer.writeArtistArtifacts(targetArtistDir, {
         artistName: artist.name,
         genres: artist.genres,

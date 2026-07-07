@@ -113,6 +113,9 @@ export function getBlobUrlFromCache(url: string): string | undefined {
 }
 
 async function doFetch(url: string, init: RequestInit): Promise<string | null> {
+  // blob: URLs are already in-memory — return directly
+  if (url.startsWith("blob:")) return url;
+
   try {
     await waitForGlobalRateLimit();
     await waitForCoverArtRateLimit(url);
@@ -168,6 +171,11 @@ export async function fetchImageAsBlobUrl(
   url: string,
   init: RequestInit = {},
 ): Promise<string | null> {
+  if (!url || !url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("blob:")) {
+    logImage("warn", `Skipping invalid image URL: "${url}"`);
+    return null;
+  }
+
   const cached = blobCache.get(url);
   if (cached) {
     console.debug(`[img] memory cache hit ${url}`);

@@ -31,12 +31,12 @@ export async function storeImage(record: ImageRecord): Promise<string | null> {
     const root = getLibraryRoot() || "";
     relPath = await saveSqliteDbImage(root, category, record.md5, data, record.format);
 
-    if (record.albumName && record.artistName && root) {
+    if (record.artistName && root) {
       const { upsertCoverCache } = await import("./db/repositories/cover-cache-repo");
       const { ensureDbWithRoot } = await import("./db/ensure-db");
       const dbOk = await ensureDbWithRoot(root);
       if (dbOk) {
-        upsertCoverCache(record.artistName, record.albumName, record.md5, record.format, record.sourceUrl);
+        upsertCoverCache(record.artistName, record.albumName || "", record.md5, record.format, record.sourceUrl);
       }
     }
   } catch {}
@@ -77,7 +77,8 @@ export async function findImages(query?: Record<string, string>): Promise<ImageR
     const cached = findCoverCache(query.artistName, albumName);
     if (!cached) return [];
 
-    const relPath = imageRelPath(cached.hash, cached.format, "album");
+    const category = cached.album_name ? "album" : "artist";
+    const relPath = imageRelPath(cached.hash, cached.format, category);
     const data = await readSqliteDbImage(root, relPath);
     if (!data) return [];
 

@@ -1,3 +1,4 @@
+import { joinPaths } from "../../lib/path-utils";
 import { DIR_SELFTIFY, DIR_IMAGES_ARTIST, DIR_IMAGES_ALBUM, DIR_IMAGES_QUERY } from "./sqlite-db-types";
 import { cachedRead, cachedWrite, cachedExists } from "./sqlite-db-cache";
 import { getPlatformService } from "../platform/factory";
@@ -13,7 +14,7 @@ function imageCategoryDir(category: SqliteDbImageCategory): string {
 }
 
 async function ensureCategoryDir(libraryRoot: string, category: SqliteDbImageCategory): Promise<string> {
-  const dir = `${libraryRoot}/${DIR_SELFTIFY}/${imageCategoryDir(category)}`;
+  const dir = joinPaths(libraryRoot, DIR_SELFTIFY, imageCategoryDir(category));
   const p = await getPlatformService();
   const exists = await p.fileExists(dir);
   if (!exists) {
@@ -44,7 +45,7 @@ export async function saveSqliteDbImage(
   await ensureCategoryDir(libraryRoot, category);
   const ext = format === "image/png" ? "png" : format === "image/webp" ? "webp" : "jpg";
   const relPath = `${DIR_SELFTIFY}/${imageCategoryDir(category)}/${sha256}.${ext}`;
-  const fullPath = `${libraryRoot}/${relPath}`;
+  const fullPath = joinPaths(libraryRoot, relPath);
   const exists = await cachedExists(fullPath);
   if (!exists) {
     await cachedWrite(fullPath, data);
@@ -57,7 +58,7 @@ export async function readSqliteDbImage(
   relativePath: string,
 ): Promise<Uint8Array | null> {
   try {
-    const fullPath = `${libraryRoot}/${relativePath}`;
+    const fullPath = joinPaths(libraryRoot, relativePath);
     return await cachedRead(fullPath);
   } catch (err) {
     console.warn("[sqlite-db-image] read error:", err);

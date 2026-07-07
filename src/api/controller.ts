@@ -63,5 +63,8 @@ function getContext(): ApiContext {
 
 export async function getController(): Promise<ServerController> {
   const ctx = getContext();
+  if (ctx.originType === OriginType.YOUTUBE) {
+    return (await import("./youtube/youtube-controller")).createYoutubeController(ctx);
+  }
   return (await import("./local/local-controller")).createLocalController(ctx);
 }

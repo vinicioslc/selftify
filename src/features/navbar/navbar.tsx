@@ -6,11 +6,13 @@ type NavBarProps = {
   canGoForward: boolean;
   onBack: () => void;
   onForward: () => void;
+  children?: React.ReactNode;
 };
 
-export function NavBar({ canGoBack, canGoForward, onBack, onForward }: NavBarProps) {
+export function NavBar({ canGoBack, canGoForward, onBack, onForward, children }: NavBarProps) {
   return (
     <div className="flex items-center gap-0.5 px-1 shrink-0">
+      {children}
       <Button variant="ghost" size="icon" disabled={!canGoBack} onClick={onBack}>
         <ArrowLeft className="h-4 w-4" />
       </Button>

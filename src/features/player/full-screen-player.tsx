@@ -94,10 +94,10 @@ export function FullScreenPlayer({ onNavigateAlbum, onNavigateArtist }: { onNavi
         </div>
       </div>
 
-      {/* Content: 2-column on desktop, 1-column on mobile */}
-      <div className="relative z-10 flex flex-1 flex-col overflow-hidden md:flex-row">
+      {/* Content: 2-column on desktop, 1-column on mobile; centered on ultrawide */}
+      <div className="relative z-10 flex flex-1 flex-col overflow-hidden md:flex-row uw:justify-center">
         {/* Left: album art or visualizer + basic controls */}
-        <div className="flex flex-col items-center justify-center gap-6 p-8 md:w-1/2">
+        <div className="flex flex-col items-center justify-center gap-6 p-8 md:w-1/2 uw:max-w-[800px]">
           <div className="relative flex h-56 w-56 items-center justify-center overflow-hidden md:h-72 md:w-72 lg:h-96 lg:w-96">
             <VisualizerContainer fullScreen>
               {visualizerEnabled && visualizerType !== "none" ? undefined : (

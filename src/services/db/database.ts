@@ -2,6 +2,7 @@ import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
 import { getPlatformService } from "../platform/factory";
 import { CREATE_TABLES, SCHEMA_VERSION } from "./schema";
 import { pruneExpiredRequestCache } from "./repositories/request-cache-repo";
+import { joinPaths } from "../../lib/path-utils";
 
 const SAVE_DEBOUNCE_MS = 5000;
 const SAVE_INTERVAL_MS = 60000;
@@ -37,18 +38,18 @@ export async function initDatabase(libraryRoot: string): Promise<void> {
   initialized = true;
   state = "loading";
 
-  dbPath = `${libraryRoot}/.selftify/library.db`;
+  dbPath = joinPaths(libraryRoot, '.selftify/library.db');
 
   try {
     const p = await getPlatformService();
-    const dir = `${libraryRoot}/.selftify`;
+    const dir = joinPaths(libraryRoot, '.selftify');
     const dirExists = await p.fileExists(dir);
     if (!dirExists) await p.createDirectory(dir);
 
     const fileExists = await p.fileExists(dbPath);
     const SQL = await initSqlJs({
-  locateFile: (file) => `/sql-wasm.wasm`,
-});
+      locateFile: (file) => `./${file}`,
+    });
 
     if (fileExists) {
       const raw = await p.readFile(dbPath);
@@ -107,6 +108,13 @@ function runMigrations(): void {
   // was added to the CREATE TABLE statement may lack it.
   try {
     db!.exec("ALTER TABLE albums ADD COLUMN deleted_at INTEGER");
+  } catch {
+    // column may already exist — ignore
+  }
+
+  // Ensure bitrate column exists on tracks — added in schema v5
+  try {
+    db!.exec("ALTER TABLE tracks ADD COLUMN bitrate INTEGER");
   } catch {
     // column may already exist — ignore
   }

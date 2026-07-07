@@ -3,8 +3,9 @@ import type { Song, Album, AlbumArtist } from "../../types/domain-types";
 import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
 import type { CandidateData, MbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
 import type { StreamSourceCandidate } from "../../types/domain-types";
-import { researchSong, fetchCustomVideoInfo } from "../../services/youtube-download-service";
+import { researchSong, fetchCustomVideoInfo, searchAndRankAll } from "../../services/youtube-download-service";
 import { findLocalCandidates } from "../../services/stream-resolver";
+import type { YoutubeSearchScoredVideo } from "../../services/youtube-ranking";
 import { useLazyArtistImage } from "../../hooks/use-artist-image";
 import { CoverImage } from "../../components/ui/art-image";
 import { ArtImage } from "../../components/ui/art-image";
@@ -63,6 +64,8 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
   const [reRanking, setReRanking] = useState(false);
   const [localCandidates, setLocalCandidates] = useState<StreamSourceCandidate[]>([]);
   const [selectedLocalSongId, setSelectedLocalSongId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchingCustomSearch, setSearchingCustomSearch] = useState(false);
   const [customUrl, setCustomUrl] = useState("");
   const [fetchingCustom, setFetchingCustom] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
@@ -82,6 +85,8 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     if (!song.mbzRecordingId) return;
     setLoading(true);
 
+    setSearchQuery([song.artistName, song.name, song.albumName].filter(Boolean).join(" "));
+
     const localCands = await findLocalCandidates(song.mbzRecordingId, song.originId, song.name, song.artistName);
     setLocalCandidates(localCands);
 
@@ -91,7 +96,8 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
       const raw = (m.candidates || []) as Partial<CandidateData>[];
       const parsed: CandidateData[] = raw.map((c) => ({
         score: 0, keywordScore: 0, diff: 0, titleMatch: false, artistMatch: false,
-        albumMatch: false, artistOnChannel: false, exactDuration: false, closestDuration: false,
+        albumMatch: false, artistOnChannel: false, channelExactMatch: false, isCover: false,
+        exactDuration: false, closestDuration: false,
         ...c,
         videoId: c.videoId || "",
         title: c.title || "",
@@ -153,6 +159,57 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     await researchSong(song);
     await loadData();
     setReRanking(false);
+  }
+
+  async function handleCustomSearch() {
+    if (!searchQuery.trim() || !song.mbzRecordingId) return;
+    setSearchingCustomSearch(true);
+    try {
+      const result = await searchAndRankAll(song, searchQuery.trim());
+      if (result && result.scored.length > 0) {
+        const newCands: CandidateData[] = result.scored.map((r: YoutubeSearchScoredVideo) => ({
+          videoId: r.video.id,
+          title: r.video.title,
+          uploader: r.video.uploader || "",
+          duration: typeof r.video.duration === "object" && r.video.duration ? r.video.duration.seconds : typeof r.video.duration === "number" ? r.video.duration : undefined,
+          score: r.breakdown.score,
+          titleMatch: r.breakdown.titleMatch,
+          artistMatch: r.breakdown.artistMatch,
+          albumMatch: r.breakdown.albumMatch,
+          artistOnChannel: r.breakdown.artistOnChannel,
+          channelExactMatch: r.breakdown.channelExactMatch,
+          isCover: r.breakdown.isCover,
+          exactDuration: r.breakdown.exactDuration,
+          closestDuration: r.breakdown.closestDuration,
+          keywordScore: r.breakdown.keywordScore,
+          diff: r.diff,
+          source: "ranking",
+        }));
+        const selectedId = newCands[0].videoId;
+        setCandidates(newCands);
+        setSelectedId(selectedId);
+        setSelectedLocalSongId(null);
+        const now = Date.now();
+        const updated: MbzYtMapping = {
+          mbzRecordingId: song.mbzRecordingId,
+          songName: song.name,
+          artistName: song.artistName,
+          albumName: song.albumName,
+          albumImageUrl: song.imageUrl,
+          selectedVideoId: selectedId,
+          selectedType: "auto",
+          candidates: newCands,
+          createdAt: mapping?.createdAt || now,
+          updatedAt: now,
+        };
+        await setSavedMbzYtMapping(updated);
+        setMapping(updated);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setSearchingCustomSearch(false);
+    }
   }
 
   async function handleFetchCustom() {
@@ -463,6 +520,31 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
                       </Button>
                     )}
                   </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleCustomSearch()}
+                      placeholder="YouTube search term..."
+                      className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 gap-1.5 px-3 shrink-0"
+                      onClick={handleCustomSearch}
+                      disabled={searchingCustomSearch || !searchQuery.trim()}
+                      title="Search YouTube with this term"
+                    >
+                      {searchingCustomSearch ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Search className="h-4 w-4" />
+                      )}
+                      <span>Search</span>
+                    </Button>
+                  </div>
                   {candidates.length === 0 ? (
                     <div className="flex flex-col items-center gap-2 py-4 text-center">
                       <p className="text-xs text-muted-foreground">No YouTube ranking data yet.</p>
@@ -503,6 +585,8 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
                             {c.titleMatch && <span className="font-bold text-green-500" title="Title match">T</span>}
                             {c.artistMatch && <span className="font-bold text-blue-500" title="Artist match">A</span>}
                             {c.artistOnChannel && <span className="font-bold text-orange-500" title="Artist on channel">Ch</span>}
+                            {c.channelExactMatch && <span className="font-bold text-indigo-500" title="Artist on channel exactly">ChE</span>}
+                            {c.isCover && <span className="font-bold text-rose-500" title="Cover song">Cv</span>}
                             {c.albumMatch && <span className="font-bold text-amber-500" title="Album match">Al</span>}
                             {c.exactDuration && <span className="font-bold text-purple-500" title="Exact duration">D</span>}
                             {c.closestDuration && <span className="font-bold text-purple-400" title="Closest duration">~D</span>}

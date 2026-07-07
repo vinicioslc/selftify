@@ -1,4 +1,5 @@
 import { useAuthStore } from "../stores/auth.store";
+import { joinPaths, stripTrailingSlash } from "../lib/path-utils";
 
 const EXTENSION = ".selftifylist";
 
@@ -16,7 +17,7 @@ function getPlaylistsDir(): string {
   if (!folderPath) {
     throw new Error("No folder path configured for current origin");
   }
-  return `${folderPath.replace(/\/+$/, "")}/playlists`;
+  return joinPaths(stripTrailingSlash(folderPath), "playlists");
 }
 
 function sanitizeName(name: string): string {
@@ -24,7 +25,7 @@ function sanitizeName(name: string): string {
 }
 
 function filePath(name: string): string {
-  return `${getPlaylistsDir()}/${sanitizeName(name)}${EXTENSION}`;
+  return joinPaths(getPlaylistsDir(), `${sanitizeName(name)}${EXTENSION}`);
 }
 
 function nameFromFile(filename: string): string {
