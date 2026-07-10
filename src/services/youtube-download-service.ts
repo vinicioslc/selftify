@@ -1,14 +1,19 @@
-import type { Song, Origin } from "../types/domain-types";
+import type { Song } from "../types/domain-types";
 import { OriginType } from "../types/domain-types";
 import { scoreYouTubeResults, persistRanking, type YoutubeSearchVideo, type YoutubeSearchScoredVideo } from "./youtube-ranking";
 import { getMbzYtMapping, setMbzYtMapping, deleteMbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
 import { useSettingsStore, type YtSearchFields } from "../stores/settings.store";
+import { useOnlineSearchStore } from "../stores/online-search.store";
 import { useAuthStore } from "../stores/auth.store";
 import { useStatusStore } from "../stores/status.store";
-import type { CandidateData, SqliteDbMbzYtMapping } from "./sqlite-db/sqlite-db-types";
+import type { CandidateData } from "./sqlite-db/sqlite-db-types";
 
 function getLibraryRoot(): string | undefined {
   return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
+}
+
+function getYtHeaders(): string | undefined {
+  return useOnlineSearchStore.getState().youtubeMusicHeaders || undefined;
 }
 
 type ElectronApi = {
@@ -69,7 +74,7 @@ export async function searchAndRank(
   const fields = useSettingsStore.getState().ytSearchFields;
   const query = buildYtSearchQuery(song, fields);
   const api = getElectronApi();
-  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+  const cookies = getYtHeaders();
   const addMsg = (text: string, level: "info" | "success" | "warn" | "danger" = "info") =>
     useStatusStore.getState().addMessage(text, level, "Ranking");
 
@@ -208,7 +213,7 @@ export async function fetchCustomVideoInfo(url: string): Promise<CandidateData |
 
   const api = getElectronApi();
   if (!api) return null;
-  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+  const cookies = getYtHeaders();
   try {
     const videoInfo = await api.yt.search(videoId, cookies);
     if (!videoInfo || videoInfo.length === 0) return null;
@@ -240,7 +245,7 @@ export async function searchAndRankAll(song: Song, customQuery?: string): Promis
   const fields = useSettingsStore.getState().ytSearchFields;
   const query = customQuery ?? buildYtSearchQuery(song, fields);
   const api = getElectronApi();
-  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+  const cookies = getYtHeaders();
   if (!api) return null;
 
   try {
@@ -290,7 +295,7 @@ export async function getStreamUrl(song: Song): Promise<string | null> {
     addMsg(`▶ Extracting cached stream...`, "info");
     const api = getElectronApi();
     if (api) {
-      const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+      const cookies = getYtHeaders();
       try {
         const url = await api.yt.getStreamUrl(song.youtubeVideoId, cookies);
         if (url) {
@@ -310,7 +315,7 @@ export async function getStreamUrl(song: Song): Promise<string | null> {
   addMsg("⬇ Extracting audio stream...");
   const api = getElectronApi();
   if (!api) return null;
-  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+  const cookies = getYtHeaders();
   log("yt:stream-url started");
   try {
     const url = await api.yt.getStreamUrl(match.videoId, cookies);
@@ -333,7 +338,7 @@ export async function getStreamUrl(song: Song): Promise<string | null> {
 export async function downloadAndGetPath(song: Song, downloadFolder: string): Promise<string | null> {
   const api = getElectronApi();
   if (!api) return null;
-  const cookies = useAuthStore.getState().currentOrigin?.youtubeMusicHeaders;
+  const cookies = getYtHeaders();
   const match = await searchAndRank(song);
   if (!match) return null;
   try {

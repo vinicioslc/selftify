@@ -1,5 +1,4 @@
 import { useStatusStore } from "../../stores/status.store";
-import { useElectronWindow } from "../../hooks/use-electron-window";
 import { Popover, PopoverTrigger, PopoverContent } from "../../components/ui/popover";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
@@ -68,8 +67,11 @@ function StatusDot({ level }: { level: StatusLevel }) {
 export function TopBar({ currentView }: { currentView: AppView }) {
   const messages = useStatusStore((s) => s.messages);
   const clearMessages = useStatusStore((s) => s.clearMessages);
-  const { isElectron, isMaximized, minimize, maximize, close } =
-    useElectronWindow();
+  const isElectron = false;
+  const isMaximized = false;
+  const minimize = () => {};
+  const maximize = () => {};
+  const close = () => {};
 
   const latest = messages.length > 0 ? messages[messages.length - 1] : null;
   const reversed = [...messages].reverse();

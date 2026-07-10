@@ -8,7 +8,7 @@ import type {
 } from "./musicbrainz-types";
 import type { MusicBrainzContext } from "./musicbrainz-types";
 import { getCachedQuery, setCachedQuery, hashQuery } from "./sqlite-db/sqlite-db-query";
-import { useAuthStore } from "../stores/auth.store";
+import { useOnlineSearchStore } from "../stores/online-search.store";
 import { getLibraryRoot } from "./db/ensure-db";
 import { refreshAccessToken, isTokenExpired, computeExpiresAt } from "./musicbrainz-oauth";
 
@@ -21,13 +21,13 @@ let lastMbRequestAt = 0;
 
 /**
  * Check if the current MusicBrainz token is expired and refresh it if needed.
- * Updates the auth store with new tokens when refreshed.
+ * Updates the online-search store with new tokens when refreshed.
  */
 async function ensureValidToken(): Promise<void> {
-  const origin = useAuthStore.getState().currentOrigin;
-  if (!origin) return;
+  const config = useOnlineSearchStore.getState();
+  if (!config.enabled) return;
 
-  const { musicBrainzClientId, musicBrainzClientSecret, musicBrainzRefreshToken, musicBrainzTokenExpiresAt } = origin;
+  const { musicBrainzClientId, musicBrainzClientSecret, musicBrainzRefreshToken, musicBrainzTokenExpiresAt } = config;
   if (!musicBrainzClientId || !musicBrainzClientSecret || !musicBrainzRefreshToken) return;
 
   if (!isTokenExpired(musicBrainzTokenExpiresAt)) return;
@@ -36,7 +36,7 @@ async function ensureValidToken(): Promise<void> {
   try {
     const tokenResp = await refreshAccessToken(musicBrainzClientId, musicBrainzClientSecret, musicBrainzRefreshToken);
     const expiresAt = computeExpiresAt(tokenResp.expires_in);
-    useAuthStore.getState().updateOrigin(origin.id, {
+    useOnlineSearchStore.getState().updateMusicBrainz({
       musicBrainzToken: tokenResp.access_token,
       musicBrainzRefreshToken: tokenResp.refresh_token,
       musicBrainzTokenExpiresAt: expiresAt,
@@ -44,8 +44,6 @@ async function ensureValidToken(): Promise<void> {
     console.debug("[Selftify] MusicBrainz token refreshed successfully");
   } catch (err) {
     console.warn("[Selftify] MusicBrainz token refresh failed:", err);
-    // If refresh fails, continue with the existing token (even if expired)
-    // The API calls will fail with 401 and the user can re-authenticate
   }
 }
 
@@ -61,7 +59,6 @@ function hashSearchQuery(params: Record<string, unknown>): string {
 }
 
 async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  // Auto-refresh expired token before making the request
   await ensureValidToken();
 
   const headers = new Headers(init.headers);
@@ -72,7 +69,7 @@ async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Re
     headers.set("Accept", "application/json");
   }
   if (!headers.has("Authorization")) {
-    const token = useAuthStore.getState().currentOrigin?.musicBrainzToken;
+    const token = useOnlineSearchStore.getState().musicBrainzToken;
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
     }
@@ -120,8 +117,6 @@ export type MusicBrainzSearchOpts = {
   rawQuery?: string;
 };
 
-
-
 async function getSqliteDbCached<T>(cacheKey: string): Promise<T | null> {
   const libraryRoot = getLibraryRoot();
   if (!libraryRoot) return null;
@@ -135,7 +130,7 @@ async function getSqliteDbCached<T>(cacheKey: string): Promise<T | null> {
 async function setSqliteDbCached(cacheKey: string, data: unknown): Promise<void> {
   const libraryRoot = getLibraryRoot();
   if (!libraryRoot) return;
-  const originId = useAuthStore.getState().currentOrigin?.id || "mb";
+  const originId = "mb";
   await setCachedQuery(libraryRoot, "musicbrainz", cacheKey, { songs: [], albums: [], albumArtists: [] }, originId, { data });
 }
 

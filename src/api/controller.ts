@@ -1,19 +1,27 @@
 import { OriginType, Song, Album, AlbumArtist, Playlist } from "../types/domain-types";
 import { useAuthStore } from "../stores/auth.store";
+import { useOnlineSearchStore } from "../stores/online-search.store";
 
 export type ApiContext = {
   originId: string;
   originType: OriginType;
   credential?: string;
-  enableOnlineSearch?: boolean;
-  musicBrainzToken?: string;
-  musicBrainzClientId?: string;
-  musicBrainzClientSecret?: string;
-  musicBrainzRefreshToken?: string;
-  musicBrainzTokenExpiresAt?: number;
-  youtubeMusicHeaders?: string;
   downloadFolder?: string;
   folderPath?: string;
+  /** @deprecated Use useOnlineSearchStore instead */
+  enableOnlineSearch?: boolean;
+  /** @deprecated Use useOnlineSearchStore instead */
+  musicBrainzToken?: string;
+  /** @deprecated Use useOnlineSearchStore instead */
+  musicBrainzClientId?: string;
+  /** @deprecated Use useOnlineSearchStore instead */
+  musicBrainzClientSecret?: string;
+  /** @deprecated Use useOnlineSearchStore instead */
+  musicBrainzRefreshToken?: string;
+  /** @deprecated Use useOnlineSearchStore instead */
+  musicBrainzTokenExpiresAt?: number;
+  /** @deprecated Use useOnlineSearchStore instead */
+  youtubeMusicHeaders?: string;
 };
 
 export type SearchResults = {
@@ -45,24 +53,37 @@ export interface ServerController {
 function getContext(): ApiContext {
   const { currentOrigin } = useAuthStore.getState();
   if (!currentOrigin) throw new Error("No origin selected");
+
+  const onlineSearch = useOnlineSearchStore.getState();
+
   return {
     originId: currentOrigin.id,
     originType: currentOrigin.type,
     credential: currentOrigin.folderPath,
-    enableOnlineSearch: currentOrigin.enableOnlineSearch,
-    musicBrainzToken: currentOrigin.musicBrainzToken,
-    musicBrainzClientId: currentOrigin.musicBrainzClientId,
-    musicBrainzClientSecret: currentOrigin.musicBrainzClientSecret,
-    musicBrainzRefreshToken: currentOrigin.musicBrainzRefreshToken,
-    musicBrainzTokenExpiresAt: currentOrigin.musicBrainzTokenExpiresAt,
-    youtubeMusicHeaders: currentOrigin.youtubeMusicHeaders,
-    downloadFolder: currentOrigin.downloadFolder,
+    downloadFolder: onlineSearch.downloadFolder || currentOrigin.downloadFolder,
     folderPath: currentOrigin.folderPath,
+    // Legacy fields for backward compat — new code reads from online-search store
+    enableOnlineSearch: onlineSearch.enabled,
+    musicBrainzToken: onlineSearch.musicBrainzToken,
+    musicBrainzClientId: onlineSearch.musicBrainzClientId,
+    musicBrainzClientSecret: onlineSearch.musicBrainzClientSecret,
+    musicBrainzRefreshToken: onlineSearch.musicBrainzRefreshToken,
+    musicBrainzTokenExpiresAt: onlineSearch.musicBrainzTokenExpiresAt,
+    youtubeMusicHeaders: onlineSearch.youtubeMusicHeaders,
   };
 }
 
 export async function getController(): Promise<ServerController> {
   const ctx = getContext();
+
+  // When a backend (Selftify/Subsonic server) is configured, use Subsonic controller
+  const { useBackendStore } = await import("../stores/backend.store");
+  const backendConfig = useBackendStore.getState().config;
+  if (backendConfig) {
+    const { createSubsonicController } = await import("./subsonic/subsonic-controller");
+    return createSubsonicController(ctx);
+  }
+
   if (ctx.originType === OriginType.YOUTUBE) {
     return (await import("./youtube/youtube-controller")).createYoutubeController(ctx);
   }

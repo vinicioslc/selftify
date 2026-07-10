@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAuthStore } from "../../stores/auth.store";
+import { useOnlineSearchStore } from "../../stores/online-search.store";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import {
@@ -17,17 +17,12 @@ type CookieEditDialogProps = {
 };
 
 export function CookieEditDialog({ open, onOpenChange }: CookieEditDialogProps) {
-  const origin = useAuthStore((s) => s.currentOrigin);
-  const updateOrigin = useAuthStore((s) => s.updateOrigin);
-  const [cookieValue, setCookieValue] = useState(origin?.youtubeMusicHeaders ?? "");
-
-  if (!origin) return null;
-  const currentOrigin = origin;
+  const youtubeMusicHeaders = useOnlineSearchStore((s) => s.youtubeMusicHeaders);
+  const setYoutubeHeaders = useOnlineSearchStore((s) => s.setYoutubeHeaders);
+  const [cookieValue, setCookieValue] = useState(youtubeMusicHeaders);
 
   function handleSave() {
-    updateOrigin(currentOrigin.id, {
-      youtubeMusicHeaders: cookieValue || undefined,
-    });
+    setYoutubeHeaders(cookieValue);
     onOpenChange(false);
   }
 
@@ -38,7 +33,7 @@ export function CookieEditDialog({ open, onOpenChange }: CookieEditDialogProps) 
           <DialogTitle>Update YouTube Cookies</DialogTitle>
           <DialogDescription>
             Your YouTube cookies have expired. Paste the new Netscape cookie file content or
-            browser headers below for &ldquo;{currentOrigin.name}&rdquo;.
+            browser headers below.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-2">

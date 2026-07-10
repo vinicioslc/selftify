@@ -1,19 +1,14 @@
-import { useEffect, useMemo, useCallback, useState, useRef } from "react";
+import { useEffect, useMemo, useCallback, useState } from "react";
 import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
-import { useLocalScan } from "../../hooks/use-local-scan";
 import { useStatusStore } from "../../stores/status.store";
 import { getController } from "../../api/controller";
 import { OriginType, type Song, type Album, type AlbumArtist } from "../../types/domain-types";
-import { getAllSongs, getScanState, getSongCount, getArtistCount, getAlbumCount, getDistinctGenres } from "../../api/local/local-queries";
-import { sqliteDbTrackToSong } from "../../services/sqlite-db/sqlite-db-resolver";
-import { SCAN_STATUS_LABEL } from "../../lib/status-labels";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import { Play, Loader2, Pause as PauseIcon, FolderOpen, Music, RotateCw, List, Disc, ChevronLeft, ChevronRight, Plus, Trash2, Users, Tags } from "lucide-react";
+import { Play, Loader2, Music, List, Disc, ChevronLeft, ChevronRight, Plus, Trash2, Users, Tags } from "lucide-react";
 import { DataTable } from "../shared/data-table";
 import { songColumns } from "../shared/song-columns";
 import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
@@ -36,7 +31,6 @@ interface LocalPageProps {
 export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps) {
   const { currentOrigin, origins } = useAuthStore();
   const { setQueue, addToQueue } = usePlayerStore();
-  const [folderPath, setFolderPath] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [songs, setSongs] = useState<Song[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -47,20 +41,12 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   const [genres, setGenres] = useState<string[]>([]);
   const [localStats, setLocalStats] = useState({ songs: 0, artists: 0, albums: 0 });
   const [page, setPage] = useState(0);
-  const [scanError, setScanError] = useState<string | null>(null);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [addToPlaylistSong, setAddToPlaylistSong] = useState<Song | null>(null);
   const [contextMenuSong, setContextMenuSong] = useState<Song | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
 
-  const { startScan, pause, resume, rescan, status } = useLocalScan();
-  const [rootFolder, setRootFolder] = useState("");
-  const scanStatus = status?.status === "indexing" ? "scanning" : status?.status === "done" ? "done" : status?.status === "paused" ? "paused" : "idle";
-  const scanProgress = { done: status?.progress?.done ?? 0, total: status?.progress?.total ?? 0, currentDir: status?.progress?.currentItem ?? "" };
-  const lastScanned = null;
-
   const isLocalMode = currentOrigin?.type === OriginType.LOCAL;
-  const initialLoadDoneRef = useRef(false);
 
   // ── Data loading ──
 
@@ -68,54 +54,35 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
     if (!currentOrigin) { setLoading(false); return; }
     setLoading(true);
     try {
-      if (isLocalMode) {
-        const state = await getScanState();
-        if (state) {
-          setRootFolder(state.root_folder);
-          if (state.scan_status === "done") {
-            const all = await getAllSongs();
-            const mapped = all.map((track) => sqliteDbTrackToSong(track, currentOrigin.id, OriginType.LOCAL));
-            const controller = await getController();
-            const withImages = await controller.populateSongImages(mapped);
-            setSongs(withImages);
-            setTotalSongs(mapped.length);
-            const [albumList, artistList] = await Promise.all([
-              controller.getAlbumList(0, 10000),
-              controller.getAlbumArtistList(0, 10000),
-            ]);
-            setAlbums(albumList);
-            setArtists(artistList);
-            useStatusStore.getState().addMessage(`Loaded ${mapped.length} song${mapped.length !== 1 ? "s" : ""} from local library`, "info", "Library");
-            setLocalStats({
-              songs: await getSongCount(),
-              artists: await getArtistCount(),
-              albums: await getAlbumCount(),
-            });
-            setGenres(await getDistinctGenres());
-          } else {
-            setSongs([]);
-            setTotalSongs(0);
-            useStatusStore.getState().addMessage("Local library scan not yet complete", "info", "Library");
-          }
-        } else {
-          // No scan state yet — pre-fill root from origin
-          const originPath = currentOrigin?.folderPath;
-          if (originPath && !rootFolder) {
-            setRootFolder(originPath);
-          }
-        }
-      } else if (searchQuery.trim()) {
-        useStatusStore.getState().addMessage(`Searching local files for "${searchQuery}"...`, "info", "Search");
-        const controller = await getController();
+      const controller = await getController();
+      if (searchQuery.trim()) {
+        useStatusStore.getState().addMessage(`Searching for "${searchQuery}"...`, "info", "Library");
         const res = await controller.search(searchQuery, PAGE_SIZE);
         setSongs(res.songs);
         setTotalSongs(res.songs.length);
-        useStatusStore.getState().addMessage(`Found ${res.songs.length} song${res.songs.length !== 1 ? "s" : ""}`, res.songs.length > 0 ? "success" : "info", "Search");
+        useStatusStore.getState().addMessage(`Found ${res.songs.length} song${res.songs.length !== 1 ? "s" : ""}`, res.songs.length > 0 ? "success" : "info", "Library");
       } else {
-        const controller = await getController();
-        const list = await controller.getSongList(page * PAGE_SIZE, PAGE_SIZE);
-        setSongs(list);
-        setTotalSongs(list.length < PAGE_SIZE ? page * PAGE_SIZE + list.length : null);
+        const [songList, albumList, artistList] = await Promise.all([
+          controller.getSongList(0, 10000),
+          controller.getAlbumList(0, 10000),
+          controller.getAlbumArtistList(0, 10000),
+        ]);
+        setSongs(songList);
+        setTotalSongs(songList.length);
+        setAlbums(albumList);
+        setArtists(artistList);
+        setLocalStats({
+          songs: songList.length,
+          artists: artistList.length,
+          albums: albumList.length,
+        });
+        const genreSet = new Set<string>();
+        songList.forEach((s) => s.genres?.forEach((g) => genreSet.add(g)));
+        setGenres([...genreSet].sort());
+        useStatusStore.getState().addMessage(
+          `Loaded ${songList.length} song${songList.length !== 1 ? "s" : ""} from library`,
+          "info", "Library",
+        );
       }
     } catch (err) {
       console.error("[local] load error:", err);
@@ -123,40 +90,16 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
     } finally {
       setLoading(false);
     }
-  }, [currentOrigin, isLocalMode, page, searchQuery, setRootFolder]);
+  }, [currentOrigin, searchQuery]);
 
-  // Defer initial load to the scan-completion effect; prevents empty flash
-  // when scan finishes shortly after mount
-  useEffect(() => {
-    if (!initialLoadDoneRef.current) {
-      initialLoadDoneRef.current = true;
-      return;
-    }
-    loadData();
-  }, [loadData]);
-
-  // Reload when a local scan completes
-  useEffect(() => {
-    if (scanStatus === "done" && isLocalMode) {
-      loadData();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanStatus, isLocalMode]);
-
-  // Pre-fill scan input from origin folderPath on mount
-  useEffect(() => {
-    if (isLocalMode && currentOrigin?.folderPath && !folderPath) {
-      setFolderPath(currentOrigin.folderPath);
-    }
-  }, [isLocalMode, currentOrigin?.folderPath]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   // Reset page on search change
   useEffect(() => { setPage(0); }, [searchQuery]);
 
-  // ── Filtering (local mode only – server already filters) ──
+  // ── Client-side search filter (for when server returns all songs) ──
 
   const filteredSongs = useMemo(() => {
-    if (!isLocalMode) return songs;
     if (!searchQuery) return songs;
     const q = searchQuery.toLowerCase();
     return songs.filter(
@@ -165,17 +108,13 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
         s.artistName.toLowerCase().includes(q) ||
         (s.albumName && s.albumName.toLowerCase().includes(q))
     );
-  }, [songs, searchQuery, isLocalMode]);
+  }, [songs, searchQuery]);
 
   const pageCount = Math.max(1, Math.ceil(filteredSongs.length / PAGE_SIZE));
-  const displaySongs = isLocalMode
-    ? filteredSongs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
-    : songs;
+  const displaySongs = filteredSongs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const hasPrev = page > 0;
-  const hasNext = isLocalMode
-    ? page < pageCount - 1
-    : songs.length >= PAGE_SIZE;
+  const hasNext = page < pageCount - 1;
 
   // ── Play helpers ──
 
@@ -232,19 +171,6 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   const handleNavArtist = useCallback((song: Song) => handleArtistClick(song), [handleArtistClick]);
   const handleNavAlbum = useCallback((song: Song) => handleAlbumClick(song), [handleAlbumClick]);
 
-  // ── Formatting helpers ──
-
-  function relativeTime(ts: number | null | undefined): string {
-    if (!ts) return "";
-    const diff = Date.now() - ts;
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return `${Math.floor(hours / 24)}d ago`;
-  }
-
   // ── No origin selected ──
 
   if (!currentOrigin) {
@@ -269,98 +195,13 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
         </h1>
         <p className="text-sm text-muted-foreground">
           Browsing: {currentOrigin.name} ({currentOrigin.type})
-          {isLocalMode && localStats.songs > 0 && (
+          {localStats.songs > 0 && (
             <>
               {" \u00b7 "}{localStats.songs} songs{" \u00b7 "}{localStats.artists} artists{" \u00b7 "}{localStats.albums} albums
             </>
           )}
-          {isLocalMode && lastScanned && ` \u00b7 Last scanned ${relativeTime(lastScanned)}`}
         </p>
       </div>
-
-      {/* Scan controls (local only) */}
-      {isLocalMode && (
-        <>
-          <div className="flex items-center gap-2 border-b px-4 py-2">
-            <Input
-              placeholder="/storage/music or /home/user/Music"
-              value={folderPath || rootFolder}
-              onChange={(e) => setFolderPath(e.target.value)}
-              className="h-8 flex-1"
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1"
-              onClick={async () => {
-                try {
-                  const { getPlatformService } = await import("../../services/platform/factory");
-                  const p = await getPlatformService();
-                  const selected = await p.openFolderPicker();
-                  if (selected) {
-                    setFolderPath(selected);
-                    setRootFolder(selected);
-                    setScanError(null);
-                  }
-                } catch (err) {
-                  console.warn("[local-page] openFolderPicker error:", err);
-                }
-              }}
-            >
-              <FolderOpen className="h-3 w-3" /> Browse
-            </Button>
-
-            {scanStatus === "scanning" && (
-              <>
-                <Button variant="outline" size="sm" className="h-8" onClick={pause}>
-                  <PauseIcon className="mr-1 h-3 w-3" /> Pause
-                </Button>
-                <Badge variant="secondary" className="gap-1">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {scanProgress.done}/{scanProgress.total || scanProgress.done || "?"}
-                </Badge>
-              </>
-            )}
-            {scanStatus === "paused" && (
-              <Button variant="outline" size="sm" className="h-8" onClick={resume}>
-                <RotateCw className="mr-1 h-3 w-3" /> Resume
-              </Button>
-            )}
-            {scanStatus === "done" && (
-              <>
-                <Button variant="outline" size="sm" className="h-8" onClick={() => { setScanError(null); rescan(); }}>
-                  <RotateCw className="mr-1 h-3 w-3" /> Rescan
-                </Button>
-                <Badge variant="default" className="gap-1">
-                  {localStats.songs} files
-                </Badge>
-              </>
-            )}
-            {scanStatus === "idle" && (
-              <Button variant="default" size="sm" className="h-8" onClick={() => {
-                const folder = folderPath || rootFolder;
-                if (!folder) return;
-                setRootFolder(folder);
-                setScanError(null);
-                startScan(folder);
-              }}>
-                <FolderOpen className="mr-1 h-3 w-3" /> Scan
-              </Button>
-            )}
-
-            {scanStatus === "scanning" && (
-              <p className="ml-2 truncate text-xs text-muted-foreground">
-                {scanProgress.currentDir?.replace(rootFolder, "") || ""}
-              </p>
-            )}
-          </div>
-          {scanError && (
-            <div className="border-b bg-destructive/10 px-4 py-2">
-              <p className="text-xs text-destructive">{scanError}</p>
-            </div>
-          )}
-        </>
-      )}
 
       {/* Loading */}
       {loading && (
@@ -369,86 +210,10 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
         </div>
       )}
 
-      {/* Empty states */}
-      {!loading && !showSongs && isLocalMode && scanStatus === "idle" && (
+      {/* Empty state */}
+      {!loading && !showSongs && (
         <div className="flex flex-1 items-center justify-center">
-          <div className="max-w-md text-center">
-            <FolderOpen className="mx-auto h-16 w-16 text-muted-foreground/30" />
-            <h3 className="mt-4 text-lg font-semibold">{SCAN_STATUS_LABEL.idle}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Enter the path to your music folder above and click Scan.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {!loading && !showSongs && isLocalMode && scanStatus === "scanning" && (
-        <div className="flex flex-1 items-center justify-center">
-          <div className="w-full max-w-sm text-center">
-            <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
-            {scanProgress.total > 0 ? (
-              <>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Extracting metadata&hellip;
-                </p>
-                <p className="mt-1 truncate text-xs text-muted-foreground/70">
-                  {scanProgress.currentDir?.replace(folderPath || rootFolder, "").replace(/^\//, "") || ""}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground/60">
-                  {scanProgress.done} / {scanProgress.total}
-                </p>
-                <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all duration-300"
-                    style={{ width: `${Math.min(100, Math.round((scanProgress.done / scanProgress.total) * 100))}%` }}
-                  />
-                </div>
-              </>
-            ) : scanProgress.done > 0 ? (
-              <>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Scanning&hellip;
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground/60">
-                  Found {scanProgress.done} files so far
-                </p>
-                <p className="mt-1 truncate text-xs text-muted-foreground/70">
-                  {scanProgress.currentDir?.replace(folderPath || rootFolder, "").replace(/^\//, "") || ""}
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Counting files&hellip;
-                </p>
-                <p className="mt-1 truncate text-xs text-muted-foreground/70">
-                  {scanProgress.currentDir?.replace(folderPath || rootFolder, "").replace(/^\//, "") || ""}
-                </p>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {!loading && !showSongs && isLocalMode && scanStatus === "done" && (
-        <div className="flex flex-1 items-center justify-center">
-          <div className="max-w-md text-center">
-            <Music className="mx-auto h-16 w-16 text-muted-foreground/30" />
-            <h3 className="mt-4 text-lg font-semibold">{SCAN_STATUS_LABEL.done} &mdash; no music found</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              No audio files were found in the scanned folder.
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground/70">
-              Make sure the folder contains supported files (.mp3, .flac, .ogg, .wav, .m4a, .aac, .wma, .opus).
-              If you see a permission error in the console, use the <strong>Browse</strong> button above to select the folder via the native file picker.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {!loading && !showSongs && !isLocalMode && (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">No songs found.</p>
+          <p className="text-sm text-muted-foreground">No songs found. Run a scan in Settings &gt; Server to populate your library.</p>
         </div>
       )}
 
@@ -460,21 +225,15 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
               <TabsTrigger value="songs" className="gap-1 text-xs">
                 <List className="h-3 w-3" /> Songs
               </TabsTrigger>
-              {isLocalMode && (
-                <TabsTrigger value="artists" className="gap-1 text-xs">
-                  <Users className="h-3 w-3" /> Artists
-                </TabsTrigger>
-              )}
-              {isLocalMode && (
-                <TabsTrigger value="albums" className="gap-1 text-xs">
-                  <Disc className="h-3 w-3" /> Albums
-                </TabsTrigger>
-              )}
-              {isLocalMode && (
-                <TabsTrigger value="genres" className="gap-1 text-xs">
-                  <Tags className="h-3 w-3" /> Genres
-                </TabsTrigger>
-              )}
+              <TabsTrigger value="artists" className="gap-1 text-xs">
+                <Users className="h-3 w-3" /> Artists
+              </TabsTrigger>
+              <TabsTrigger value="albums" className="gap-1 text-xs">
+                <Disc className="h-3 w-3" /> Albums
+              </TabsTrigger>
+              <TabsTrigger value="genres" className="gap-1 text-xs">
+                <Tags className="h-3 w-3" /> Genres
+              </TabsTrigger>
             </TabsList>
 
             <div className="flex items-center gap-2">
@@ -492,12 +251,10 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
 
           <TabsContent value="songs" className="flex min-h-0 flex-1 flex-col p-0">
             {/* Pagination bar */}
-            {displaySongs.length > 0 && (
+              {displaySongs.length > 0 && (
               <div className="flex items-center justify-between border-b px-4 py-1.5">
                 <p className="text-xs text-muted-foreground">
-                  {isLocalMode
-                    ? `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, filteredSongs.length)} of ${filteredSongs.length}`
-                    : `Page ${page + 1}`}
+                  {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filteredSongs.length)} of {filteredSongs.length}
                 </p>
                 <div className="flex items-center gap-1">
                   <Button
@@ -510,7 +267,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </Button>
                   <span className="min-w-[3ch] text-center text-xs tabular-nums text-muted-foreground">
-                    {isLocalMode ? `${page + 1}/${pageCount}` : page + 1}
+                    {page + 1}/{pageCount}
                   </span>
                   <Button
                     variant="ghost"
@@ -570,8 +327,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
             </div>
           </TabsContent>
 
-          {isLocalMode && (
-            <TabsContent value="artists" className="flex-1 p-0">
+          <TabsContent value="artists" className="flex-1 p-0">
               <ScrollArea className="h-full">
                 {artists.length === 0 ? (
                   <div className="flex h-full items-center justify-center">
@@ -610,9 +366,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                 )}
               </ScrollArea>
             </TabsContent>
-          )}
-          {isLocalMode && (
-            <TabsContent value="albums" className="flex-1 p-0">
+          <TabsContent value="albums" className="flex-1 p-0">
               <ScrollArea className="h-full">
                 {albums.length === 0 ? (
                   <div className="flex h-full items-center justify-center">
@@ -654,9 +408,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
                 )}
               </ScrollArea>
             </TabsContent>
-          )}
-          {isLocalMode && (
-            <TabsContent value="genres" className="flex-1 p-0">
+          <TabsContent value="genres" className="flex-1 p-0">
             <ScrollArea className="h-full">
               {genres.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
@@ -691,7 +443,6 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
               )}
             </ScrollArea>
           </TabsContent>
-          )}
         </Tabs>
       )}
 

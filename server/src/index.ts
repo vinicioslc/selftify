@@ -1,22 +1,30 @@
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import morgan from "morgan";
+import { createApp } from "./app";
+import { config } from "./config";
+import { initDb, closeDb, isDbReady } from "./db/connection";
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+try {
+  initDb();
+} catch (err) {
+  console.warn("[Selftify] Database init failed; server continues without library data:", (err as Error).message);
+}
 
-app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
-app.use(morgan("dev"));
-app.use(express.json());
+const app = createApp();
+const PORT = config.port;
 
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString(), version: "1.0.0" });
-});
-
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[Selftify] Server running on http://localhost:${PORT}`);
+  console.log(`[Selftify] Library root: ${config.libraryRoot}`);
+  console.log(`[Selftify] Database ready: ${isDbReady()}`);
+  console.log(`[Selftify] Subsonic API: http://localhost:${PORT}/rest`);
 });
 
-export default app;
+function shutdown(): void {
+  console.log("\n[Selftify] Shutting down...");
+  server.close(() => {
+    closeDb();
+    process.exit(0);
+  });
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

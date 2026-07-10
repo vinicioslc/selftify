@@ -3,6 +3,7 @@ import { getController, type SearchResults } from "../../api/controller";
 import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { useStatusStore } from "../../stores/status.store";
+import { useOnlineSearchStore } from "../../stores/online-search.store";
 import { Song, Album, AlbumArtist, OriginType } from "../../types/domain-types";
 import type { AppView } from "../../types/types";
 import { Button } from "../../components/ui/button";
@@ -85,9 +86,13 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     offset: number;
   }>({ songs: [], hasMore: false, offset: 0 });
 
+  const onlineSearchEnabled = useOnlineSearchStore((s) => s.enabled);
+  const ytHeaders = useOnlineSearchStore((s) => s.youtubeMusicHeaders);
+  const hasOnlineSearch = onlineSearchEnabled;
+
   const [loading, setLoading] = useState(false);
   const [searchMode, setSearchMode] = useState<SearchMode>(
-    initialMode ?? (currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local"),
+    initialMode ?? (onlineSearchEnabled ? "musicbrainz" : "local"),
   );
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [addToPlaylistSong, setAddToPlaylistSong] = useState<Song | null>(null);
@@ -104,8 +109,6 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   const [expandedCandidates, setExpandedCandidates] = useState<Map<string, ExpandedState>>(new Map());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
-  const hasOnlineSearch = currentOrigin?.enableOnlineSearch ?? false;
-
   useEffect(() => {
     onSearchStateChange?.({ query, mode: searchMode });
   }, [query, searchMode, onSearchStateChange]);
@@ -113,7 +116,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   useEffect(() => {
     if (initialQuery && !hasAutoSearched) {
       setHasAutoSearched(true);
-      handleSearchInternal(initialQuery, initialMode ?? (currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local"));
+      handleSearchInternal(initialQuery, initialMode ?? (onlineSearchEnabled ? "musicbrainz" : "local"));
     }
   }, []);
 
@@ -329,7 +332,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       }
 
       const ytRaw = await doSearch<{ songs: Song[]; hasMore: boolean }>("youtube", q, () =>
-        searchYouTubePure(q, 0, currentOrigin.youtubeMusicHeaders, currentOrigin.id).then((r) => ({
+        searchYouTubePure(q, 0, ytHeaders || undefined, currentOrigin.id).then((r) => ({
           songs: r.songs,
           hasMore: r.hasMore,
         })),
@@ -358,7 +361,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     if (!query.trim() || ytLoadingMore || !ytResults.hasMore) return;
     setYtLoadingMore(true);
     try {
-      const res = await searchYouTubePure(query, ytResults.offset, currentOrigin?.youtubeMusicHeaders, currentOrigin?.id);
+      const res = await         searchYouTubePure(query, ytResults.offset, ytHeaders || undefined, currentOrigin?.id);
       setYtResults((prev) => ({
         songs: [...prev.songs, ...res.songs],
         hasMore: res.hasMore,
@@ -505,7 +508,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     const log = (msg: string, f?: string) => playbackLog("playYtPure", `${videoId}: ${msg}`, f);
     const yt = getElectronYt();
     if (!yt) { log("no electron API"); return null; }
-    const cookies = currentOrigin?.youtubeMusicHeaders;
+      const cookies = ytHeaders || undefined;
     log("yt:stream-url started", `▶ Streaming "${song.name}" directly from YouTube...`);
     try {
       const url = await yt.getStreamUrl(videoId, cookies || undefined);
@@ -520,7 +523,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
   async function playSong(song: Song) {
     const log = (msg: string, f?: string) => playbackLog("playSong", `${song.id}: ${msg}`, f);
-    if (!currentOrigin?.enableOnlineSearch) { log("offline mode, queueing without path"); setQueue([song], { type: "now" }); return; }
+    if (!useOnlineSearchStore.getState().enabled) { log("offline mode, queueing without path"); setQueue([song], { type: "now" }); return; }
 
     const isYt = song.id.startsWith("ytpure-");
     setDownloadingId(song.id);
@@ -548,7 +551,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
   async function playAll(sourceSongs: Song[]) {
     if (!sourceSongs.length) return;
-    if (!currentOrigin?.enableOnlineSearch) { setQueue(sourceSongs, { type: "now" }); return; }
+    if (!useOnlineSearchStore.getState().enabled) { setQueue(sourceSongs, { type: "now" }); return; }
 
     setDownloadingId("__all__");
     try {

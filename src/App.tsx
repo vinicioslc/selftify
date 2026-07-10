@@ -1,5 +1,7 @@
 import { useAuthStore } from "./stores/auth.store";
 import { useSettingsStore } from "./stores/settings.store";
+import { useBackendStore } from "./stores/backend.store";
+import { useOnlineSearchStore } from "./stores/online-search.store";
 import { Sidebar } from "./features/sidebar/sidebar";
 import { NavBar } from "./features/navbar/navbar";
 import { PlayerBar } from "./features/player/components/playerbar";
@@ -18,7 +20,7 @@ import { ArtistPage } from "./features/artist/artist-page";
 import { PlaylistListPage } from "./features/playlist/playlist-list-page";
 import { PlaylistDetailPage } from "./features/playlist/playlist-detail-page";
 import { useState, useEffect, useCallback } from "react";
-import { Menu, AlertTriangle, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { useIsMobile } from "./hooks/use-media-query";
 import type { AppView } from "./types/types";
@@ -26,12 +28,11 @@ import type { Album, AlbumArtist, Playlist } from "./types/domain-types";
 import { OriginType } from "./types/domain-types";
 import "./styles/layout.css";
 import { QueueModal } from "./features/player/queue-modal";
-
-import { DownloadQueuePanel } from "./features/download/download-queue-panel";
-import { getPlatformService } from "./services/platform/factory";
 import { CookieEditDialog } from "./features/settings/cookie-edit-dialog";
 import { Toaster } from "./components/ui/toaster";
 import { useGlobalErrorHandler } from "./hooks/use-global-error-handler";
+import { useSettingsSync } from "./hooks/use-settings-sync";
+import { detectBackend } from "./api/backend-detector";
 
 type SearchState = {
   query: string;
@@ -46,8 +47,11 @@ type NavEntry = {
   searchState?: SearchState;
 };
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+
 export function App() {
   useGlobalErrorHandler();
+  useSettingsSync();
   const { origins, currentOrigin } = useAuthStore();
   const { sidebarCollapsed, sidebarWidth } = useSettingsStore();
 
@@ -58,11 +62,10 @@ export function App() {
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [searchState, setSearchState] = useState<SearchState>({
     query: "",
-    mode: currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local",
+    mode: useOnlineSearchStore.getState().enabled ? "musicbrainz" : "local",
   });
   const [navHistory, setNavHistory] = useState<NavEntry[]>([]);
   const [navFuture, setNavFuture] = useState<NavEntry[]>([]);
-  const [showCookieToast, setShowCookieToast] = useState(false);
   const [showCookieDialog, setShowCookieDialog] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<string | undefined>(undefined);
@@ -75,18 +78,35 @@ export function App() {
     setSettingsOpen(true);
   }
 
-  // Listen for yt-dlp cookie invalid warnings from Electron main process
-  useEffect(() => {
-    let cleanup: (() => void) | undefined;
-    getPlatformService().then((svc) => {
-      cleanup = svc.onCookiesInvalid(() => {
-        setShowCookieToast(true);
-      });
-    });
-    return () => cleanup?.();
-  }, []);
+  const backendConfig = useBackendStore((s) => s.config);
+  const setBackendConfig = useBackendStore((s) => s.setConfig);
 
-  const hasServers = origins.length > 0;
+  // Verify backend connection on startup; clear stale config if unreachable
+  useEffect(() => {
+    (async () => {
+      const { verifyConnection } = await import("./api/backend-detector");
+      const saved = useBackendStore.getState().config;
+      if (saved) {
+        const ok = await verifyConnection(saved);
+        if (!ok) {
+          console.debug("[app] saved backend config unreachable — clearing");
+          useBackendStore.getState().clearConfig();
+        }
+        return;
+      }
+
+      try {
+        const detected = await detectBackend(API_BASE);
+        if (detected.type === "selftify" || detected.type === "subsonic") {
+          const cfg = { type: detected.type, url: detected.url, user: "admin", password: "admin" };
+          const ok = await verifyConnection(cfg);
+          if (ok) setBackendConfig(cfg);
+        }
+      } catch {
+        // not reachable — leave backendConfig as null, local controllers will be used
+      }
+    })();
+  }, []);
 
   function pushNavEntry(view: AppView, album: Album | null, artist: AlbumArtist | null) {
     const entry: NavEntry = { view, album, artist };
@@ -178,7 +198,7 @@ export function App() {
     if (q || mode) {
       setSearchState({
         query: q || "",
-        mode: (mode === "local" || mode === "musicbrainz" || mode === "youtube") ? mode : (currentOrigin?.enableOnlineSearch ? "musicbrainz" : "local"),
+        mode: (mode === "local" || mode === "musicbrainz" || mode === "youtube") ? mode : (useOnlineSearchStore.getState().enabled ? "musicbrainz" : "local"),
       });
     }
   }, []);
@@ -265,10 +285,7 @@ export function App() {
   return (
     <WebAudioProvider>
       <AutoLocalScan />
-      {!hasServers ? (
-        <AuthPage onConnected={() => setCurrentView("home")} />
-      ) : (
-        <div className="layout">
+      <div className="layout">
         <TopBar currentView={currentView} />
         <div className={`main-content ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
           <div className="hidden md:block" style={{ gridArea: "sidebar" }}>
@@ -291,7 +308,6 @@ export function App() {
           <PlayerBar currentView={currentView} onNavigate={navigateTo} onGoBack={handleGoBack} onOpenQueue={() => setQueueOpen(true)} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
         </div>
         <FullScreenPlayer onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} />
-        <DownloadQueuePanel />
 
         {mobileSidebarOpen && (
           <div className="fixed inset-0 z-[400] md:hidden">
@@ -305,19 +321,6 @@ export function App() {
               <Sidebar currentView={currentView} onNavigate={(v) => { setMobileSidebarOpen(false); navigateTo(v); }} onNavigateAlbum={handleNavigateAlbum} onNavigateArtist={handleNavigateArtist} onOpenSettings={(t) => { setMobileSidebarOpen(false); handleOpenSettings(t); }} />
             </div>
           </div>
-        )}
-
-        {showCookieToast && (
-          <button
-            onClick={() => {
-              setShowCookieToast(false);
-              setShowCookieDialog(true);
-            }}
-            className="fixed bottom-[calc(var(--player-bar-height)+8px)] left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-600 bg-amber-950/90 px-4 py-2 text-sm text-amber-200 shadow-lg backdrop-blur transition-colors hover:bg-amber-900/90"
-          >
-            <AlertTriangle className="h-4 w-4" />
-            <span>YouTube cookies expired — click to update</span>
-          </button>
         )}
 
         <CookieEditDialog
@@ -339,7 +342,6 @@ export function App() {
         />
         <Toaster />
       </div>
-      )}
     </WebAudioProvider>
   );
 }

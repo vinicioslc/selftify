@@ -1,24 +1,25 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore, VisualizerType, type YtSearchFields } from "../../stores/settings.store";
+import { useBackendStore } from "../../stores/backend.store";
 import { buildLocalOrigin } from "../../lib/build-navigation";
 import { Origin } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { Textarea } from "../../components/ui/textarea";
 import { Switch } from "../../components/ui/switch";
 import { Slider } from "../../components/ui/slider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
-import { useState, useEffect } from "react";
-import { Trash2, Volume2, Check, FolderOpen, Pencil, Globe, Database, RefreshCw, Download } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Trash2, Volume2, Check, FolderOpen, Pencil, Database, RefreshCw, Download } from "lucide-react";
 import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
 import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
 import { OriginEditDialog } from "./origin-edit-dialog";
+import { OnlineSearchCard } from "./online-search-card";
 import { CacheManagerModal } from "./cache-manager-modal";
 import { RankingView } from "./ranking-view";
 import { useStatusStore } from "../../stores/status.store";
+import { LibraryBrowserDialog } from "./library-browser-dialog";
 
 const PROVIDER_META: Record<string, { label: string; description: string; domain: string }> = {
   embedded: { label: "Embedded Tags", description: "Cover art extracted from file tags", domain: "local" },
@@ -121,16 +122,94 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   const [updatingYtDlp, setUpdatingYtDlp] = useState(false);
   const [ytDlpUpdateMsg, setYtDlpUpdateMsg] = useState<string | null>(null);
 
+  // Server config
+  const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+  const [serverLibraryRoot, setServerLibraryRoot] = useState("");
+  const [serverDbReady, setServerDbReady] = useState(false);
+  const [serverConfigLoading, setServerConfigLoading] = useState(false);
+  const [serverConfigSaving, setServerConfigSaving] = useState(false);
+  const [serverScanStatus, setServerScanStatus] = useState<{ status: string; progress: { total: number; done: number; currentItem: string } } | null>(null);
+  const [serverScanning, setServerScanning] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
+
+  const fetchServerConfig = useCallback(async () => {
+    setServerConfigLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/selftify/config`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setServerLibraryRoot(data.libraryRoot || "");
+      setServerDbReady(data.dbReady || false);
+    } catch { /* server not reachable */ }
+    setServerConfigLoading(false);
+  }, [API_BASE]);
+
+  const fetchServerScanStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/selftify/scan/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setServerScanStatus(data);
+      setServerScanning(data.status === "discovering" || data.status === "indexing");
+    } catch { /* server not reachable */ }
+  }, [API_BASE]);
+
+  useEffect(() => {
+    fetchServerConfig();
+  }, [fetchServerConfig]);
+
+  useEffect(() => {
+    if (!serverScanning) return;
+    const interval = setInterval(fetchServerScanStatus, 1000);
+    return () => clearInterval(interval);
+  }, [serverScanning, fetchServerScanStatus]);
+
+  async function handleSaveServerConfig() {
+    setServerConfigSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/selftify/config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ libraryRoot: serverLibraryRoot }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setServerDbReady(data.dbReady || false);
+        useStatusStore.getState().addMessage("Server library root updated", "success", "Settings");
+      }
+    } catch {
+      useStatusStore.getState().addMessage("Failed to update server config", "danger", "Settings");
+    }
+    setServerConfigSaving(false);
+  }
+
+  async function handleStartScan() {
+    if (serverScanStatus?.status === "discovering" || serverScanStatus?.status === "indexing") {
+      useStatusStore.getState().addMessage("Scan already in progress", "info", "Settings");
+      return;
+    }
+    setServerScanning(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/selftify/scan`, { method: "POST" });
+      if (res.status === 409) {
+        useStatusStore.getState().addMessage("Scan already in progress", "info", "Settings");
+        setServerScanning(false);
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json();
+        useStatusStore.getState().addMessage(err.error || "Scan failed to start", "warn", "Settings");
+        setServerScanning(false);
+      }
+    } catch {
+      useStatusStore.getState().addMessage("Failed to start scan", "danger", "Settings");
+      setServerScanning(false);
+    }
+  }
+
   const [form, setForm] = useState({
     folderPath: "",
     downloadFolder: "",
-    enableOnlineSearch: false,
-    musicBrainzToken: "",
-    musicBrainzClientId: "",
-    musicBrainzClientSecret: "",
-    musicBrainzRefreshToken: "",
-    musicBrainzTokenExpiresAt: 0,
-    youtubeMusicHeaders: "",
   });
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -152,7 +231,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
           getIndexer(origin).then((idx) => idx.start(origin))
         );
       }
-      setForm({ folderPath: "", downloadFolder: "", enableOnlineSearch: false, musicBrainzToken: "", musicBrainzClientId: "", musicBrainzClientSecret: "", musicBrainzRefreshToken: "", musicBrainzTokenExpiresAt: 0, youtubeMusicHeaders: "" });
+      setForm({ folderPath: "", downloadFolder: "" });
     } finally {
       setLoading(false);
     }
@@ -271,132 +350,167 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
             <div className="px-6">
               <div className="mx-auto max-w-3xl space-y-8 py-6">
                 <TabsContent value="servers" className="space-y-4">
+              {/* ── Backend Connection ── */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-lg">Connected Sources</CardTitle>
-                  <CardDescription>Manage your local music sources</CardDescription>
+                  <CardTitle className="text-lg">Selftify Server</CardTitle>
+                  <CardDescription>Configure the server's music library folder and trigger scans</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  {origins.length === 0 && (
-                    <p className="text-sm text-muted-foreground">No sources configured yet. Add one below.</p>
-                  )}
-                  {origins.map((o) => (
-                    <div key={o.id} className="flex items-center justify-between rounded-lg border p-3">
-                      <div>
-                        <p className="font-medium">{o.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          LOCAL {o.folderPath ? `\u2022 ${o.folderPath}` : ""}
-                          {o.enableOnlineSearch ? " \u2022 Online Search" : ""}
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setCurrentOrigin(o)}>
-                          Select
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => setEditingOrigin(o)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => useAuthStore.getState().removeOrigin(o.id)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                <CardContent className="space-y-3">
+                  <div>
+                    <label className="text-sm font-medium">Library Root</label>
+                    <div className="mt-1 flex gap-2">
+                      <Input
+                        className="flex-1 font-mono text-sm"
+                        placeholder="/path/to/music"
+                        value={serverLibraryRoot}
+                        onChange={(e) => setServerLibraryRoot(e.target.value)}
+                      />
+                      <Button variant="outline" size="icon" onClick={() => setBrowserOpen(true)} title="Browse server folders">
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
                     </div>
-                  ))}
-                  {editingOrigin && (
-                    <OriginEditDialog
-                      origin={editingOrigin}
-                      open={!!editingOrigin}
-                      onOpenChange={(open) => { if (!open) setEditingOrigin(null); }}
-                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {serverDbReady ? "Database ready" : "Database not initialized — save a valid path first"}
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button onClick={handleSaveServerConfig} disabled={serverConfigSaving || !serverLibraryRoot}>
+                      {serverConfigSaving ? "Saving..." : "Save"}
+                    </Button>
+                    <Button variant="secondary" onClick={handleStartScan} disabled={serverScanning || !serverDbReady}>
+                      {serverScanning ? "Scanning..." : "Scan"}
+                    </Button>
+                  </div>
+
+                  {serverScanStatus && serverScanning && (
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        Scanning... {serverScanStatus.progress.done}/{serverScanStatus.progress.total || "?"}
+                      </p>
+                      {serverScanStatus.progress.currentItem && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {serverScanStatus.progress.currentItem}
+                        </p>
+                      )}
+                      {serverScanStatus.progress.total > 0 && (
+                        <div className="h-1.5 w-full rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{
+                              width: `${Math.min(100, Math.round((serverScanStatus.progress.done / serverScanStatus.progress.total) * 100))}%`,
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {serverScanStatus?.status === "done" && (
+                    <p className="text-xs text-green-500">Scan complete</p>
+                  )}
+                  {serverScanStatus?.status === "error" && (
+                    <p className="text-xs text-destructive">Scan failed</p>
                   )}
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Add Source</CardTitle>
-                  <CardDescription>Add a local music folder</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <label className="text-sm font-medium">Music Folder</label>
-                    <div className="mt-1 flex gap-2">
-                      <Input
-                        className="flex-1"
-                        placeholder="/home/user/Music"
-                        value={form.folderPath}
-                        onChange={(e) => setForm({ ...form, folderPath: e.target.value })}
+              <LibraryBrowserDialog
+                open={browserOpen}
+                onOpenChange={setBrowserOpen}
+                currentPath={serverLibraryRoot || "/"}
+                onSelect={(path) => {
+                  setServerLibraryRoot(path);
+                  setBrowserOpen(false);
+                }}
+              />
+
+              {/* ── Online Search (global, always available) ── */}
+              <OnlineSearchCard />
+
+              {/* ── Local Library (standalone mode) ── */}
+              {!useBackendStore.getState().config && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Local Library</CardTitle>
+                    <CardDescription>Manage your local music sources (standalone mode)</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {origins.length === 0 && (
+                      <p className="text-sm text-muted-foreground">No sources configured yet. Add one below.</p>
+                    )}
+                    {origins.map((o) => (
+                      <div key={o.id} className="flex items-center justify-between rounded-lg border p-3">
+                        <div>
+                          <p className="font-medium">{o.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            LOCAL {o.folderPath ? `\u2022 ${o.folderPath}` : ""}
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => setCurrentOrigin(o)}>
+                            Select
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => setEditingOrigin(o)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => useAuthStore.getState().removeOrigin(o.id)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                    {editingOrigin && (
+                      <OriginEditDialog
+                        origin={editingOrigin}
+                        open={!!editingOrigin}
+                        onOpenChange={(open) => { if (!open) setEditingOrigin(null); }}
                       />
-                      <Button variant="outline" size="icon" onClick={handleBrowseFolder} title="Browse folder">
-                        <FolderOpen className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
+                    )}
 
-                  <div>
-                    <label className="text-sm font-medium">Download Folder (default = Music Folder)</label>
-                    <div className="mt-1 flex gap-2">
-                      <Input
-                        className="flex-1"
-                        placeholder="Same as music folder"
-                        value={form.downloadFolder}
-                        onChange={(e) => setForm({ ...form, downloadFolder: e.target.value })}
-                      />
-                      <Button variant="outline" size="icon" onClick={handleBrowseDownload} title="Browse download folder">
-                        <FolderOpen className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
+                    <Separator />
 
-                  <div className="flex items-center gap-2 rounded-lg border p-3">
-                    <Switch
-                      id="enable-online"
-                      checked={form.enableOnlineSearch}
-                      onCheckedChange={(v) => setForm({ ...form, enableOnlineSearch: v })}
-                    />
-                    <label htmlFor="enable-online" className="text-sm font-medium leading-none">
-                      <Globe className="mr-1 inline h-3 w-3" /> Enable Online Search
-                    </label>
-                  </div>
-
-                  {form.enableOnlineSearch && (
-                    <div className="space-y-4 rounded-lg border p-3">
-                      <p className="text-xs font-medium text-muted-foreground">Online Search Config</p>
-
-                      <div>
-                        <label className="text-sm font-medium">MusicBrainz Token</label>
+                    <div>
+                      <label className="text-sm font-medium">Music Folder</label>
+                      <div className="mt-1 flex gap-2">
                         <Input
-                          className="mt-1"
-                          placeholder="abc-123-def-456 (optional)"
-                          value={form.musicBrainzToken}
-                          onChange={(e) => setForm({ ...form, musicBrainzToken: e.target.value })}
+                          className="flex-1"
+                          placeholder="/home/user/Music"
+                          value={form.folderPath}
+                          onChange={(e) => setForm({ ...form, folderPath: e.target.value })}
                         />
-                      </div>
-
-                      <div>
-                        <label className="text-sm font-medium">YouTube Headers</label>
-                        <Textarea
-                          className="mt-1 min-h-[100px] font-mono text-xs"
-                          placeholder={"cookie: abc123\nauthorization: SAPISIDHASH...\nuser-agent: Mozilla/5.0..."}
-                          value={form.youtubeMusicHeaders}
-                          onChange={(e) => setForm({ ...form, youtubeMusicHeaders: e.target.value })}
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Paste HTTP headers from a browser session on music.youtube.com. One per line (key: value).
-                        </p>
+                        <Button variant="outline" size="icon" onClick={handleBrowseFolder} title="Browse folder">
+                          <FolderOpen className="h-4 w-4" />
+                        </Button>
                       </div>
                     </div>
-                  )}
 
-                  {authError && (
-                    <p className="text-sm text-destructive">{authError}</p>
-                  )}
+                    <div>
+                      <label className="text-sm font-medium">Download Folder (default = Music Folder)</label>
+                      <div className="mt-1 flex gap-2">
+                        <Input
+                          className="flex-1"
+                          placeholder="Same as music folder"
+                          value={form.downloadFolder}
+                          onChange={(e) => setForm({ ...form, downloadFolder: e.target.value })}
+                        />
+                        <Button variant="outline" size="icon" onClick={handleBrowseDownload} title="Browse download folder">
+                          <FolderOpen className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
 
-                  <Button className="w-full" onClick={handleAddLocal} disabled={loading}>
-                    {loading ? "Scanning..." : form.enableOnlineSearch ? "Add Local Source + Online Search" : "Add Local Source"}
-                  </Button>
-                </CardContent>
-              </Card>
+                    {authError && (
+                      <p className="text-sm text-destructive">{authError}</p>
+                    )}
+
+                    <Button className="w-full" onClick={handleAddLocal} disabled={loading}>
+                      {loading ? "Scanning..." : "Add Local Source"}
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             <TabsContent value="library" className="space-y-4">

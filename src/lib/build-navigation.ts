@@ -33,13 +33,6 @@ export function buildAlbumNav(song: Pick<Song, "albumId" | "albumName" | "artist
 export function buildLocalOrigin(form: {
   folderPath: string;
   downloadFolder: string;
-  enableOnlineSearch: boolean;
-  musicBrainzToken: string;
-  musicBrainzClientId: string;
-  musicBrainzClientSecret: string;
-  musicBrainzRefreshToken: string;
-  musicBrainzTokenExpiresAt: number;
-  youtubeMusicHeaders: string;
 }): Origin {
   return {
     id: crypto.randomUUID(),
@@ -47,12 +40,5 @@ export function buildLocalOrigin(form: {
     type: OriginType.LOCAL,
     folderPath: form.folderPath,
     downloadFolder: form.downloadFolder || form.folderPath,
-    enableOnlineSearch: form.enableOnlineSearch,
-    musicBrainzToken: form.musicBrainzToken || undefined,
-    musicBrainzClientId: form.musicBrainzClientId || undefined,
-    musicBrainzClientSecret: form.musicBrainzClientSecret || undefined,
-    musicBrainzRefreshToken: form.musicBrainzRefreshToken || undefined,
-    musicBrainzTokenExpiresAt: form.musicBrainzTokenExpiresAt || undefined,
-    youtubeMusicHeaders: form.youtubeMusicHeaders || undefined,
   };
 }

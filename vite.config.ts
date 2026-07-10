@@ -16,12 +16,6 @@ export default defineConfig({
     watch: {
       ignored: ["**/legacy/**"],
     },
-    proxy: {
-      "/youtubei": {
-        target: "https://www.youtube.com",
-        changeOrigin: true,
-      },
-    },
   },
   build: {
     target: "chrome120",
