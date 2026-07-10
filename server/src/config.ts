@@ -11,7 +11,7 @@ function strEnv(value: string | undefined, fallback: string): string {
 }
 
 export const config = {
-  port: Number(process.env.PORT || 3000),
+  port: Number(process.env.PORT || 6189),
   libraryRoot: path.resolve(strEnv(process.env.LIBRARY_ROOT, "/music")),
   // null = allow ALL origins (no CORS barrier). Set CORS_ORIGINS env to a
   // comma-separated list to restrict to specific domains.

@@ -13,14 +13,6 @@ export type ApiContext = {
   /** @deprecated Use useOnlineSearchStore instead */
   musicBrainzToken?: string;
   /** @deprecated Use useOnlineSearchStore instead */
-  musicBrainzClientId?: string;
-  /** @deprecated Use useOnlineSearchStore instead */
-  musicBrainzClientSecret?: string;
-  /** @deprecated Use useOnlineSearchStore instead */
-  musicBrainzRefreshToken?: string;
-  /** @deprecated Use useOnlineSearchStore instead */
-  musicBrainzTokenExpiresAt?: number;
-  /** @deprecated Use useOnlineSearchStore instead */
   youtubeMusicHeaders?: string;
 };
 
@@ -65,25 +57,40 @@ function getContext(): ApiContext {
     // Legacy fields for backward compat — new code reads from online-search store
     enableOnlineSearch: onlineSearch.enabled,
     musicBrainzToken: onlineSearch.musicBrainzToken,
-    musicBrainzClientId: onlineSearch.musicBrainzClientId,
-    musicBrainzClientSecret: onlineSearch.musicBrainzClientSecret,
-    musicBrainzRefreshToken: onlineSearch.musicBrainzRefreshToken,
-    musicBrainzTokenExpiresAt: onlineSearch.musicBrainzTokenExpiresAt,
+    youtubeMusicHeaders: onlineSearch.youtubeMusicHeaders,
+  };
+}
+
+// When a backend (Selftify/Subsonic server) is the source, there is no local
+// origin in auth.store. Build a context that lets the Subsonic controller work
+// without throwing "No origin selected".
+function getBackendContext(): ApiContext {
+  const { currentOrigin } = useAuthStore.getState();
+  const onlineSearch = useOnlineSearchStore.getState();
+  return {
+    originId: currentOrigin?.id ?? "selftify-server",
+    originType: currentOrigin?.type ?? OriginType.LOCAL,
+    credential: currentOrigin?.folderPath,
+    downloadFolder: onlineSearch.downloadFolder || currentOrigin?.downloadFolder,
+    folderPath: currentOrigin?.folderPath,
+    // Legacy fields for backward compat — new code reads from online-search store
+    enableOnlineSearch: onlineSearch.enabled,
+    musicBrainzToken: onlineSearch.musicBrainzToken,
     youtubeMusicHeaders: onlineSearch.youtubeMusicHeaders,
   };
 }
 
 export async function getController(): Promise<ServerController> {
-  const ctx = getContext();
-
-  // When a backend (Selftify/Subsonic server) is configured, use Subsonic controller
+  // When a backend (Selftify/Subsonic server) is configured, use Subsonic controller.
+  // Check this BEFORE getContext() since a backend has no auth.store origin.
   const { useBackendStore } = await import("../stores/backend.store");
   const backendConfig = useBackendStore.getState().config;
   if (backendConfig) {
     const { createSubsonicController } = await import("./subsonic/subsonic-controller");
-    return createSubsonicController(ctx);
+    return createSubsonicController(getBackendContext());
   }
 
+  const ctx = getContext();
   if (ctx.originType === OriginType.YOUTUBE) {
     return (await import("./youtube/youtube-controller")).createYoutubeController(ctx);
   }

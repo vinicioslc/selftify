@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useAuthStore } from "../../stores/auth.store";
+import { useBackendStore } from "../../stores/backend.store";
 import { useSettingsStore } from "../../stores/settings.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { getController } from "../../api/controller";
@@ -41,6 +42,7 @@ const quickActions = [
 
 export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpenSettings }: HomePageProps) {
   const { origins, currentOrigin, setCurrentOrigin } = useAuthStore();
+  const backendConfig = useBackendStore((s) => s.config);
   const { sidebarShowVisualizer, setSidebarShowVisualizer, theme, setTheme } = useSettingsStore();
   const { setQueue } = usePlayerStore();
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -48,7 +50,9 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpen
   const [error, setError] = useState<string | null>(null);
 
   const loadAlbums = useCallback(async () => {
-    if (!currentOrigin) {
+    // A backend (Selftify/Subsonic server) is a valid source even without a
+    // local origin in auth.store.
+    if (!currentOrigin && !backendConfig) {
       setAlbums([]);
       setLoading(false);
       return;
@@ -66,10 +70,17 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpen
     } finally {
       setLoading(false);
     }
-  }, [currentOrigin]);
+  }, [currentOrigin, backendConfig]);
 
   useEffect(() => {
     loadAlbums();
+  }, [loadAlbums]);
+
+  // Reload when a server scan completes (dispatched from settings page).
+  useEffect(() => {
+    const onLibraryUpdated = () => loadAlbums();
+    window.addEventListener("selftify:library-updated", onLibraryUpdated);
+    return () => window.removeEventListener("selftify:library-updated", onLibraryUpdated);
   }, [loadAlbums]);
 
   async function handlePlayAlbum(album: Album) {
@@ -90,6 +101,7 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpen
   }
 
   const hasAlbums = albums.length > 0;
+  const hasSource = !!currentOrigin || !!backendConfig;
   const hasLocalOrigin = origins.some((o) => o.type === OriginType.LOCAL);
 
   return (
@@ -99,12 +111,14 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpen
           {/* Header */}
           <div className="space-y-2">
             <h1 className="text-3xl font-bold tracking-tight">
-              {currentOrigin ? currentOrigin.name : "Music Player"}
+              {currentOrigin ? currentOrigin.name : backendConfig ? "Selftify Server" : "Music Player"}
             </h1>
             <p className="text-muted-foreground">
               {currentOrigin
                 ? `Browsing albums from ${currentOrigin.name}`
-                : "Connect a music source to get started"}
+                : backendConfig
+                  ? "Browsing albums from your Selftify server"
+                  : "Connect a music source to get started"}
             </p>
           </div>
 
@@ -115,7 +129,7 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpen
             </div>
           )}
 
-          {!loading && error && currentOrigin && (
+          {!loading && error && hasSource && (
             <div className="flex items-center justify-center py-12">
               <p className="text-sm text-muted-foreground">{error}</p>
             </div>
@@ -144,7 +158,7 @@ export function HomePage({ onNavigate, onNavigateAlbum, onNavigateArtist, onOpen
             </section>
           )}
 
-          {!loading && !error && currentOrigin && !hasAlbums && (
+          {!loading && !error && hasSource && !hasAlbums && (
             <div className="flex items-center justify-center py-12">
               <p className="text-sm text-muted-foreground">No albums found on this source.</p>
             </div>

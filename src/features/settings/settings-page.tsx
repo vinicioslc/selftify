@@ -10,7 +10,7 @@ import { Slider } from "../../components/ui/slider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Separator } from "../../components/ui/separator";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Trash2, Volume2, Check, FolderOpen, Pencil, Database, RefreshCw, Download } from "lucide-react";
 import { AudioOutputManager } from "../../services/audio-output/audio-output-manager";
 import type { AudioDevice } from "../../services/audio-output/audio-output-strategy";
@@ -123,7 +123,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   const [ytDlpUpdateMsg, setYtDlpUpdateMsg] = useState<string | null>(null);
 
   // Server config
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+  const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:6189";
   const [serverLibraryRoot, setServerLibraryRoot] = useState("");
   const [serverDbReady, setServerDbReady] = useState(false);
   const [serverConfigLoading, setServerConfigLoading] = useState(false);
@@ -131,6 +131,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   const [serverScanStatus, setServerScanStatus] = useState<{ status: string; progress: { total: number; done: number; currentItem: string } } | null>(null);
   const [serverScanning, setServerScanning] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
+  const prevScanStatusRef = useRef<string | undefined>(undefined);
 
   const fetchServerConfig = useCallback(async () => {
     setServerConfigLoading(true);
@@ -151,6 +152,11 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
       const data = await res.json();
       setServerScanStatus(data);
       setServerScanning(data.status === "discovering" || data.status === "indexing");
+      // Notify other views (e.g. Home) to refresh once a scan finishes.
+      if (data.status === "done" && prevScanStatusRef.current !== "done") {
+        window.dispatchEvent(new Event("selftify:library-updated"));
+      }
+      prevScanStatusRef.current = data.status;
     } catch { /* server not reachable */ }
   }, [API_BASE]);
 

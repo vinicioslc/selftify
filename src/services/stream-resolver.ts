@@ -65,10 +65,16 @@ export async function findLocalSongByMbid(mbzRecordingId: string, originId: stri
  * @param manualVideoId Optional YouTube video ID to force a specific video
  */
 export async function resolveSong(song: Song, manualVideoId?: string): Promise<ResolveResult> {
+  // When a backend (Selftify/Subsonic server) owns the library, song.path is a
+  // server-relative path, not a local file — never validate it against the
+  // local filesystem (and never delete local DB tracks for it).
+  const { useBackendStore } = await import("../stores/backend.store");
+  const isBackend = !!useBackendStore.getState().config;
+
   // Step 1: path already set (local file or pre-resolved stream)
   if (song.path) {
     // Only check file existence for local files, not stream URLs
-    if (song.originType === OriginType.LOCAL && !song.path.startsWith("http")) {
+    if (song.originType === OriginType.LOCAL && !song.path.startsWith("http") && !isBackend) {
       const root = getLibraryRoot();
       const absPath = isAbsolutePath(song.path) ? song.path : root ? joinPaths(root, song.path) : song.path;
       const p = await getPlatformService();

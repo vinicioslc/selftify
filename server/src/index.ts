@@ -1,9 +1,20 @@
 import { createApp } from "./app";
 import { config } from "./config";
 import { initDb, closeDb, isDbReady } from "./db/connection";
+import { getSettings } from "./services/settings";
 
 try {
   initDb();
+
+  // Restore persisted library root if one was saved
+  try {
+    const persisted = getSettings();
+    if (persisted.libraryRoot && typeof persisted.libraryRoot === "string") {
+      config.libraryRoot = persisted.libraryRoot;
+    }
+  } catch {
+    // settings unavailable — use env default
+  }
 } catch (err) {
   console.warn("[Selftify] Database init failed; server continues without library data:", (err as Error).message);
 }
