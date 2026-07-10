@@ -12,6 +12,20 @@ vi.mock("../sqlite-db-cache", () => ({
   cachedCreateDirectory: (...args: unknown[]) => mockCachedCreateDirectory(...args),
 }));
 
+const mockPlatformFileExists = vi.fn();
+const mockPlatformCreateDir = vi.fn();
+
+vi.mock("../../platform/factory", () => ({
+  getPlatformService: () => ({
+    fileExists: (...args: unknown[]) => mockPlatformFileExists(...args),
+    createDirectory: (...args: unknown[]) => mockPlatformCreateDir(...args),
+    readFile: vi.fn(),
+    isElectron: false,
+    isAndroid: false,
+    isWeb: true,
+  }),
+}));
+
 import { saveSqliteDbImage, readSqliteDbImage, imageCategoryRelativeDir, sha256Hash } from "../sqlite-db-image";
 
 beforeEach(() => {
@@ -55,7 +69,7 @@ describe("saveSqliteDbImage", () => {
     const relPath = await saveSqliteDbImage(ROOT, "artist", HASH, DATA, "image/png");
 
     expect(relPath).toBe(`.selftify/images/artist/${HASH}.png`);
-    expect(mockCachedCreateDirectory).toHaveBeenCalledWith(
+    expect(mockPlatformCreateDir).toHaveBeenCalledWith(
       `${ROOT}/.selftify/images/artist`,
     );
   });
@@ -90,18 +104,18 @@ describe("saveSqliteDbImage", () => {
 
     await saveSqliteDbImage(ROOT, "album", HASH, DATA, "image/jpeg");
 
-    expect(mockCachedCreateDirectory).toHaveBeenCalledWith(
+    expect(mockPlatformCreateDir).toHaveBeenCalledWith(
       `${ROOT}/.selftify/images/album`,
     );
   });
 
   it("nao recria diretorio se ja existir", async () => {
-    mockCachedExists.mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    mockPlatformFileExists.mockResolvedValue(true);
+    mockCachedExists.mockResolvedValue(false);
 
     await saveSqliteDbImage(ROOT, "album", HASH, DATA, "image/jpeg");
 
-    expect(mockCachedCreateDirectory).not.toHaveBeenCalled();
+    expect(mockPlatformCreateDir).not.toHaveBeenCalled();
   });
 });
 

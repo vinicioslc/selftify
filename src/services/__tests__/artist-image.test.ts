@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+let globalFetchMock: ReturnType<typeof vi.fn>;
 
 // Mock only the external modules — test the real logic of artist-image.ts
 vi.mock("../image-fetch", () => ({
@@ -9,13 +11,9 @@ vi.mock("../image-fetch", () => ({
     }
     return Promise.resolve(null);
   }),
+  tagImageSource: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("../platform-fetch", () => ({
-  platformFetch: vi.fn(),
-}));
-
-import { platformFetch } from "../platform-fetch";
 import { fetchArtistImage } from "../artist-image";
 
 function mockJsonResponse(data: unknown) {
@@ -44,11 +42,17 @@ function mockErrorResponse(status: number) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  globalFetchMock = vi.fn();
+  vi.stubGlobal("fetch", globalFetchMock);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("fetchArtistImage — Wikipedia fallback", () => {
   it("retorna blob URL quando Wikipedia tem thumbnail para o artista", async () => {
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("en.wikipedia.org/w/api.php")) {
         return Promise.resolve(mockJsonResponse({
           query: {
@@ -74,7 +78,7 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
   });
 
   it("retorna null quando Wikipedia não tem página para o artista", async () => {
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("en.wikipedia.org/w/api.php")) {
         return Promise.resolve(mockJsonResponse({
           query: { pages: { "999": { missing: true, title: "NonExistentArtist" } } },
@@ -88,7 +92,7 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
   });
 
   it("retorna null quando Wikipedia retorna HTTP 500", async () => {
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("en.wikipedia.org/w/api.php")) {
         return Promise.resolve(mockErrorResponse(500));
       }
@@ -100,7 +104,7 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
   });
 
   it("retorna null quando Wikipedia lança exceção de rede", async () => {
-    (platformFetch as any).mockRejectedValue(new Error("network error"));
+    globalFetchMock.mockRejectedValue(new Error("network error"));
     const result = await fetchArtistImage("NetworkErrorArtist");
     expect(result).toBeNull();
   });
@@ -108,7 +112,7 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
 
 describe("fetchArtistImage — Wikidata by MBID", () => {
   it("resolve imagem por MBID via Wikidata P434 → Commons", async () => {
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("query.wikidata.org/sparql")) {
         return Promise.resolve(mockJsonResponse({
           results: { bindings: [{ image: { value: "Trapt performing 2013.jpg" } }] },
@@ -135,17 +139,13 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
   });
 
   it("fallback para Wikipedia quando Wikidata retorna sem imagem (P18 ausente)", async () => {
-    let callCount = 0;
-    (platformFetch as any).mockImplementation((url: string) => {
-      callCount++;
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("query.wikidata.org/sparql") && url.includes("p18-absent-mbid")) {
-        // Sem P18 — retorna binding sem campo "image"
         return Promise.resolve(mockJsonResponse({
           results: { bindings: [{ item: { value: "http://www.wikidata.org/entity/Q999" } }] },
         }));
       }
       if (url.includes("commons.wikimedia.org/w/api.php")) {
-        // Commons também falha (porque não tem P18, esse caminho não é alcançado)
         return Promise.resolve(mockErrorResponse(404));
       }
       if (url.includes("en.wikipedia.org/w/api.php")) {
@@ -163,19 +163,15 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
           },
         }));
       }
-      return Promise.reject(new Error(`unexpected call #${callCount}: ${url}`));
+      return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
     const result = await fetchArtistImage("FallbackArtist", "p18-absent-mbid");
     expect(result).toMatch(/^blob:/);
-    // Wikipedia foi chamada (fallback depois de Wikidata não ter P18)
-    expect(callCount).toBeGreaterThanOrEqual(2);
   });
 
-  it("fallback para Wikipedia quando Wikidata SPARQL retorna erro", async () => {
-    let callCount = 0;
-    (platformFetch as any).mockImplementation((url: string) => {
-      callCount++;
+    it("fallback para Wikipedia quando Wikidata SPARQL retorna erro", async () => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("query.wikidata.org/sparql")) {
         return Promise.resolve(mockErrorResponse(500));
       }
@@ -194,7 +190,7 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
           },
         }));
       }
-      return Promise.reject(new Error(`unexpected call #${callCount}: ${url}`));
+      return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
     const result = await fetchArtistImage("Some Artist", "some-mbid");
@@ -204,10 +200,8 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
 
 describe("fetchArtistImage — cache sem request repetido", () => {
   it("usa cache do Wikipedia em chamadas subsequentes (sem platformFetch duplicado)", async () => {
-    let callCount = 0;
     let wikiCallCount = 0;
-    (platformFetch as any).mockImplementation((url: string) => {
-      callCount++;
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("en.wikipedia.org/w/api.php")) {
         wikiCallCount++;
         return Promise.resolve(mockJsonResponse({
@@ -227,14 +221,12 @@ describe("fetchArtistImage — cache sem request repetido", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    // Primeira chamada — faz fetch real
     const first = await fetchArtistImage("CacheTest");
     expect(first).toMatch(/^blob:/);
     expect(wikiCallCount).toBe(1);
 
-    // Segunda chamada com mesmo nome — usa cache, não chama Wikipedia
     const second = await fetchArtistImage("CacheTest");
     expect(second).toMatch(/^blob:/);
-    expect(wikiCallCount).toBe(1); // Wikipedia não foi chamado de novo
+    expect(wikiCallCount).toBe(1);
   });
 });

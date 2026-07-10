@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+let globalFetchMock: ReturnType<typeof vi.fn>;
 
 // Mock the external dependencies — the hook itself is the "implementation under test"
 vi.mock("../../services/image-fetch", () => ({
@@ -9,13 +11,8 @@ vi.mock("../../services/image-fetch", () => ({
       return Promise.resolve(`blob:mock/${url.split("/").pop()}`);
     return Promise.resolve(null);
   }),
+  tagImageSource: vi.fn(() => Promise.resolve()),
 }));
-
-vi.mock("../../services/platform-fetch", () => ({
-  platformFetch: vi.fn(),
-}));
-
-import { platformFetch } from "../../services/platform-fetch";
 
 function mockResolvedJson(data: unknown) {
   return {
@@ -29,14 +26,31 @@ function mockResolvedJson(data: unknown) {
   };
 }
 
+function mockRejectedJson(status: number) {
+  return {
+    ok: false,
+    status,
+    json: () => Promise.reject(new Error("not ok")),
+    headers: {},
+    text: () => Promise.resolve(""),
+    blob: () => Promise.resolve(new Blob()),
+    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  globalFetchMock = vi.fn();
+  vi.stubGlobal("fetch", globalFetchMock);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("useArtistImage — internal logic", () => {
   it("resolve imagem de artista de um MBID conhecido", async () => {
-    // Simula a cadeia Wikidata → Commons
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("query.wikidata.org/sparql") && url.includes("8876c0be")) {
         return Promise.resolve(mockResolvedJson({
           results: { bindings: [{ image: { value: "Trapt performing 2013.jpg" } }] },
@@ -55,7 +69,6 @@ describe("useArtistImage — internal logic", () => {
           },
         }));
       }
-      // Fallback Wikipedia (não deve ser chamado se Wikidata funcionar)
       if (url.includes("en.wikipedia.org/w/api.php")) {
         return Promise.resolve(mockResolvedJson({
           query: {
@@ -72,14 +85,13 @@ describe("useArtistImage — internal logic", () => {
       return Promise.reject(new Error(`unexpected url: ${url}`));
     });
 
-    // Importa e usa fetchArtistImage que é a base do hook
     const { fetchArtistImage } = await import("../../services/artist-image");
     const result = await fetchArtistImage("Trapt", "8876c0be-ccff-4d46-aa91-7f935a3b3b6b");
     expect(result).toMatch(/^blob:/);
   });
 
   it("resolve imagem de artista usando fallback Wikipedia quando sem MBID", async () => {
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("en.wikipedia.org/w/api.php")) {
         return Promise.resolve(mockResolvedJson({
           query: {
@@ -104,7 +116,7 @@ describe("useArtistImage — internal logic", () => {
   });
 
   it("retorna null quando todas as fontes falham", async () => {
-    (platformFetch as any).mockRejectedValue(new Error("network timeout"));
+    globalFetchMock.mockRejectedValue(new Error("network timeout"));
 
     const { fetchArtistImage } = await import("../../services/artist-image");
     const result = await fetchArtistImage("NonExistent");
@@ -112,8 +124,7 @@ describe("useArtistImage — internal logic", () => {
   });
 
   it("cadeia Wikidata → Commons completa sem erro de parse", async () => {
-    // Testa o parse real da resposta da Commons API
-    (platformFetch as any).mockImplementation((url: string) => {
+    globalFetchMock.mockImplementation((url: string, _init?: any) => {
       if (url.includes("query.wikidata.org/sparql")) {
         return Promise.resolve(mockResolvedJson({
           results: { bindings: [{ image: { value: "Radiohead 2016.jpg" } }] },

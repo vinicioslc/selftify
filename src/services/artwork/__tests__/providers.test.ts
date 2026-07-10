@@ -396,7 +396,7 @@ describe("ArtworkResolver", () => {
     expect(names).toContain("itunes");
     expect(names).toContain("deezer");
     expect(names).toContain("embedded");
-    expect(names).toHaveLength(5);
+    expect(names).toHaveLength(6);
   });
 
   it("resolveFromProvider tenta IPC primeiro, depois cai para renderer se IPC retornar vazio", async () => {
@@ -491,7 +491,7 @@ describe("ARTWORK_PROVIDER_META", async () => {
   const { ARTWORK_PROVIDER_META } = await import("../providers/meta");
 
   it("contém metadados para todos os 5 providers", () => {
-    expect(Object.keys(ARTWORK_PROVIDER_META)).toHaveLength(5);
+    expect(Object.keys(ARTWORK_PROVIDER_META)).toHaveLength(6);
     expect(ARTWORK_PROVIDER_META.cover_art_archive).toBeDefined();
     expect(ARTWORK_PROVIDER_META.musicbrainz_release_group).toBeDefined();
     expect(ARTWORK_PROVIDER_META.itunes).toBeDefined();

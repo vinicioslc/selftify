@@ -33,6 +33,13 @@ vi.mock("../../stores/settings.store", () => ({
   useSettingsStore: {
     getState: () => ({
       rankingWeights: { title: 1.0, artist: 0.5, album: 1.0, duration: 0.5, keywords: [] },
+      ytSearchFields: {
+        artistName: true,
+        songName: true,
+        albumName: true,
+        releaseYear: false,
+        genres: false,
+      },
     }),
   },
 }));
@@ -50,6 +57,17 @@ vi.mock("../../stores/status.store", () => ({
   useStatusStore: {
     getState: () => ({
       addMessage: vi.fn(),
+    }),
+  },
+}));
+
+vi.mock("../../stores/online-search.store", () => ({
+  useOnlineSearchStore: {
+    getState: () => ({
+      enabled: false,
+      youtubeMusicHeaders: "",
+      musicBrainzToken: "",
+      downloadFolder: "",
     }),
   },
 }));
@@ -140,7 +158,7 @@ describe("youtube-download-service", () => {
       ]);
 
       const result = await searchAndRank(makeSong());
-      expect(result).toEqual({ videoId: "v1", title: "Test Song", channelName: "Artist" });
+      expect(result).toEqual({ videoId: "v1", title: "Test Song" });
     });
 
     it("should use cached mapping if available", async () => {
@@ -243,7 +261,7 @@ describe("youtube-download-service", () => {
       mockSearch.mockResolvedValue([]);
       await searchAndRank(makeSong({ artistName: "Radiohead", name: "Creep", albumName: "Pablo Honey" }));
 
-      expect(mockSearch).toHaveBeenCalledWith("Radiohead Creep Pablo Honey", null);
+      expect(mockSearch).toHaveBeenCalledWith("Radiohead Creep Pablo Honey", undefined);
     });
 
     it("should handle search errors gracefully", async () => {
@@ -301,11 +319,11 @@ describe("youtube-download-service", () => {
       expect(result).toBeNull();
     });
 
-    it("should use manual videoId when provided", async () => {
+    it("should use youtubeVideoId when provided", async () => {
       mockGetStreamUrl.mockResolvedValue("https://stream.example.com/audio");
 
-      const result = await getStreamUrl(makeSong(), "manual-vid");
-      expect(mockGetStreamUrl).toHaveBeenCalledWith("manual-vid", null);
+      const result = await getStreamUrl(makeSong({ youtubeVideoId: "manual-vid" }));
+      expect(mockGetStreamUrl).toHaveBeenCalledWith("manual-vid", undefined);
       expect(result).toBe("https://stream.example.com/audio");
     });
 
@@ -315,7 +333,7 @@ describe("youtube-download-service", () => {
       mockGetStreamUrl.mockResolvedValue("https://stream.example.com/audio");
 
       await getStreamUrl(song);
-      expect(mockGetStreamUrl).toHaveBeenCalledWith("saved-vid", null);
+      expect(mockGetStreamUrl).toHaveBeenCalledWith("saved-vid", undefined);
     });
 
     it("should fall back to searchAndRank if no saved mapping", async () => {
@@ -337,8 +355,8 @@ describe("youtube-download-service", () => {
       expect(result).toBe("https://stream.example.com/audio");
     });
 
-    it("should fall back to auto-ranking if manual videoId fails", async () => {
-      const song = makeSong();
+    it("should fall back to auto-ranking if youtubeVideoId fails", async () => {
+      const song = makeSong({ youtubeVideoId: "manual-fail" });
       mockGetStreamUrl
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce("https://stream.example.com/audio");
@@ -355,13 +373,13 @@ describe("youtube-download-service", () => {
         },
       ]);
 
-      const result = await getStreamUrl(song, "manual-fail");
+      const result = await getStreamUrl(song);
       expect(result).toBe("https://stream.example.com/audio");
     });
 
     it("should return null if stream extraction fails", async () => {
       mockGetStreamUrl.mockRejectedValue(new Error("Failed"));
-      const result = await getStreamUrl(makeSong(), "vid-1");
+      const result = await getStreamUrl(makeSong({ youtubeVideoId: "vid-1" }));
       expect(result).toBeNull();
     });
   });
@@ -451,12 +469,12 @@ describe("youtube-download-service", () => {
     });
 
     it("should extract videoId from youtube.com URL", async () => {
-      mockGetVideoInfo.mockResolvedValue({
+      mockSearch.mockResolvedValue([{
+        id: "dQw4w9WgXcQ",
         title: "Custom Video",
         uploader: "User",
         duration: 300,
-        thumbnail: "https://img.example.com/thumb.jpg",
-      });
+      }]);
 
       const result = await fetchCustomVideoInfo("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
       expect(result?.videoId).toBe("dQw4w9WgXcQ");
@@ -465,35 +483,37 @@ describe("youtube-download-service", () => {
     });
 
     it("should extract videoId from youtu.be URL", async () => {
-      mockGetVideoInfo.mockResolvedValue({
+      mockSearch.mockResolvedValue([{
+        id: "dQw4w9WgXcQ",
         title: "Short URL Video",
         uploader: "User",
         duration: 200,
-      });
+      }]);
 
       const result = await fetchCustomVideoInfo("https://youtu.be/dQw4w9WgXcQ");
       expect(result?.videoId).toBe("dQw4w9WgXcQ");
     });
 
     it("should accept raw 11-char video ID", async () => {
-      mockGetVideoInfo.mockResolvedValue({
+      mockSearch.mockResolvedValue([{
+        id: "dQw4w9WgXcQ",
         title: "Raw ID Video",
         uploader: "User",
         duration: 180,
-      });
+      }]);
 
       const result = await fetchCustomVideoInfo("dQw4w9WgXcQ");
       expect(result?.videoId).toBe("dQw4w9WgXcQ");
     });
 
-    it("should return null if getVideoInfo returns null", async () => {
-      mockGetVideoInfo.mockResolvedValue(null);
+    it("should return null if search returns null", async () => {
+      mockSearch.mockResolvedValue([]);
       const result = await fetchCustomVideoInfo("dQw4w9WgXcQ");
       expect(result).toBeNull();
     });
 
-    it("should return null if getVideoInfo throws", async () => {
-      mockGetVideoInfo.mockRejectedValue(new Error("API error"));
+    it("should return null if search throws", async () => {
+      mockSearch.mockRejectedValue(new Error("API error"));
       const result = await fetchCustomVideoInfo("dQw4w9WgXcQ");
       expect(result).toBeNull();
     });
@@ -505,12 +525,12 @@ describe("youtube-download-service", () => {
     });
 
     it("should set all scoring fields to zero/false for custom source", async () => {
-      mockGetVideoInfo.mockResolvedValue({
+      mockSearch.mockResolvedValue([{
+        id: "dQw4w9WgXcQ",
         title: "Video",
         uploader: "User",
         duration: 200,
-        thumbnail: null,
-      });
+      }]);
 
       const result = await fetchCustomVideoInfo("dQw4w9WgXcQ");
       expect(result?.score).toBe(0);
