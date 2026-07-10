@@ -3,18 +3,14 @@ import { persist } from "zustand/middleware";
 
 export type OnlineSearchConfig = {
   enabled: boolean;
-  musicBrainzClientId: string;
-  musicBrainzClientSecret: string;
   musicBrainzToken: string;
-  musicBrainzRefreshToken: string;
-  musicBrainzTokenExpiresAt: number;
   youtubeMusicHeaders: string;
   downloadFolder: string;
 };
 
 type OnlineSearchState = OnlineSearchConfig & {
   setEnabled: (v: boolean) => void;
-  updateMusicBrainz: (partial: Partial<Pick<OnlineSearchConfig, "musicBrainzToken" | "musicBrainzClientId" | "musicBrainzClientSecret" | "musicBrainzRefreshToken" | "musicBrainzTokenExpiresAt">>) => void;
+  updateMusicBrainz: (partial: Partial<Pick<OnlineSearchConfig, "musicBrainzToken">>) => void;
   setYoutubeHeaders: (headers: string) => void;
   setDownloadFolder: (path: string) => void;
   clearAuth: () => void;
@@ -23,11 +19,7 @@ type OnlineSearchState = OnlineSearchConfig & {
 
 const DEFAULTS: OnlineSearchConfig = {
   enabled: false,
-  musicBrainzClientId: "",
-  musicBrainzClientSecret: "",
   musicBrainzToken: "",
-  musicBrainzRefreshToken: "",
-  musicBrainzTokenExpiresAt: 0,
   youtubeMusicHeaders: "",
   downloadFolder: "",
 };
@@ -52,10 +44,6 @@ export const useOnlineSearchStore = create<OnlineSearchState>()(
       clearAuth: () =>
         set({
           musicBrainzToken: "",
-          musicBrainzRefreshToken: "",
-          musicBrainzTokenExpiresAt: 0,
-          musicBrainzClientId: "",
-          musicBrainzClientSecret: "",
         }),
 
       reset: () => set(DEFAULTS),

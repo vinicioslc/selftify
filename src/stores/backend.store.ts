@@ -18,7 +18,6 @@ export const SELFTIFY_CAPABILITIES = [
   "organizer",
   "origins",
   "search-online",
-  "musicbrainz-oauth",
   "scan",
   "settings",
 ] as const;

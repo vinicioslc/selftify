@@ -10,7 +10,6 @@ import type { MusicBrainzContext } from "./musicbrainz-types";
 import { getCachedQuery, setCachedQuery, hashQuery } from "./sqlite-db/sqlite-db-query";
 import { useOnlineSearchStore } from "../stores/online-search.store";
 import { getLibraryRoot } from "./db/ensure-db";
-import { refreshAccessToken, isTokenExpired, computeExpiresAt } from "./musicbrainz-oauth";
 
 const BASE_URL = "https://musicbrainz.org/ws/2";
 const COVER_ART_URL = "https://coverartarchive.org/release";
@@ -18,34 +17,6 @@ const RATE_LIMIT_MS = 1200;
 const APP_NAME = "Selftify/1.0.0";
 
 let lastMbRequestAt = 0;
-
-/**
- * Check if the current MusicBrainz token is expired and refresh it if needed.
- * Updates the online-search store with new tokens when refreshed.
- */
-async function ensureValidToken(): Promise<void> {
-  const config = useOnlineSearchStore.getState();
-  if (!config.enabled) return;
-
-  const { musicBrainzClientId, musicBrainzClientSecret, musicBrainzRefreshToken, musicBrainzTokenExpiresAt } = config;
-  if (!musicBrainzClientId || !musicBrainzClientSecret || !musicBrainzRefreshToken) return;
-
-  if (!isTokenExpired(musicBrainzTokenExpiresAt)) return;
-
-  console.debug("[Selftify] MusicBrainz token expired, refreshing...");
-  try {
-    const tokenResp = await refreshAccessToken(musicBrainzClientId, musicBrainzClientSecret, musicBrainzRefreshToken);
-    const expiresAt = computeExpiresAt(tokenResp.expires_in);
-    useOnlineSearchStore.getState().updateMusicBrainz({
-      musicBrainzToken: tokenResp.access_token,
-      musicBrainzRefreshToken: tokenResp.refresh_token,
-      musicBrainzTokenExpiresAt: expiresAt,
-    });
-    console.debug("[Selftify] MusicBrainz token refreshed successfully");
-  } catch (err) {
-    console.warn("[Selftify] MusicBrainz token refresh failed:", err);
-  }
-}
 
 function hashSearchQuery(params: Record<string, unknown>): string {
   const sorted = Object.keys(params).sort().map((k) => `${k}:${JSON.stringify(params[k])}`).join("|");
@@ -59,8 +30,6 @@ function hashSearchQuery(params: Record<string, unknown>): string {
 }
 
 async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  await ensureValidToken();
-
   const headers = new Headers(init.headers);
   if (!headers.has("User-Agent")) {
     headers.set("User-Agent", APP_NAME);

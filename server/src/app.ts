@@ -49,7 +49,6 @@ export function createApp(): express.Express {
         "organizer",
         "origins",
         "search-online",
-        "musicbrainz-oauth",
         "scan",
         "settings",
       ],
@@ -76,6 +75,7 @@ export function createApp(): express.Express {
     closeDb();
     resetScanState();
     config.libraryRoot = libraryRoot;
+    updateSettings({ libraryRoot });
     try {
       initDb();
     } catch (err) {

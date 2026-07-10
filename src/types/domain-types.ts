@@ -121,10 +121,6 @@ export type Origin = {
   downloadFolder?: string;
   enableOnlineSearch?: boolean;
   musicBrainzToken?: string;
-  musicBrainzClientId?: string;
-  musicBrainzClientSecret?: string;
-  musicBrainzRefreshToken?: string;
-  musicBrainzTokenExpiresAt?: number;
   youtubeMusicHeaders?: string;
   organizeOnScan?: boolean;
   organizeDryRun?: boolean;

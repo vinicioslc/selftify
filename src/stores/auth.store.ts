@@ -6,27 +6,23 @@ import { useOnlineSearchStore } from "./online-search.store";
 function migrateOrigin(old: any): Origin {
   if (!old) return old;
 
-  // Extract legacy MusicBrainz/YouTube fields into the global online-search store
-  const hasOnlineFields =
-    old.enableOnlineSearch || old.musicBrainzToken || old.youtubeMusicHeaders;
-  if (hasOnlineFields) {
-    const online = useOnlineSearchStore.getState();
-    const needsUpdate =
-      !online.enabled && old.enableOnlineSearch
-      || !online.musicBrainzToken && old.musicBrainzToken;
-    if (needsUpdate) {
-      useOnlineSearchStore.setState({
-        enabled: online.enabled || !!old.enableOnlineSearch || !!old.useMusicBrainz,
-        musicBrainzToken: online.musicBrainzToken || old.musicBrainzToken || "",
-        musicBrainzClientId: online.musicBrainzClientId || old.musicBrainzClientId || "",
-        musicBrainzClientSecret: online.musicBrainzClientSecret || old.musicBrainzClientSecret || "",
-        musicBrainzRefreshToken: online.musicBrainzRefreshToken || old.musicBrainzRefreshToken || "",
-        musicBrainzTokenExpiresAt: online.musicBrainzTokenExpiresAt || old.musicBrainzTokenExpiresAt || 0,
-        youtubeMusicHeaders: online.youtubeMusicHeaders || old.youtubeMusicHeaders || "",
-        downloadFolder: online.downloadFolder || old.downloadFolder || "",
-      });
+    // Extract legacy MusicBrainz/YouTube fields into the global online-search store
+    const hasOnlineFields =
+      old.enableOnlineSearch || old.musicBrainzToken || old.youtubeMusicHeaders;
+    if (hasOnlineFields) {
+      const online = useOnlineSearchStore.getState();
+      const needsUpdate =
+        !online.enabled && old.enableOnlineSearch
+        || !online.musicBrainzToken && old.musicBrainzToken;
+      if (needsUpdate) {
+        useOnlineSearchStore.setState({
+          enabled: online.enabled || !!old.enableOnlineSearch || !!old.useMusicBrainz,
+          musicBrainzToken: online.musicBrainzToken || old.musicBrainzToken || "",
+          youtubeMusicHeaders: online.youtubeMusicHeaders || old.youtubeMusicHeaders || "",
+          downloadFolder: online.downloadFolder || old.downloadFolder || "",
+        });
+      }
     }
-  }
 
   return {
     id: old.id,
