@@ -14,6 +14,7 @@ const SOURCE_MAP: Record<string, CoverImageSource> = {
   "itunes":    { label: "iTunes", color: "bg-purple-600" },
   "local":     { label: "Local", color: "bg-green-600" },
   "remote":    { label: "Online", color: "bg-orange-600" },
+  "backend":   { label: "Server", color: "bg-cyan-600" },
 };
 
 function formatImageSource(source: string | null | undefined): CoverImageSource | null {

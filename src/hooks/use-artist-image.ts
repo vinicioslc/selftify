@@ -124,18 +124,23 @@ async function resolveArtistImageRemote(mbid: string | undefined, name: string):
   return null;
 }
 
-export type ArtistImageSource = "local" | "remote" | null;
+export type ArtistImageSource = "local" | "remote" | "backend" | null;
 
-export function useArtistImage(mbid: string | undefined, name: string): {
+export function useArtistImage(mbid: string | undefined, name: string, imageUrl?: string | null): {
   imageUrl: string | null;
   source: ArtistImageSource;
   triggerRemote: () => void;
 } {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [source, setSource] = useState<ArtistImageSource>(null);
+  const [imageUrlState, setImageUrl] = useState<string | null>(imageUrl ?? null);
+  const [source, setSource] = useState<ArtistImageSource>(imageUrl ? "backend" : null);
   const [triggered, setTriggered] = useState(false);
 
   useEffect(() => {
+    if (imageUrl) {
+      setImageUrl(imageUrl);
+      setSource("backend");
+      return;
+    }
     if (!name) { setImageUrl(null); setSource(null); return; }
     const cacheKey = mbid || name;
 
@@ -166,10 +171,10 @@ export function useArtistImage(mbid: string | undefined, name: string): {
 
     run();
     return () => { cancelled = true; };
-  }, [mbid, name]);
+  }, [mbid, name, imageUrl]);
 
   const triggerRemote = useCallback(async () => {
-    if (triggered) return;
+    if (triggered || imageUrl) return;
     setTriggered(true);
     const cacheKey = mbid || name;
     const remoteUrl = await resolveArtistImageRemote(mbid, name);
@@ -178,21 +183,26 @@ export function useArtistImage(mbid: string | undefined, name: string): {
       setImageUrl(remoteUrl);
       setSource("remote");
     }
-  }, [triggered, mbid, name]);
+  }, [triggered, mbid, name, imageUrl]);
 
-  return { imageUrl, source, triggerRemote };
+  return { imageUrl: imageUrlState, source, triggerRemote };
 }
 
-export function useLazyArtistImage(mbid: string | undefined, name: string): {
+export function useLazyArtistImage(mbid: string | undefined, name: string, imageUrl?: string | null): {
   imageUrl: string | null;
   source: ArtistImageSource;
   triggerRemote: () => void;
 } {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [source, setSource] = useState<ArtistImageSource>(null);
+  const [imageUrlState, setImageUrl] = useState<string | null>(imageUrl ?? null);
+  const [source, setSource] = useState<ArtistImageSource>(imageUrl ? "backend" : null);
   const [triggered, setTriggered] = useState(false);
 
   useEffect(() => {
+    if (imageUrl) {
+      setImageUrl(imageUrl);
+      setSource("backend");
+      return;
+    }
     if (!name) { setImageUrl(null); setSource(null); return; }
     const cacheKey = mbid || name;
     const cached = resultCache.get(cacheKey);
@@ -214,10 +224,10 @@ export function useLazyArtistImage(mbid: string | undefined, name: string): {
     }
     run();
     return () => { cancelled = true; };
-  }, [mbid, name]);
+  }, [mbid, name, imageUrl]);
 
   const triggerRemote = useCallback(async () => {
-    if (triggered) return;
+    if (triggered || imageUrl) return;
     setTriggered(true);
     const cacheKey = mbid || name;
     const remoteUrl = await resolveArtistImageRemote(mbid, name);
@@ -226,7 +236,7 @@ export function useLazyArtistImage(mbid: string | undefined, name: string): {
       setImageUrl(remoteUrl);
       setSource("remote");
     }
-  }, [triggered, mbid, name]);
+  }, [triggered, mbid, name, imageUrl]);
 
-  return { imageUrl, source, triggerRemote };
+  return { imageUrl: imageUrlState, source, triggerRemote };
 }

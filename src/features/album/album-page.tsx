@@ -44,7 +44,7 @@ import { useDownloadStore } from "../../stores/download.store";
 import { deleteAlbumFromLibrary } from "../../services/delete-album";
 import { useArtistImage } from "../../hooks/use-artist-image";
 import { moveSongToTrash } from "../../services/move-to-trash";
-import { getAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
+import { getAllMbzYtMappings } from "../../api/backend-state";
 
 interface AlbumPageProps {
   album: Album;
@@ -64,6 +64,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
     albumName: album.name,
     mbzReleaseGroupId: album.mbzReleaseGroupId,
     mbzReleaseId: album.mbzId,
+    imageUrl: album.imageUrl,
   });
   const [albumImageUrl, setAlbumImageUrl] = useState<string | null>(null);
   const [imageManagerOpen, setImageManagerOpen] = useState(false);
@@ -325,7 +326,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           }
 
           // 4. Enrich MBZ-only tracks with cached YouTube mappings (no network request)
-          const allMappings = await getAllSavedMbzYtMappings().catch(() => []);
+          const allMappings = await getAllMbzYtMappings().catch(() => []);
           const albumArtistLower = album.albumArtistName.toLowerCase();
           const albumNameLower = album.name.toLowerCase();
           const mappingByRecordingId = new Map<string, string>();

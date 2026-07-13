@@ -11,9 +11,11 @@ export type CoverInput = {
   mbzArtistId?: string | null;
   mbzReleaseGroupId?: string | null;
   mbzReleaseId?: string | null;
+  /** Backend-provided cover URL (e.g. Subsonic getCoverArt). When present, used directly. */
+  imageUrl?: string | null;
 };
 
-export type CoverSource = "img-folder" | "embedded" | "deezer" | "itunes" | "none";
+export type CoverSource = "img-folder" | "embedded" | "deezer" | "itunes" | "backend" | "none";
 
 export type CoverResult = {
   source: CoverSource;

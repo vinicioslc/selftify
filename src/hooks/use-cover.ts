@@ -21,8 +21,8 @@ function getActiveKey(input: CoverInput): string | null {
 }
 
 export function useCover(input: CoverInput) {
-  const [coverUrl, setCoverUrl] = useState<string | null>(null);
-  const [source, setSource] = useState<CoverSource | null>(null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(input.imageUrl ?? null);
+  const [source, setSource] = useState<CoverSource | null>(input.imageUrl ? "backend" : null);
   const [loading, setLoading] = useState(true);
   const prevKeyRef = useRef<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
@@ -31,6 +31,17 @@ export function useCover(input: CoverInput) {
   inputRef.current = input;
 
   const resolveCover = useCallback(async (mode: "local" | "remote") => {
+    // When a backend provides the cover URL directly, use it — skip local
+    // SQLite / IndexedDB / remote-provider resolution entirely.
+    if (inputRef.current.imageUrl) {
+      if (mountedRef.current) {
+        setCoverUrl(inputRef.current.imageUrl);
+        setSource("backend");
+        setLoading(false);
+      }
+      return;
+    }
+
     const activeKey = getActiveKey(inputRef.current);
     if (!activeKey) {
       if (mountedRef.current && mode !== "remote") { setCoverUrl(null); setSource(null); setLoading(false); }

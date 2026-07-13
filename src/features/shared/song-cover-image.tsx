@@ -17,10 +17,11 @@ export function SongCoverImage({ song, alt, fallback, className }: SongCoverImag
       mbzArtistId: song.mbzArtistId,
       mbzReleaseGroupId: song.mbzReleaseGroupId,
       mbzReleaseId: song.mbzAlbumId,
+      imageUrl: song.imageUrl,
     },
   );
 
-  const finalUrl = coverUrl || song.imageUrl;
+  const finalUrl = coverUrl;
 
   return (
     <CoverImage

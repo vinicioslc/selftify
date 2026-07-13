@@ -19,8 +19,7 @@ import { DownloadButton } from "../download/download-button";
 import { resolveSong, resolveSongs } from "../../services/stream-resolver";
 import { searchYouTubePure } from "../../services/youtube-pure-search";
 import type { YoutubeSearchScoredVideo } from "../../services/youtube-ranking";
-import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
-import type { CandidateData } from "../../services/sqlite-db/sqlite-db-types";
+import { getMbzYtMapping, setMbzYtMapping, type CandidateData } from "../../api/backend-state";
 import { useSettingsStore } from "../../stores/settings.store";
 import { searchMusicBrainz } from "../../services/search-service";
 import { DataTable, type ColumnDef } from "../shared/data-table";
@@ -43,7 +42,7 @@ import { moveSongToTrash } from "../../services/move-to-trash";
 type SearchMode = "local" | "musicbrainz" | "youtube";
 
 function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavigate?: (artist: AlbumArtist) => void }) {
-  const { imageUrl, triggerRemote } = useArtistImage(artist.mbz, artist.name);
+  const { imageUrl, triggerRemote } = useArtistImage(artist.mbz, artist.name, artist.imageUrl);
   return (
     <div
       className="flex cursor-pointer flex-col items-center gap-2 transition-opacity hover:opacity-80"
@@ -159,7 +158,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   async function handleSearchInternal(q: string, mode: SearchMode) {
     if (!q.trim() || !currentOrigin) return;
     const addMsg = useStatusStore.getState().addMessage;
-    const { getSearchCache, setSearchCache } = await import("../../services/sqlite-db/sqlite-db-search-store");
+    const { getSearchCache, setSearchCache } = await import("../../api/backend-state");
 
 
     setLoading(true);
@@ -442,9 +441,9 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     });
     // Persist to IndexedDB so subsequent plays use this selection
     if (song.mbzRecordingId) {
-      getSavedMbzYtMapping(song.mbzRecordingId).then((saved) => {
+      getMbzYtMapping(song.mbzRecordingId).then((saved) => {
         if (saved) {
-          setSavedMbzYtMapping({ ...saved, selectedVideoId: videoId, selectedType: "manual", updatedAt: Date.now() });
+          setMbzYtMapping({ ...saved, selectedVideoId: videoId, selectedType: "manual", updatedAt: Date.now() });
         }
       });
     }
@@ -1126,7 +1125,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
           visible={isCached && !loading}
           onClear={async () => {
             const key = `${searchMode}:${query.trim().toLowerCase().replace(/\s+/g, " ")}`;
-            const { deleteSearchCache } = await import("../../services/sqlite-db/sqlite-db-search-store");
+            const { deleteSearchCache } = await import("../../api/backend-state");
             await deleteSearchCache(key).catch(() => {});
             resultCache.delete(cacheKey(searchMode, query));
             setIsCached(false);

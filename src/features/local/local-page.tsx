@@ -2,6 +2,7 @@ import { useEffect, useMemo, useCallback, useState } from "react";
 import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { useStatusStore } from "../../stores/status.store";
+import { useBackendStore } from "../../stores/backend.store";
 import { getController } from "../../api/controller";
 import { OriginType, type Song, type Album, type AlbumArtist } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
@@ -30,6 +31,7 @@ interface LocalPageProps {
 
 export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps) {
   const { currentOrigin, origins } = useAuthStore();
+  const backendConfig = useBackendStore((s) => s.config);
   const { setQueue, addToQueue } = usePlayerStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [songs, setSongs] = useState<Song[]>([]);
@@ -51,7 +53,9 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   // ── Data loading ──
 
   const loadData = useCallback(async () => {
-    if (!currentOrigin) { setLoading(false); return; }
+    // A backend (Selftify/Subsonic server) is a valid source even without a
+    // local origin in auth.store — mirror the Home page behavior.
+    if (!currentOrigin && !backendConfig) { setLoading(false); return; }
     setLoading(true);
     try {
       const controller = await getController();
@@ -171,13 +175,13 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
   const handleNavArtist = useCallback((song: Song) => handleArtistClick(song), [handleArtistClick]);
   const handleNavAlbum = useCallback((song: Song) => handleAlbumClick(song), [handleAlbumClick]);
 
-  // ── No origin selected ──
+  // ── No source selected (neither local origin nor backend server) ──
 
-  if (!currentOrigin) {
+  if (!currentOrigin && !backendConfig) {
     return (
       <div className="flex h-full flex-col items-center justify-center">
         <Music className="h-12 w-12 text-muted-foreground/50" />
-        <p className="mt-2 text-muted-foreground">Select an origin to browse your music.</p>
+        <p className="mt-2 text-muted-foreground">Select an origin or connect a server to browse your music.</p>
       </div>
     );
   }
@@ -194,7 +198,7 @@ export function LocalPage({ onNavigateAlbum, onNavigateArtist }: LocalPageProps)
           {isLocalMode ? "Local Music Library" : "Music Library"}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Browsing: {currentOrigin.name} ({currentOrigin.type})
+          Browsing: {currentOrigin?.name ?? (backendConfig ? "Selftify Server" : "Unknown")} ({currentOrigin?.type ?? "server"})
           {localStats.songs > 0 && (
             <>
               {" \u00b7 "}{localStats.songs} songs{" \u00b7 "}{localStats.artists} artists{" \u00b7 "}{localStats.albums} albums

@@ -56,6 +56,7 @@ function AlbumCover({ album, artistName, onNavigate }: {
     artistName,
     albumName: album.name,
     mbzReleaseGroupId: MBID_RE.test(album.id) ? album.id : undefined,
+    imageUrl: album.imageUrl,
   });
 
   const finalUrl = coverUrl || album.imageUrl;
@@ -111,7 +112,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   const [offset, setOffset] = useState(0);
   const [allLoaded, setAllLoaded] = useState(false);
   const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
-  const { imageUrl: hookImageUrl, source: artistImageSource, triggerRemote: triggerArtistImage } = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name);
+  const { imageUrl: hookImageUrl, source: artistImageSource, triggerRemote: triggerArtistImage } = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name, artist.imageUrl);
   const [artistImageOverride, setArtistImageOverride] = useState<string | null>(null);
   const artistImageUrl = artistImageOverride || hookImageUrl || artist.imageUrl;
   const [localAlbumNames, setLocalAlbumNames] = useState<Set<string>>(new Set());
