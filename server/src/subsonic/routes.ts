@@ -177,15 +177,42 @@ router.get(["/stream", "/stream.view", "/download", "/download.view"], (req: Req
 });
 
 // ── getCoverArt ──
-router.get(["/getCoverArt", "/getCoverArt.view"], (req: Request, res: Response) => {
+router.get(["/getCoverArt", "/getCoverArt.view"], async (req: Request, res: Response) => {
   const id = String(req.query.id || "");
   if (!id) return sendError(res, missingParam("id"), res.locals.version);
+
+  // Try local resolution first (for Selftify backend with local scan)
   const coverPath = resolveCoverLocal(id);
-  if (!coverPath) return sendError(res, notFound("Cover art"), res.locals.version);
-  const ext = coverPath.split(".").pop()?.toLowerCase();
-  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-  res.setHeader("Content-Type", mime);
-  fs.createReadStream(coverPath).pipe(res);
+  if (coverPath) {
+    const ext = coverPath.split(".").pop()?.toLowerCase();
+    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    res.setHeader("Content-Type", mime);
+    fs.createReadStream(coverPath).pipe(res);
+    return;
+  }
+
+  // Fallback: proxy to Navidrome if configured
+  const navidromeUrl = config.navidromeUrl;
+  if (navidromeUrl) {
+    try {
+      const proxyUrl = `${navidromeUrl}/rest/getCoverArt.view?id=${encodeURIComponent(id)}`;
+      const proxyRes = await fetch(proxyUrl, {
+        headers: { "Accept": "*/*" },
+      });
+      if (proxyRes.ok && proxyRes.headers.get("content-type")?.startsWith("image/")) {
+        const blob = await proxyRes.arrayBuffer();
+        res.status(200);
+        res.setHeader("Content-Type", proxyRes.headers.get("content-type") || "image/jpeg");
+        res.setHeader("Content-Length", blob.byteLength.toString());
+        res.send(Buffer.from(blob));
+        return;
+      }
+    } catch (err) {
+      console.error("[getCoverArt] proxy error:", err);
+    }
+  }
+
+  return sendError(res, notFound("Cover art"), res.locals.version);
 });
 
 // ── fallback 404 para rotas /rest desconhecidas ──
