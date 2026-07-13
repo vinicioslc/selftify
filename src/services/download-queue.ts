@@ -3,6 +3,7 @@ import type { Song, DownloadTask } from "../types/domain-types";
 import { DownloadStatus, OriginType } from "../types/domain-types";
 import { useDownloadStore } from "../stores/download.store";
 import { useAuthStore } from "../stores/auth.store";
+import { useOnlineSearchStore } from "../stores/online-search.store";
 import { useStatusStore } from "../stores/status.store";
 import { getDownloadPlatform } from "./download-platform";
 import { searchAndRank } from "./youtube-download-service";
@@ -153,7 +154,7 @@ async function resolveMbMetadata(song: Song): Promise<MbMetadata> {
 
 function getDownloadFolder(song: Song): string {
   const origin = useAuthStore.getState().origins.find((o) => o.id === song.originId);
-  return origin?.downloadFolder || "";
+  return origin?.downloadFolder || useOnlineSearchStore.getState().downloadFolder || "";
 }
 
 function computeExpectedFilePath(folder: string, meta: MbMetadata, songName: string): string {
@@ -355,7 +356,48 @@ export async function processTask(task: DownloadTask): Promise<void> {
     throw new Error("No download folder configured for this origin");
   }
 
-  // Resolve canonical MusicBrainz metadata early (needed for path computation)
+  // ── Try backend download first (when Selftify server is available) ──
+  try {
+    const { useBackendStore } = await import("../stores/backend.store");
+    const backendCfg = useBackendStore.getState().config;
+    if (backendCfg && useBackendStore.getState().capabilities.includes("download")) {
+      const { API_BASE } = await import("../api/base");
+      const meta = await resolveMbMetadata(task.song);
+      const { searchAndRank: findVideo } = await import("./youtube-download-service");
+      store.updateTask(task.id, { status: DownloadStatus.SEARCHING, progress: 5, stepLabel: "Searching YouTube via server..." });
+      const match = await findVideo(task.song);
+      if (!match) throw new Error("No YouTube match found for this song");
+      store.updateTask(task.id, { videoId: match.videoId, progress: 10 });
+      store.updateTask(task.id, { status: DownloadStatus.DOWNLOADING_AUDIO, stepLabel: "Downloading via server..." });
+      const resp = await fetch(`${API_BASE}/api/selftify/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoId: match.videoId,
+          searchQuery: `${task.song.artistName} ${task.song.name}`,
+          songName: task.song.name,
+          artistName: meta.artistName,
+          albumName: meta.albumName,
+          albumArtistName: meta.albumArtistName,
+          trackNumber: meta.trackNumber,
+          releaseYear: meta.releaseYear,
+          genres: meta.genres,
+          imageUrl: task.song.imageUrl,
+        }),
+      });
+      const result = await resp.json();
+      if (result.success && result.filePath) {
+        store.updateTask(task.id, { audioPath: result.filePath, progress: 100, status: DownloadStatus.COMPLETED, stepLabel: "Completed", completedAt: Date.now() });
+        return;
+      }
+      throw new Error(result.error || "Server download failed");
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.warn("[download-queue] backend download failed, falling back to local:", msg);
+  }
+
+  // ── Fallback: local Electron IPC pipeline ──
   const meta = await resolveMbMetadata(task.song);
 
   // Check if file already exists on disk — skip download if present

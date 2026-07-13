@@ -10,6 +10,7 @@ import { initDb, closeDb, isDbReady } from "./db/connection";
 import { getScanStatus, resetScanState, startScan as runScan } from "./scanner/scanner";
 import subsonicRouter from "./subsonic/routes";
 import { getSettings, updateSettings } from "./services/settings";
+import { downloadSong, isYtDlpAvailable } from "./services/download-service";
 import * as mappingRepo from "./repositories/mapping-repo";
 import * as rankingRepo from "./repositories/ranking-repo";
 import * as cacheRepo from "./repositories/cache-repo";
@@ -205,6 +206,24 @@ export function createApp(): express.Express {
       youtubeMusicHeaders: updated.youtubeMusicHeaders ?? "",
       downloadFolder: updated.downloadFolder ?? "",
     });
+  });
+
+  // ---- Download endpoint ----
+  app.post("/api/selftify/download", async (req, res) => {
+    const { videoId, searchQuery, songName, artistName, albumName, albumArtistName, trackNumber, releaseYear, genres, imageUrl, coverArtData } = req.body;
+
+    if (!videoId || !songName || !artistName) {
+      res.status(400).json({ success: false, error: "Missing required fields: videoId, songName, artistName" });
+      return;
+    }
+
+    if (!isYtDlpAvailable()) {
+      res.status(500).json({ success: false, error: "yt-dlp is not installed on the server" });
+      return;
+    }
+
+    const result = await downloadSong({ videoId, searchQuery, songName, artistName, albumName, albumArtistName, trackNumber, releaseYear, genres, imageUrl, coverArtData });
+    res.json(result);
   });
 
   // ---- MusicBrainz <-> YouTube mappings (state owned by backend) ----
