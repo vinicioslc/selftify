@@ -105,6 +105,9 @@ export function App() {
       } catch {
         // not reachable — leave backendConfig as null, local controllers will be used
       }
+
+      // Sync online-search config from backend (if reachable)
+      await useOnlineSearchStore.getState().syncFromBackend();
     })();
   }, []);
 

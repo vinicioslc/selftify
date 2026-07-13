@@ -279,11 +279,11 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   }
 
   async function handleCheckYtDlp() {
-    if (!window.electronApi) return;
+    if (!(window as any).electronApi) return;
     setCheckingYtDlp(true);
     setYtDlpUpdateMsg(null);
     try {
-      const result = await window.electronApi.yt.checkVersion();
+      const result = await (window as any).electronApi.yt.checkVersion();
       setYtDlpFound(result.found);
       setYtDlpVersion(result.version);
       useStatusStore.getState().addMessage(
@@ -301,12 +301,12 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   }
 
   async function handleUpdateYtDlp() {
-    if (!window.electronApi) return;
+    if (!(window as any).electronApi) return;
     setUpdatingYtDlp(true);
     setYtDlpUpdateMsg(null);
     useStatusStore.getState().addMessage("Updating yt-dlp...", "info", "Settings");
     try {
-      const result = await window.electronApi.yt.update();
+      const result = await (window as any).electronApi.yt.update();
       setYtDlpUpdateMsg(result.message);
       useStatusStore.getState().addMessage(
         result.success ? "yt-dlp updated" : "yt-dlp update failed",
@@ -314,7 +314,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
         "Settings"
       );
       if (result.success) {
-        const version = await window.electronApi.yt.checkVersion();
+        const version = await (window as any).electronApi.yt.checkVersion();
         setYtDlpFound(version.found);
         setYtDlpVersion(version.version);
       }

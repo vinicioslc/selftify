@@ -4,11 +4,15 @@ import helmet from "helmet";
 import morgan from "morgan";
 import fs from "fs";
 import path from "path";
+import { createHash } from "crypto";
 import { config } from "./config";
 import { initDb, closeDb, isDbReady } from "./db/connection";
 import { getScanStatus, resetScanState, startScan as runScan } from "./scanner/scanner";
 import subsonicRouter from "./subsonic/routes";
 import { getSettings, updateSettings } from "./services/settings";
+import * as mappingRepo from "./repositories/mapping-repo";
+import * as rankingRepo from "./repositories/ranking-repo";
+import * as cacheRepo from "./repositories/cache-repo";
 
 const AUDIO_EXTS = new Set([".mp3", ".flac", ".ogg", ".m4a", ".m4b", ".opus", ".wav", ".wma", ".aac"]);
 
@@ -55,33 +59,46 @@ export function createApp(): express.Express {
     });
   });
 
-  // Get current server config (library root, scan status)
+  // Get current server config (library root, scan status, ListenBrainz token)
   app.get("/api/selftify/config", (_req, res) => {
     const scan = getScanStatus();
+    const settings = getSettings();
     res.json({
       libraryRoot: config.libraryRoot,
+      listenBrainzToken: settings.listenBrainzToken,
       dbReady: isDbReady(),
       scan,
     });
   });
 
-  // Update library root and re-initialize database
+  // Update library root and/or ListenBrainz token
   app.put("/api/selftify/config", (req, res) => {
-    const { libraryRoot } = req.body;
-    if (!libraryRoot || typeof libraryRoot !== "string") {
-      res.status(400).json({ error: "libraryRoot is required" });
-      return;
+    const { libraryRoot, listenBrainzToken } = req.body;
+    const updates: Record<string, any> = {};
+
+    if (libraryRoot !== undefined) {
+      if (typeof libraryRoot !== "string") {
+        res.status(400).json({ error: "libraryRoot must be a string" });
+        return;
+      }
+      resetScanState();
+      config.libraryRoot = libraryRoot;
+      updates.libraryRoot = libraryRoot;
     }
-    closeDb();
-    resetScanState();
-    config.libraryRoot = libraryRoot;
-    updateSettings({ libraryRoot });
-    try {
-      initDb();
-    } catch (err) {
-      console.warn("[config] DB init after root change:", (err as Error).message);
+
+    if (listenBrainzToken !== undefined) {
+      updates.listenBrainzToken = listenBrainzToken;
     }
-    res.json({ libraryRoot: config.libraryRoot, dbReady: isDbReady() });
+
+    if (Object.keys(updates).length > 0) {
+      updateSettings(updates);
+    }
+
+    res.json({
+      libraryRoot: config.libraryRoot,
+      listenBrainzToken: updates.listenBrainzToken ?? getSettings().listenBrainzToken,
+      dbReady: isDbReady(),
+    });
   });
 
   // Browse filesystem — list directories with audio file counts
@@ -153,6 +170,191 @@ export function createApp(): express.Express {
     }
     const updated = updateSettings(settings);
     res.json({ settings: updated });
+  });
+
+  // Dedicated online-search configuration route. The frontend's online-search
+  // toggle (and its tokens/folder) live here, decoupled from /api/selftify/config.
+  app.get("/api/online-search", (_req, res) => {
+    const s = getSettings();
+    res.json({
+      enabled: s.onlineSearchEnabled ?? false,
+      musicBrainzToken: s.musicBrainzToken ?? "",
+      listenBrainzToken: s.listenBrainzToken ?? "",
+      youtubeMusicHeaders: s.youtubeMusicHeaders ?? "",
+      downloadFolder: s.downloadFolder ?? "",
+    });
+  });
+
+  app.put("/api/online-search", (req, res) => {
+    const partial = req.body;
+    if (!partial || typeof partial !== "object") {
+      res.status(400).json({ error: "online-search config object is required" });
+      return;
+    }
+    const updates: Record<string, unknown> = {};
+    if (typeof partial.enabled === "boolean") updates.onlineSearchEnabled = partial.enabled;
+    if (typeof partial.musicBrainzToken === "string") updates.musicBrainzToken = partial.musicBrainzToken;
+    if (typeof partial.listenBrainzToken === "string") updates.listenBrainzToken = partial.listenBrainzToken;
+    if (typeof partial.youtubeMusicHeaders === "string") updates.youtubeMusicHeaders = partial.youtubeMusicHeaders;
+    if (typeof partial.downloadFolder === "string") updates.downloadFolder = partial.downloadFolder;
+    const updated = updateSettings(updates);
+    res.json({
+      enabled: updated.onlineSearchEnabled ?? false,
+      musicBrainzToken: updated.musicBrainzToken ?? "",
+      listenBrainzToken: updated.listenBrainzToken ?? "",
+      youtubeMusicHeaders: updated.youtubeMusicHeaders ?? "",
+      downloadFolder: updated.downloadFolder ?? "",
+    });
+  });
+
+  // ---- MusicBrainz <-> YouTube mappings (state owned by backend) ----
+  app.get("/api/mbz/mapping", (req, res) => {
+    const id = req.query.recordingId as string;
+    if (!id) {
+      res.status(400).json({ error: "recordingId query param required" });
+      return;
+    }
+    res.json({ mapping: mappingRepo.getMapping(id) });
+  });
+
+  app.put("/api/mbz/mapping", (req, res) => {
+    const m = req.body;
+    if (!m || typeof m.mbzRecordingId !== "string") {
+      res.status(400).json({ error: "mapping.mbzRecordingId required" });
+      return;
+    }
+    mappingRepo.upsertMapping({
+      mbzRecordingId: m.mbzRecordingId,
+      songName: m.songName ?? "",
+      artistName: m.artistName ?? "",
+      selectedVideoId: m.selectedVideoId ?? null,
+      selectedType: m.selectedType ?? null,
+      candidates: Array.isArray(m.candidates) ? m.candidates : [],
+      createdAt: m.createdAt ?? Date.now(),
+      updatedAt: m.updatedAt ?? Date.now(),
+    });
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/mbz/mapping", (req, res) => {
+    const id = req.query.recordingId as string;
+    if (!id) {
+      res.status(400).json({ error: "recordingId query param required" });
+      return;
+    }
+    mappingRepo.deleteMapping(id);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/mbz/mapping/all", (_req, res) => {
+    res.json({ mappings: mappingRepo.getAllMappings() });
+  });
+
+  app.delete("/api/mbz/mapping/all", (_req, res) => {
+    mappingRepo.clearAllMappings();
+    res.json({ ok: true });
+  });
+
+  // ---- Ranking log ----
+  app.get("/api/ranking/log", (req, res) => {
+    const limit = Number(req.query.limit) || 50;
+    res.json({ entries: rankingRepo.getRecentRankings(limit) });
+  });
+
+  app.post("/api/ranking/log", (req, res) => {
+    const e = req.body;
+    if (!e || typeof e.query !== "string" || typeof e.winnerId !== "string") {
+      res.status(400).json({ error: "query and winnerId required" });
+      return;
+    }
+    rankingRepo.recordRanking({
+      query: e.query,
+      winnerId: e.winnerId,
+      winnerTitle: e.winnerTitle ?? "",
+      winnerUploader: e.winnerUploader ?? "",
+      score: Number(e.score) || 0,
+      scores: typeof e.scores === "string" ? e.scores : JSON.stringify(e.scores ?? {}),
+      candidates: Number(e.candidates) || 0,
+    });
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/ranking/log", (_req, res) => {
+    rankingRepo.clearRankingLog();
+    res.json({ ok: true });
+  });
+
+  // ---- Search cache ----
+  app.get("/api/cache/search", (req, res) => {
+    const provider = req.query.provider as string;
+    const query = req.query.query as string;
+    if (!provider || !query) {
+      res.status(400).json({ error: "provider and query required" });
+      return;
+    }
+    res.json({ results: cacheRepo.getSearchCache(provider, query) });
+  });
+
+  app.put("/api/cache/search", (req, res) => {
+    const { provider, query, results } = req.body;
+    if (!provider || !query || !results) {
+      res.status(400).json({ error: "provider, query and results required" });
+      return;
+    }
+    cacheRepo.setSearchCache(provider, query, results);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/cache/search", (req, res) => {
+    const key = req.query.key as string;
+    if (key) {
+      cacheRepo.deleteSearchCache(key);
+    } else {
+      const provider = req.query.provider as string | undefined;
+      cacheRepo.clearSearchCache(provider);
+    }
+    res.json({ ok: true });
+  });
+
+  app.get("/api/cache/search/all", (_req, res) => {
+    res.json({ entries: cacheRepo.getAllSearchCacheEntries() });
+  });
+
+  // ---- Query cache (MusicBrainz / YouTube) ----
+  app.get("/api/cache/query", (req, res) => {
+    const platform = req.query.platform as cacheRepo.QueryPlatform;
+    const query = req.query.query as string;
+    if (!platform || !query) {
+      res.status(400).json({ error: "platform and query required" });
+      return;
+    }
+    const hash = Array.from(
+      createHash("sha256").update(query).digest(),
+    )
+      .map((b: number) => b.toString(16).padStart(2, "0"))
+      .join("");
+    res.json({ result: cacheRepo.getCachedQuery(platform, hash) });
+  });
+
+  app.put("/api/cache/query", (req, res) => {
+    const { platform, query, results, originId, raw } = req.body;
+    if (!platform || !query || !results) {
+      res.status(400).json({ error: "platform, query and results required" });
+      return;
+    }
+    const hash = Array.from(
+      createHash("sha256").update(query).digest(),
+    )
+      .map((b: number) => b.toString(16).padStart(2, "0"))
+      .join("");
+    cacheRepo.setCachedQuery(platform, hash, results, originId ?? "", raw);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/cache/query", (req, res) => {
+    const platform = req.query.platform as cacheRepo.QueryPlatform | undefined;
+    cacheRepo.clearQueryCache(platform);
+    res.json({ ok: true });
   });
 
   app.use("/rest", subsonicRouter);

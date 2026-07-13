@@ -1,16 +1,15 @@
 import type { Song } from "../types/domain-types";
-import { OriginType } from "../types/domain-types";
 import { scoreYouTubeResults, persistRanking, type YoutubeSearchVideo, type YoutubeSearchScoredVideo } from "./youtube-ranking";
-import { getMbzYtMapping, setMbzYtMapping, deleteMbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
+import {
+  getMbzYtMapping,
+  setMbzYtMapping,
+  deleteMbzYtMapping,
+  type MbzYtMapping,
+} from "../api/backend-state";
 import { useSettingsStore, type YtSearchFields } from "../stores/settings.store";
 import { useOnlineSearchStore } from "../stores/online-search.store";
-import { useAuthStore } from "../stores/auth.store";
 import { useStatusStore } from "../stores/status.store";
-import type { CandidateData } from "./sqlite-db/sqlite-db-types";
-
-function getLibraryRoot(): string | undefined {
-  return useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-}
+import type { CandidateData } from "../api/backend-state";
 
 function getYtHeaders(): string | undefined {
   return useOnlineSearchStore.getState().youtubeMusicHeaders || undefined;
@@ -94,8 +93,7 @@ export async function searchAndRank(
   if (!api) { log("no electron API"); return null; }
 
   if (song.mbzRecordingId) {
-    const root = getLibraryRoot();
-    const cached = root ? await getMbzYtMapping(root, song.mbzRecordingId) : null;
+    const cached = await getMbzYtMapping(song.mbzRecordingId);
     if (cached) {
       log(`cache HIT → videoId=${cached.selectedVideoId}`);
       addMsg(`📦 Cached match: ${cached.songName}`, "success");
@@ -135,48 +133,45 @@ export async function searchAndRank(
       addMsg(`${medal} ${r.video.title} (${r.video.uploader}) — score ${r.breakdown.score.toFixed(2)}${arrow}`);
     }
 
-    log(`winner: "${best.video.title}" score=${best.breakdown.score}`);
+log(`winner: "${best.video.title}" score=${best.breakdown.score}`);
     await persistRanking(query, ranked, song.duration ?? 0);
     if (song.mbzRecordingId) {
-      const root = getLibraryRoot();
-      if (root) {
-        const now = Date.now();
-        const candidatesData: CandidateData[] = ranked.map((r) => ({
-          videoId: r.video.id,
-          title: r.video.title,
-          uploader: r.video.uploader || "",
-          duration:
-            typeof r.video.duration === "object" && r.video.duration
-              ? r.video.duration.seconds
-              : typeof r.video.duration === "number"
-                ? r.video.duration
-                : undefined,
-          score: r.breakdown.score,
-          titleMatch: r.breakdown.titleMatch,
-          artistMatch: r.breakdown.artistMatch,
-          albumMatch: r.breakdown.albumMatch,
-          artistOnChannel: r.breakdown.artistOnChannel,
-          channelExactMatch: r.breakdown.channelExactMatch,
-          isCover: r.breakdown.isCover,
-          exactDuration: r.breakdown.exactDuration,
-          closestDuration: r.breakdown.closestDuration,
-          keywordScore: r.breakdown.keywordScore,
-          diff: r.diff,
-          source: "ranking" as const,
-        }));
-        await setMbzYtMapping(root, {
-          mbzRecordingId: song.mbzRecordingId,
-          songName: song.name,
-          artistName: song.artistName,
-          albumName: song.albumName,
-          selectedVideoId: best.video.id,
-          selectedType: "auto",
-          candidates: candidatesData,
-          createdAt: now,
-          updatedAt: now,
-        });
-        log(`mapping saved`);
-      }
+      const now = Date.now();
+      const candidatesData: CandidateData[] = ranked.map((r) => ({
+        videoId: r.video.id,
+        title: r.video.title,
+        uploader: r.video.uploader || "",
+        duration:
+          typeof r.video.duration === "object" && r.video.duration
+            ? r.video.duration.seconds
+            : typeof r.video.duration === "number"
+            ? r.video.duration
+            : undefined,
+        score: r.breakdown.score,
+        titleMatch: r.breakdown.titleMatch,
+        artistMatch: r.breakdown.artistMatch,
+        albumMatch: r.breakdown.albumMatch,
+        artistOnChannel: r.breakdown.artistOnChannel,
+        channelExactMatch: r.breakdown.channelExactMatch,
+        isCover: r.breakdown.isCover,
+        exactDuration: r.breakdown.exactDuration,
+        closestDuration: r.breakdown.closestDuration,
+        keywordScore: r.breakdown.keywordScore,
+        diff: r.diff,
+        source: "ranking" as const,
+      }));
+      await setMbzYtMapping({
+        mbzRecordingId: song.mbzRecordingId,
+        songName: song.name,
+        artistName: song.artistName,
+        albumName: song.albumName,
+        selectedVideoId: best.video.id,
+        selectedType: "auto",
+        candidates: candidatesData,
+        createdAt: now,
+        updatedAt: now,
+      });
+      log(`mapping saved`);
     }
     return { videoId: best.video.id, title: best.video.title };
   } catch (err) {
@@ -190,10 +185,7 @@ export async function searchAndRank(
 
 export async function researchSong(song: Song): Promise<void> {
   if (!song.mbzRecordingId) return;
-  const root = getLibraryRoot();
-  if (root) {
-    await deleteMbzYtMapping(root, song.mbzRecordingId);
-  }
+  await deleteMbzYtMapping(song.mbzRecordingId);
   await searchAndRank(song);
 }
 
@@ -269,9 +261,7 @@ export async function searchAndRankAll(song: Song, customQuery?: string): Promis
 export async function getSavedSelectedVideoId(song: Song): Promise<string | null> {
   if (!song.mbzRecordingId) return null;
   try {
-    const root = getLibraryRoot();
-    if (!root) return null;
-    const cached = await getMbzYtMapping(root, song.mbzRecordingId);
+    const cached = await getMbzYtMapping(song.mbzRecordingId);
     return cached?.selectedVideoId ?? null;
   } catch {
     return null;

@@ -31,7 +31,11 @@ function getAudioOutputManager(): AudioOutputManager {
 }
 
 function isStreamUrl(url: string): boolean {
-  return url.startsWith("https://") && !url.startsWith("file://");
+  // HTTP/HTTPS URLs (not file://) are external streams.
+  // Subsonic/Youtube streams are http://localhost:PORT/... — treat as streams.
+  // The standalone streamAudioRef element is used for these to avoid
+  // AudioContext cross-origin silencing.
+  return (url.startsWith("http://") || url.startsWith("https://")) && !url.startsWith("file://");
 }
 
 function resolveLocalPath(trackPath: string): string {
@@ -157,6 +161,7 @@ export function WebAudioProvider({ children }: { children: React.ReactNode }) {
     if (isStream && !streamAudioRef.current) {
       streamAudioRef.current = new Audio();
       streamAudioRef.current.preload = "auto";
+      streamAudioRef.current.crossOrigin = "anonymous";
       streamAudioRef.current.volume = volume;
     }
     if (!isStream && !audioRef.current) {
@@ -237,7 +242,13 @@ export function WebAudioProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
 
         if (isStream) {
-          try { connectStreamAudio(el); } catch (err) {
+          try {
+            connectStreamAudio(el);
+            // The AudioContext must be running for the AnalyserNode to process
+            // frequency data (feed visualizers). Stream audio plays natively
+            // via <audio>, but captureStream() routes through AudioContext.
+            await resumeContext();
+          } catch (err) {
             console.warn("[browser-audio] connectStreamAudio error:", err);
           }
         }

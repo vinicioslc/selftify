@@ -151,6 +151,10 @@ export async function startScan(libraryRoot: string): Promise<void> {
     db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES ('lastScanAt', ?)`).run(String(Date.now()));
     db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES ('scanStatus', 'done')`).run();
     db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES ('songCount', ?)`).run(String(allFiles.length));
+    const artistCount = (db.prepare(`SELECT COUNT(*) AS c FROM artists`).get() as { c: number }).c;
+    const albumCount = (db.prepare(`SELECT COUNT(*) AS c FROM albums`).get() as { c: number }).c;
+    db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES ('artistCount', ?)`).run(String(artistCount));
+    db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES ('albumCount', ?)`).run(String(albumCount));
   } catch {
     // config updates are non-critical
   }
@@ -181,6 +185,12 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
   const bitrate = format?.bitrate ? Math.round(format.bitrate / 1000) : null;
   const mbzRecordingId = (common as any)?.musicbrainz_recordingid || null;
   const mbzTrackId = (common as any)?.musicbrainz_trackid || null;
+  const mbzAlbumId = (common as any)?.musicbrainz_albumid || null;
+  const mbzReleaseGroupId = (common as any)?.musicbrainz_releasegroupid || null;
+  const mbzArtistId =
+    (common as any)?.musicbrainz_artistid?.[0] ||
+    (common as any)?.musicbrainz_albumartistid?.[0] ||
+    null;
 
   // Handle embedded cover art
   let coverRelPath: string | null = null;
@@ -207,9 +217,14 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
   // Upsert artist
   const artistId = generateId("ar", artistName);
   db.prepare(
-    `INSERT OR IGNORE INTO artists (id, name, genres, updated_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(artistId, artistName, genre ? JSON.stringify([genre]) : "[]", Date.now());
+    `INSERT OR IGNORE INTO artists (id, name, genres, mbz_id, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(artistId, artistName, genre ? JSON.stringify([genre]) : "[]", mbzArtistId, Date.now());
+  if (mbzArtistId) {
+    db.prepare(
+      `UPDATE artists SET mbz_id = ? WHERE id = ? AND (mbz_id IS NULL OR mbz_id = '')`,
+    ).run(mbzArtistId, artistId);
+  }
 
   // Upsert album
   const albumId = generateId("al", artistName, albumName || artistName);
@@ -223,8 +238,8 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
     ).run(duration || 0, Date.now(), albumId);
   } else {
     db.prepare(
-      `INSERT INTO albums (id, artist_id, name, artist_name, album_artist, release_year, genres, images, song_count, duration, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      `INSERT INTO albums (id, artist_id, name, artist_name, album_artist, release_year, genres, images, song_count, duration, mbz_id, mbz_release_group_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
     ).run(
       albumId,
       artistId,
@@ -235,8 +250,18 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
       genre ? JSON.stringify([genre]) : "[]",
       coverRelPath ? JSON.stringify([{ id: coverRelPath, url: coverRelPath, format: "image/jpeg" }]) : "[]",
       duration || 0,
+      mbzAlbumId,
+      mbzReleaseGroupId,
       Date.now(),
     );
+  }
+  if (mbzAlbumId || mbzReleaseGroupId) {
+    db.prepare(
+      `UPDATE albums
+         SET mbz_id = COALESCE(NULLIF(mbz_id, ''), ?),
+             mbz_release_group_id = COALESCE(NULLIF(mbz_release_group_id, ''), ?)
+       WHERE id = ? AND (mbz_id IS NULL OR mbz_id = '' OR mbz_release_group_id IS NULL OR mbz_release_group_id = '')`,
+    ).run(mbzAlbumId, mbzReleaseGroupId, albumId);
   }
 
   // Insert track

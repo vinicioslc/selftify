@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Song, Album, AlbumArtist } from "../../types/domain-types";
-import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
-import type { CandidateData, MbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
+import { getMbzYtMapping, setMbzYtMapping, type MbzYtMapping, type CandidateData } from "../../api/backend-state";
 import type { StreamSourceCandidate } from "../../types/domain-types";
 import { researchSong, fetchCustomVideoInfo, searchAndRankAll } from "../../services/youtube-download-service";
 import { findLocalCandidates } from "../../services/stream-resolver";
@@ -90,7 +89,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     const localCands = await findLocalCandidates(song.mbzRecordingId, song.originId, song.name, song.artistName);
     setLocalCandidates(localCands);
 
-    const m = await getSavedMbzYtMapping(song.mbzRecordingId);
+    const m = await getMbzYtMapping(song.mbzRecordingId);
     setMapping(m);
     if (m) {
       const raw = (m.candidates || []) as Partial<CandidateData>[];
@@ -119,7 +118,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     setSelectedLocalSongId(null);
     if (!song.mbzRecordingId || !mapping) return;
     const updated = { ...mapping, selectedVideoId: videoId, selectedType: "manual" as const, selectedSource: "youtube" as const, localSongId: undefined, updatedAt: Date.now() };
-    await setSavedMbzYtMapping(updated);
+    await setMbzYtMapping(updated);
     setMapping(updated);
   }
 
@@ -132,7 +131,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
       ...mapping,
       selectedSource: "local",
       localSongId,
-      selectedVideoId: localSongId,
+      selectedVideoId: mapping.selectedVideoId,
       selectedType: "manual",
       updatedAt: now,
     } : {
@@ -141,7 +140,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
       artistName: song.artistName,
       albumName: song.albumName,
       albumImageUrl: song.imageUrl,
-      selectedVideoId: localSongId,
+      selectedVideoId: undefined,
       selectedType: "manual",
       selectedSource: "local",
       localSongId,
@@ -149,7 +148,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
       createdAt: now,
       updatedAt: now,
     };
-    await setSavedMbzYtMapping(updated);
+    await setMbzYtMapping(updated);
     setMapping(updated);
   }
 
@@ -202,7 +201,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
           createdAt: mapping?.createdAt || now,
           updatedAt: now,
         };
-        await setSavedMbzYtMapping(updated);
+        await setMbzYtMapping(updated);
         setMapping(updated);
       }
     } catch {
@@ -239,7 +238,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
           createdAt: mapping?.createdAt || now,
           updatedAt: now,
         };
-        await setSavedMbzYtMapping(updated);
+        await setMbzYtMapping(updated);
         setMapping(updated);
       }
       setCustomUrl("");

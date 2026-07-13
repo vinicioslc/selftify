@@ -2,20 +2,34 @@ import { getDb } from "../db/connection";
 
 const PREFIX = "setting_";
 
-export function getSettings(): Record<string, any> {
+export interface ServerSettings {
+  libraryRoot?: string;
+  listenBrainzToken?: string;
+  scanStatus?: "idle" | "discovering" | "indexing" | "done" | "error";
+  songCount?: number;
+  artistCount?: number;
+  albumCount?: number;
+  // Online search configuration (dedicated route: /api/online-search)
+  onlineSearchEnabled?: boolean;
+  musicBrainzToken?: string;
+  youtubeMusicHeaders?: string;
+  downloadFolder?: string;
+}
+
+export function getSettings(): ServerSettings {
   try {
     const db = getDb();
     const rows = db
       .prepare("SELECT key, value FROM config WHERE key LIKE ?")
       .all(`${PREFIX}%`) as { key: string; value: string }[];
 
-    const settings: Record<string, any> = {};
+    const settings: ServerSettings = {};
     for (const row of rows) {
-      const settingKey = row.key.slice(PREFIX.length);
+      const settingKey = row.key.slice(PREFIX.length) as keyof ServerSettings;
       try {
-        settings[settingKey] = JSON.parse(row.value);
+        (settings as Record<string, unknown>)[settingKey] = JSON.parse(row.value);
       } catch {
-        settings[settingKey] = row.value;
+        (settings as Record<string, unknown>)[settingKey] = row.value;
       }
     }
     return settings;
@@ -24,7 +38,7 @@ export function getSettings(): Record<string, any> {
   }
 }
 
-export function updateSettings(partial: Record<string, any>): Record<string, any> {
+export function updateSettings(partial: Partial<ServerSettings>): ServerSettings {
   try {
     const db = getDb();
     const upsert = db.prepare(

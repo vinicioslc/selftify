@@ -2,8 +2,8 @@ import type { Song } from "../types/domain-types";
 import { OriginType, OriginType as OriginTypeEnum } from "../types/domain-types";
 import { getSongByMbid, getSongById, getSongByNameAndArtist } from "../api/local/local-queries";
 import { getStreamUrl } from "./youtube-download-service";
-import { getSavedMbzYtMapping, setSavedMbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
-import type { MbzYtMapping } from "./sqlite-db/sqlite-db-mappings";
+import { getMbzYtMapping, setMbzYtMapping, type MbzYtMapping } from "../api/backend-state";
+import { getController } from "../api/controller";
 import type { StreamSourceCandidate } from "../types/domain-types";
 import { useStatusStore } from "../stores/status.store";
 import { sqliteDbTrackToSong } from "./sqlite-db/sqlite-db-resolver";
@@ -71,30 +71,55 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
   const { useBackendStore } = await import("../stores/backend.store");
   const isBackend = !!useBackendStore.getState().config;
 
-  // Step 1: path already set (local file or pre-resolved stream)
-  if (song.path) {
-    // Only check file existence for local files, not stream URLs
-    if (song.originType === OriginType.LOCAL && !song.path.startsWith("http") && !isBackend) {
-      const root = getLibraryRoot();
-      const absPath = isAbsolutePath(song.path) ? song.path : root ? joinPaths(root, song.path) : song.path;
-      const p = await getPlatformService();
-      const exists = absPath ? await p.fileExists(absPath) : false;
-      if (!exists) {
-        addMsg(`File not found: ${song.name} — removed from library`, "warn");
-        log(`file not found, removing from DB: ${absPath}`);
-        try {
-          const { deleteTrack } = await import("./db/repositories/track-repo");
-          const { flushSave } = await import("./db/database");
-          const relPath = isAbsolutePath(song.path) && root ? normalizePath(song.path.slice(root.length + 1)) : normalizePath(song.path);
-          deleteTrack(relPath);
-          await flushSave();
-        } catch (err) {
-          console.warn("[stream-resolver] failed to remove missing file from DB:", err);
-        }
-        return { song: { ...song, path: undefined }, source: "none" };
+  // Step 1: directly-playable URL (http/https/file) — local file or
+  // pre-resolved YouTube/backend stream. Use it as-is.
+  const isDirectUrl =
+    !!song.path &&
+    (song.path.startsWith("http://") ||
+      song.path.startsWith("https://") ||
+      song.path.startsWith("file://"));
+  if (isDirectUrl) {
+    return { song, source: "local" };
+  }
+
+  // Step 1 (local file): validate the file exists on the local filesystem.
+  // Backend songs carry a *server-relative* path, NOT a local file path, so
+  // they must never enter this branch.
+  if (song.path && !isBackend && song.originType === OriginType.LOCAL) {
+    const root = getLibraryRoot();
+    const absPath = isAbsolutePath(song.path) ? song.path : root ? joinPaths(root, song.path) : song.path;
+    const p = await getPlatformService();
+    const exists = absPath ? await p.fileExists(absPath) : false;
+    if (!exists) {
+      addMsg(`File not found: ${song.name} — removed from library`, "warn");
+      log(`file not found, removing from DB: ${absPath}`);
+      try {
+        const { deleteTrack } = await import("./db/repositories/track-repo");
+        const { flushSave } = await import("./db/database");
+        const relPath = isAbsolutePath(song.path) && root ? normalizePath(song.path.slice(root.length + 1)) : normalizePath(song.path);
+        deleteTrack(relPath);
+        await flushSave();
+      } catch (err) {
+        console.warn("[stream-resolver] failed to remove missing file from DB:", err);
       }
+      return { song: { ...song, path: undefined }, source: "none" };
     }
     return { song, source: "local" };
+  }
+
+  // Step 1b: Backend song (server-relative path) → fetch a real stream URL
+  // from the backend controller. Without this, the raw relative path would be
+  // handed to <audio>, which would 404 against the dev server.
+  if (isBackend && song.id) {
+    log(`backend song, fetching stream URL for id=${song.id}`);
+    addMsg("Fetching stream from server...", "info");
+    const controller = await getController();
+    const streamUrl = await controller.getStreamUrl(song.id);
+    if (streamUrl) {
+      addMsg(`Stream ready`, "success");
+      return { song: { ...song, path: streamUrl }, source: "local" };
+    }
+    addMsg("Failed to get stream URL from server", "warn");
   }
 
   // Step 1b: cached youtubeVideoId → resolve stream URL directly (skip search)
@@ -110,7 +135,7 @@ export async function resolveSong(song: Song, manualVideoId?: string): Promise<R
   // Step 2: try to find local file by MBZ ID
   if (song.mbzRecordingId) {
     // Check saved preference first
-    const mapping = await getSavedMbzYtMapping(song.mbzRecordingId);
+    const mapping = await getMbzYtMapping(song.mbzRecordingId);
     if (mapping?.selectedSource === "local" && mapping.localSongId) {
       const localTrack = await getSongById(mapping.localSongId);
       if (localTrack?.path) {
@@ -177,7 +202,7 @@ async function saveLocalPreference(mbzRecordingId: string, localSong: Song, exis
   try {
     const now = Date.now();
     if (existingMapping) {
-      await setSavedMbzYtMapping({
+      await setMbzYtMapping({
         ...existingMapping,
         selectedSource: "local",
         localSongId: localSong.id,
@@ -186,13 +211,13 @@ async function saveLocalPreference(mbzRecordingId: string, localSong: Song, exis
         updatedAt: now,
       });
     } else {
-      await setSavedMbzYtMapping({
+      await setMbzYtMapping({
         mbzRecordingId,
         songName: localSong.name,
         artistName: localSong.artistName,
         albumName: localSong.albumName,
         albumImageUrl: localSong.imageUrl,
-        selectedVideoId: localSong.id,
+        selectedVideoId: undefined,
         selectedType: "auto",
         selectedSource: "local",
         localSongId: localSong.id,

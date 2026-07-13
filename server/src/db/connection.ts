@@ -1,18 +1,26 @@
 import path from "path";
 import fs from "fs";
+import os from "os";
 import Database from "better-sqlite3";
 import { config } from "../config";
 import { CREATE_TABLES } from "./schema";
 
 let db: Database.Database | null = null;
 
+// The backend DB is the single source of truth and lives at a FIXED location,
+// independent of `libraryRoot`. `libraryRoot` is only the directory scanned for
+// music files; it is stored as a config row inside this DB. Keeping the DB
+// location fixed avoids a chicken-and-egg problem where the DB path would
+// depend on a value (libraryRoot) that only exists inside the DB.
 export function getDbPath(): string {
-  return path.join(config.libraryRoot, ".selftify", "library.db");
+  if (process.env.SELFTIFY_DB_PATH) return process.env.SELFTIFY_DB_PATH;
+  return path.join(os.homedir(), ".selftify", "library.db");
 }
 
 export function initDb(): void {
   if (db) return;
   const dbPath = getDbPath();
+  console.log(`[Selftify] Database location: ${dbPath}`);
   // Ensure the parent (.selftify) directory exists before opening.
   try {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });

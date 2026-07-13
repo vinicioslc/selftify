@@ -4,9 +4,11 @@ import { initDb, closeDb, isDbReady } from "./db/connection";
 import { getSettings } from "./services/settings";
 
 try {
+  // The backend DB is at a fixed location (independent of libraryRoot), so it
+  // is always openable. After opening, restore the persisted libraryRoot from
+  // the config table — this is what makes the saved path survive restarts.
   initDb();
 
-  // Restore persisted library root if one was saved
   try {
     const persisted = getSettings();
     if (persisted.libraryRoot && typeof persisted.libraryRoot === "string") {

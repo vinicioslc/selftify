@@ -7,9 +7,8 @@ import type {
   MusicBrainzReleaseGroupResponse,
 } from "./musicbrainz-types";
 import type { MusicBrainzContext } from "./musicbrainz-types";
-import { getCachedQuery, setCachedQuery, hashQuery } from "./sqlite-db/sqlite-db-query";
+import { getCachedQuery, setCachedQuery, hashQuery } from "../api/backend-state";
 import { useOnlineSearchStore } from "../stores/online-search.store";
-import { getLibraryRoot } from "./db/ensure-db";
 
 const BASE_URL = "https://musicbrainz.org/ws/2";
 const COVER_ART_URL = "https://coverartarchive.org/release";
@@ -87,20 +86,12 @@ export type MusicBrainzSearchOpts = {
 };
 
 async function getSqliteDbCached<T>(cacheKey: string): Promise<T | null> {
-  const libraryRoot = getLibraryRoot();
-  if (!libraryRoot) return null;
-  const cached = await getCachedQuery(libraryRoot, "musicbrainz", cacheKey);
-  if (cached?.raw?.data) {
-    return cached.raw.data as T;
-  }
-  return null;
+  const cached = await getCachedQuery("musicbrainz", cacheKey);
+  return cached?.results as T | null;
 }
 
 async function setSqliteDbCached(cacheKey: string, data: unknown): Promise<void> {
-  const libraryRoot = getLibraryRoot();
-  if (!libraryRoot) return;
-  const originId = "mb";
-  await setCachedQuery(libraryRoot, "musicbrainz", cacheKey, { songs: [], albums: [], albumArtists: [] }, originId, { data });
+  await setCachedQuery("musicbrainz", cacheKey, data, "mb");
 }
 
 export async function searchRecordings(

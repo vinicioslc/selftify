@@ -120,13 +120,22 @@ describe("PUT /api/selftify/config", () => {
     fs.rmSync(newDir, { recursive: true, force: true });
   });
 
-  it("returns 400 when libraryRoot is missing", async () => {
+  it("returns 400 when libraryRoot is not a string", async () => {
+    const res = await fetch(`${baseUrl}/api/selftify/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ libraryRoot: 123 }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts empty config update when libraryRoot is not provided", async () => {
     const res = await fetch(`${baseUrl}/api/selftify/config`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
   });
 });
 

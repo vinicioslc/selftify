@@ -7,9 +7,9 @@ import { Slider } from "../../components/ui/slider";
 import { Input } from "../../components/ui/input";
 import { Loader2, Trash2, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useSettingsStore, type RankingWeights } from "../../stores/settings.store";
-import { getRecentRankings, clearRankingLog } from "../../services/sqlite-db/sqlite-db-ranking-log";
-import { clearAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
-import type { RankingLogEntry } from "../../services/sqlite-db/sqlite-db-ranking-log";
+import { getRecentRankings, clearRankingLog } from "../../api/backend-state";
+import { clearAllMbzYtMappings } from "../../api/backend-state";
+import type { RankingLogEntry } from "../../api/backend-state";
 
 function ScoreBreakdown({ scores }: { scores: string }) {
   const [open, setOpen] = useState(false);
@@ -187,7 +187,7 @@ export function RankingView() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Cached Mappings</CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => { clearAllSavedMbzYtMappings(); }}>
+            <Button variant="ghost" size="sm" onClick={() => { clearAllMbzYtMappings(); }}>
               <Trash2 className="h-3 w-3 mr-1" /> Clear All
             </Button>
           </div>

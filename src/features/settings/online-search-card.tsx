@@ -7,7 +7,7 @@ import { Switch } from "../../components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Separator } from "../../components/ui/separator";
 import { useStatusStore } from "../../stores/status.store";
-import { Globe, Check } from "lucide-react";
+import { Globe, Check, Music } from "lucide-react";
 
 export function OnlineSearchCard() {
   const {
@@ -18,6 +18,7 @@ export function OnlineSearchCard() {
   } = useOnlineSearchStore();
 
   const [localMbToken, setLocalMbToken] = useState(musicBrainzToken);
+  const [localListenBrainzToken, setLocalListenBrainzToken] = useState("");
   const [localYtHeaders, setLocalYtHeaders] = useState(youtubeMusicHeaders);
   const [localDownloadFolder, setLocalDownloadFolder] = useState(downloadFolder);
 
@@ -25,7 +26,10 @@ export function OnlineSearchCard() {
 
   function handleSaveOnline() {
     setEnabled(true);
-    updateMusicBrainz({ musicBrainzToken: localMbToken });
+    updateMusicBrainz({ 
+      musicBrainzToken: localMbToken,
+      listenBrainzToken: localListenBrainzToken 
+    });
     setYoutubeHeaders(localYtHeaders);
     setDownloadFolder(localDownloadFolder);
     useStatusStore.getState().addMessage("Online search config saved", "success", "Settings");
@@ -101,6 +105,36 @@ export function OnlineSearchCard() {
                   <p>2. Click &ldquo;Register new application&rdquo; (or use an existing one)</p>
                   <p>3. After registering, copy the <strong>OAuth Token</strong> (or the token shown for your app)</p>
                   <p>4. Paste it above</p>
+                </div>
+              </details>
+            </div>
+
+            <Separator />
+
+            <div className="rounded-lg border p-3 space-y-3">
+              <p className="text-sm font-medium flex items-center gap-2">
+                <Music className="h-4 w-4" />
+                ListenBrainz Scrobbling
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium">ListenBrainz User Token</label>
+                <Input
+                  value={localYtHeaders}
+                  onChange={(e) => setLocalYtHeaders(e.target.value)}
+                  placeholder="Paste your ListenBrainz user token"
+                  type="password"
+                  className="text-xs"
+                />
+              </div>
+
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer font-medium">How to get your ListenBrainz token</summary>
+                <div className="mt-1 space-y-1 pl-2">
+                  <p>1. Go to <a href="https://listenbrainz.org" target="_blank" rel="noopener noreferrer" className="underline">listenbrainz.org</a></p>
+                  <p>2. Create an account or log in</p>
+                  <p>3. Go to <a href="https://listenbrainz.org/settings" target="_blank" rel="noopener noreferrer" className="underline">Settings → API Token</a></p>
+                  <p>4. Generate a new token and paste it above</p>
                 </div>
               </details>
             </div>

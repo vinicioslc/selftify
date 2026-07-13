@@ -21,9 +21,10 @@ function getActiveKey(input: CoverInput): string | null {
 }
 
 export function useCover(input: CoverInput) {
+  const hasImageUrl = !!input.imageUrl;
   const [coverUrl, setCoverUrl] = useState<string | null>(input.imageUrl ?? null);
-  const [source, setSource] = useState<CoverSource | null>(input.imageUrl ? "backend" : null);
-  const [loading, setLoading] = useState(true);
+  const [source, setSource] = useState<CoverSource | null>(hasImageUrl ? "backend" : null);
+  const [loading, setLoading] = useState(!hasImageUrl); // false if imageUrl provided
   const prevKeyRef = useRef<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
   const mountedRef = useRef(true);

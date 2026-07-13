@@ -5,10 +5,10 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Badge } from "../../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Trash2, Loader2 } from "lucide-react";
-import type { CacheEntry } from "../../services/sqlite-db/sqlite-db-search-store";
-import { getAllSavedMbzYtMappings, deleteSavedMbzYtMapping, clearAllSavedMbzYtMappings } from "../../services/sqlite-db/sqlite-db-mappings";
-import type { MbzYtMapping } from "../../services/sqlite-db/sqlite-db-mappings";
-import { getAllSearchCacheEntries, deleteSearchCache, clearSearchCache } from "../../services/sqlite-db/sqlite-db-search-store";
+import type { CacheEntry } from "../../api/backend-state";
+import { getAllMbzYtMappings, deleteMbzYtMapping, clearAllMbzYtMappings } from "../../api/backend-state";
+import type { MbzYtMapping } from "../../api/backend-state";
+import { getAllSearchCacheEntries, deleteSearchCache, clearSearchCache } from "../../api/backend-state";
 
 export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [searchEntries, setSearchEntries] = useState<CacheEntry[]>([]);
@@ -17,7 +17,7 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
 
   async function refresh() {
     setLoading(true);
-    const [se, mp] = await Promise.all([getAllSearchCacheEntries(), getAllSavedMbzYtMappings()]);
+    const [se, mp] = await Promise.all([getAllSearchCacheEntries(), getAllMbzYtMappings()]);
     setSearchEntries(se);
     setMappings(mp);
     setLoading(false);
@@ -101,7 +101,7 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
               <ScrollArea className="max-h-[50vh]">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm text-muted-foreground">Total: {mappings.length} mappings</span>
-                  <Button variant="ghost" size="sm" onClick={() => { clearAllSavedMbzYtMappings(); refresh(); }}>
+                  <Button variant="ghost" size="sm" onClick={() => { clearAllMbzYtMappings(); refresh(); }}>
                     Clear All
                   </Button>
                 </div>
@@ -115,7 +115,7 @@ export function CacheManagerModal({ open, onOpenChange }: { open: boolean; onOpe
                       <Badge variant="outline" className="mx-1 shrink-0">{m.selectedType}</Badge>
                       <span className="text-muted-foreground shrink-0">{new Date(m.updatedAt).toLocaleString()}</span>
                       <Button variant="ghost" size="icon" className="h-6 w-6 ml-2 shrink-0"
-                        onClick={() => { deleteSavedMbzYtMapping(m.mbzRecordingId); refresh(); }}>
+                        onClick={() => { deleteMbzYtMapping(m.mbzRecordingId); refresh(); }}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>

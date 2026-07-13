@@ -14,14 +14,13 @@ const mockSetMbzYtMapping = vi.fn();
 const mockDeleteMbzYtMapping = vi.fn();
 const mockRecordRanking = vi.fn();
 
-vi.mock("../sqlite-db/sqlite-db-mappings", () => ({
+vi.mock("../../api/backend-state", () => ({
   getMbzYtMapping: (...args: any[]) => mockGetMbzYtMapping(...args),
   setMbzYtMapping: (...args: any[]) => mockSetMbzYtMapping(...args),
   deleteMbzYtMapping: (...args: any[]) => mockDeleteMbzYtMapping(...args),
-}));
-
-vi.mock("../sqlite-db/sqlite-db-ranking-log", () => ({
   recordRanking: (...args: any[]) => mockRecordRanking(...args),
+  getRecentRankings: vi.fn(),
+  clearRankingLog: vi.fn(),
 }));
 
 vi.mock("../youtube-ranking", () => ({
@@ -248,7 +247,7 @@ describe("youtube-download-service", () => {
 
       expect(mockSetMbzYtMapping).toHaveBeenCalled();
       const setCallArgs = mockSetMbzYtMapping.mock.calls[0];
-      expect(setCallArgs[1]).toEqual(
+      expect(setCallArgs[0]).toEqual(
         expect.objectContaining({
           mbzRecordingId: "mbz-rec-1",
           selectedVideoId: "v1",
@@ -300,7 +299,7 @@ describe("youtube-download-service", () => {
       await researchSong(song);
       expect(mockDeleteMbzYtMapping).toHaveBeenCalled();
       const callArgs = mockDeleteMbzYtMapping.mock.calls[0];
-      expect(callArgs[1]).toBe("mbz-rec-1");
+      expect(callArgs[0]).toBe("mbz-rec-1");
     });
 
     it("should not try to delete mapping if no mbzRecordingId", async () => {
