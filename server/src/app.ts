@@ -218,7 +218,7 @@ export function createApp(): express.Express {
     }
 
     if (!isYtDlpAvailable()) {
-      res.status(500).json({ success: false, error: "yt-dlp is not installed on the server" });
+      res.status(500).json({ success: false, error: "yt-dlp binary not found in node_modules (reinstall youtube-dl-exec)" });
       return;
     }
 

@@ -1,9 +1,14 @@
-import { execFile, execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
 import { getSettings } from "./settings";
 
-const YT_DLP = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+const require = createRequire(import.meta.url);
+const youtubedl = require("youtube-dl-exec");
+const ffmpegPath: string | null = require("ffmpeg-static") || null;
+const ffmpeg = require("fluent-ffmpeg");
+
+if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 
 export type DownloadRequest = {
   videoId: string;
@@ -27,8 +32,8 @@ export type DownloadResult = {
 
 export function isYtDlpAvailable(): boolean {
   try {
-    execFileSync(YT_DLP, ["--version"], { timeout: 10_000, stdio: "ignore" });
-    return true;
+    const bin = youtubedl.execPath;
+    return !!bin && fs.existsSync(bin);
   } catch {
     return false;
   }
@@ -41,8 +46,8 @@ export async function downloadSong(req: DownloadRequest): Promise<DownloadResult
     return { success: false, error: "No download folder configured on the server" };
   }
 
-  if (!isYtDlpAvailable()) {
-    return { success: false, error: "yt-dlp is not installed or not found in PATH" };
+  if (!ffmpegPath) {
+    return { success: false, error: "ffmpeg binary not available for this platform" };
   }
 
   const artistDir = path.join(downloadFolder, sanitize(req.artistName));
@@ -54,54 +59,60 @@ export async function downloadSong(req: DownloadRequest): Promise<DownloadResult
   fs.mkdirSync(albumDir, { recursive: true });
 
   const prefix = req.trackNumber ? `${String(req.trackNumber).padStart(2, "0")} - ` : "";
-  const outputTemplate = path.join(albumDir, `${prefix}%(title)s.%(ext)s`);
+  const outputTemplate = path.join(albumDir, `${prefix}${sanitize(req.songName)}.%(ext)s`);
   const finalPath = path.join(albumDir, `${prefix}${sanitize(req.songName)}.mp3`);
 
-  return new Promise((resolve) => {
-    const args = [
-      `https://www.youtube.com/watch?v=${req.videoId}`,
-      "--format", "bestaudio[ext=m4a]/bestaudio",
-      "--output", outputTemplate,
-      "--no-playlist",
-      "--print", "filename",
-      "--no-warnings",
-    ];
-
-    execFile(YT_DLP, args, { cwd: albumDir, timeout: 300_000 }, (error, stdout, _stderr) => {
-      if (error) {
-        resolve({ success: false, error: `yt-dlp failed: ${error.message}` });
-        return;
-      }
-
-      const downloadedName = stdout?.toString().trim();
-      if (downloadedName && fs.existsSync(downloadedName)) {
-        const audioPath = path.resolve(albumDir, downloadedName);
-        if (audioPath !== finalPath) {
-          try {
-            fs.renameSync(audioPath, finalPath);
-          } catch {
-            resolve({ success: true, filePath: audioPath });
-            return;
-          }
-        }
-        resolve({ success: true, filePath: finalPath });
-        return;
-      }
-
-      const files = fs.readdirSync(albumDir);
-      const audioFile = files.find((f) => f.endsWith(".m4a") || f.endsWith(".mp3") || f.endsWith(".webm"));
-      if (audioFile) {
-        const found = path.join(albumDir, audioFile);
-        if (found !== finalPath) {
-          try { fs.renameSync(found, finalPath); } catch { /* ignore */ }
-        }
-        resolve({ success: true, filePath: fs.existsSync(finalPath) ? finalPath : found });
-        return;
-      }
-
-      resolve({ success: false, error: "Download completed but audio file not found" });
+  try {
+    // Step 1: Download raw audio with bundled yt-dlp (no conversion)
+    // yt-dlp saves as m4a (bestaudio with ext=m4a sub-format)
+    const url = `https://www.youtube.com/watch?v=${req.videoId}`;
+    await youtubedl(url, {
+      format: "bestaudio[ext=m4a]/bestaudio",
+      output: outputTemplate,
+      "no-playlist": true,
     });
-  });
+
+    // Find the downloaded file (yt-dlp resolves the extension)
+    const files = fs.readdirSync(albumDir);
+    const rawFile = files.find(
+      (f) => f.startsWith(`${prefix}${sanitize(req.songName)}`) && !f.endsWith(".mp3") && !f.endsWith(".part"),
+    );
+    if (!rawFile) return { success: false, error: "yt-dlp completed but no audio file found" };
+    const rawPath = path.join(albumDir, rawFile);
+
+    // Step 2: Convert to MP3 + embed metadata using bundled ffmpeg
+    const metadata: string[] = [];
+    metadata.push(`title=${req.songName}`);
+    metadata.push(`artist=${req.artistName}`);
+    if (req.albumName) metadata.push(`album=${req.albumName}`);
+    if (req.trackNumber) metadata.push(`track=${req.trackNumber}`);
+    if (req.releaseYear) metadata.push(`date=${req.releaseYear}`);
+    if (req.genres?.length) metadata.push(`genre=${req.genres.join("/")}`);
+
+    await new Promise<void>((resolve, reject) => {
+      const cmd = ffmpeg(rawPath)
+        .audioCodec("libmp3lame")
+        .audioBitrate(320)
+        .outputOptions(metadata.flatMap((m) => ["-metadata", m]));
+
+      cmd.on("end", () => resolve());
+      cmd.on("error", (err: Error) => reject(err));
+      cmd.save(finalPath);
+    });
+
+    if (!fs.existsSync(finalPath)) {
+      return { success: false, error: "ffmpeg conversion produced no output file" };
+    }
+
+    // Cleanup raw file
+    try { fs.unlinkSync(rawPath); } catch { /* ignore */ }
+
+    return { success: true, filePath: finalPath };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try { fs.readdirSync(albumDir).forEach((f) => { try { fs.unlinkSync(path.join(albumDir, f)); } catch { } }); } catch { }
+    return { success: false, error: msg };
+  }
 }
 
 function sanitize(name: string): string {
