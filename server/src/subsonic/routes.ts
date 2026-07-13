@@ -21,13 +21,21 @@ import { getDb } from "../db/connection";
 const router = Router();
 router.use(subsonicAuth);
 
+const COVER_FILENAMES = [
+  "cover.jpg", "cover.png", "cover.webp",
+  "folder.jpg", "folder.png", "folder.webp",
+  "Cover.jpg", "Cover.png",
+  "AlbumArtSmall.jpg", "album.jpg", "album.png",
+  "front.jpg", "front.png",
+];
+
 function num(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
 function resolveCoverLocal(id: string): string | null {
-  // id may be "ar-<artistId>" (artist) or plain album id
+  // id may be "ar-<artistId>" (artist) or plain album id/path
   const db = getDb();
   if (id.startsWith("ar-")) {
     const artistId = id.slice(3);
@@ -36,10 +44,27 @@ function resolveCoverLocal(id: string): string | null {
       | undefined;
     return firstLocalImage(row?.images);
   }
+
+  // 1) Try DB lookup by ID (hash-based IDs from Selftify scanner)
   const row = db.prepare(`SELECT images FROM albums WHERE id = ?`).get(id) as
     | { images: string }
     | undefined;
-  return firstLocalImage(row?.images);
+  if (row?.images) {
+    const img = firstLocalImage(row.images);
+    if (img) return img;
+  }
+
+  // 2) Treat id as a relative path from library root (e.g. "Artist/Album Name")
+  //    and look for common cover image filenames in that directory.
+  const albumDir = path.join(config.libraryRoot, id);
+  if (fs.existsSync(albumDir) && fs.statSync(albumDir).isDirectory()) {
+    for (const name of COVER_FILENAMES) {
+      const filePath = path.join(albumDir, name);
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) return filePath;
+    }
+  }
+
+  return null;
 }
 
 function firstLocalImage(imagesJson?: string): string | null {
