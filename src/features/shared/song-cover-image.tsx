@@ -10,7 +10,7 @@ type SongCoverImageProps = {
 };
 
 export function SongCoverImage({ song, alt, fallback, className }: SongCoverImageProps) {
-  const { coverUrl, triggerRemote } = useCover(
+  const { coverUrl } = useCover(
     {
       artistName: song.artistName,
       albumName: song.albumName,
@@ -30,7 +30,6 @@ export function SongCoverImage({ song, alt, fallback, className }: SongCoverImag
       fallback={fallback || song.name.charAt(0)}
       className={className}
       lazy={!finalUrl}
-      onLazyLoad={triggerRemote}
     />
   );
 }

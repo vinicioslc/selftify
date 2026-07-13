@@ -16,71 +16,14 @@ import {
   getPlaylists,
   getPlaylist,
 } from "../db/queries";
-import { getDb } from "../db/connection";
+import { resolveCover } from "../services/cover-resolver";
 
 const router = Router();
 router.use(subsonicAuth);
 
-const COVER_FILENAMES = [
-  "cover.jpg", "cover.png", "cover.webp",
-  "folder.jpg", "folder.png", "folder.webp",
-  "Cover.jpg", "Cover.png",
-  "AlbumArtSmall.jpg", "album.jpg", "album.png",
-  "front.jpg", "front.png",
-];
-
 function num(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
-}
-
-function resolveCoverLocal(id: string): string | null {
-  // id may be "ar-<artistId>" (artist) or plain album id/path
-  const db = getDb();
-  if (id.startsWith("ar-")) {
-    const artistId = id.slice(3);
-    const row = db.prepare(`SELECT images FROM artists WHERE id = ?`).get(artistId) as
-      | { images: string }
-      | undefined;
-    return firstLocalImage(row?.images);
-  }
-
-  // 1) Try DB lookup by ID (hash-based IDs from Selftify scanner)
-  const row = db.prepare(`SELECT images FROM albums WHERE id = ?`).get(id) as
-    | { images: string }
-    | undefined;
-  if (row?.images) {
-    const img = firstLocalImage(row.images);
-    if (img) return img;
-  }
-
-  // 2) Treat id as a relative path from library root (e.g. "Artist/Album Name")
-  //    and look for common cover image filenames in that directory.
-  const albumDir = path.join(config.libraryRoot, id);
-  if (fs.existsSync(albumDir) && fs.statSync(albumDir).isDirectory()) {
-    for (const name of COVER_FILENAMES) {
-      const filePath = path.join(albumDir, name);
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) return filePath;
-    }
-  }
-
-  return null;
-}
-
-function firstLocalImage(imagesJson?: string): string | null {
-  if (!imagesJson) return null;
-  try {
-    const arr = JSON.parse(imagesJson);
-    if (!Array.isArray(arr)) return null;
-    for (const item of arr) {
-      const p = item?.path || (typeof item === "string" ? item : null);
-      if (p && fs.existsSync(p)) return p;
-      if (item?.url && item.url.startsWith("/") && fs.existsSync(item.url)) return item.url;
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
 }
 
 // ── ping ──
@@ -206,35 +149,16 @@ router.get(["/getCoverArt", "/getCoverArt.view"], async (req: Request, res: Resp
   const id = String(req.query.id || "");
   if (!id) return sendError(res, missingParam("id"), res.locals.version);
 
-  // Try local resolution first (for Selftify backend with local scan)
-  const coverPath = resolveCoverLocal(id);
-  if (coverPath) {
-    const ext = coverPath.split(".").pop()?.toLowerCase();
-    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    res.setHeader("Content-Type", mime);
-    fs.createReadStream(coverPath).pipe(res);
-    return;
-  }
-
-  // Fallback: proxy to Navidrome if configured
-  const navidromeUrl = config.navidromeUrl;
-  if (navidromeUrl) {
-    try {
-      const proxyUrl = `${navidromeUrl}/rest/getCoverArt.view?id=${encodeURIComponent(id)}`;
-      const proxyRes = await fetch(proxyUrl, {
-        headers: { "Accept": "*/*" },
-      });
-      if (proxyRes.ok && proxyRes.headers.get("content-type")?.startsWith("image/")) {
-        const blob = await proxyRes.arrayBuffer();
-        res.status(200);
-        res.setHeader("Content-Type", proxyRes.headers.get("content-type") || "image/jpeg");
-        res.setHeader("Content-Length", blob.byteLength.toString());
-        res.send(Buffer.from(blob));
-        return;
-      }
-    } catch (err) {
-      console.error("[getCoverArt] proxy error:", err);
+  try {
+    const result = await resolveCover(id);
+    if (result) {
+      res.setHeader("Content-Type", result.contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.send(result.data);
+      return;
     }
+  } catch (err) {
+    console.error("[getCoverArt] resolver error:", err);
   }
 
   return sendError(res, notFound("Cover art"), res.locals.version);

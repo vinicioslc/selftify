@@ -1,9 +1,7 @@
 import { findImages, recordToBlobUrl, storeImage as indexDbStoreImage, md5Hash } from "./image-store";
 import { loadFromAlbumDotImg } from "./dot-img-loader";
-import { useSettingsStore } from "../stores/settings.store";
 import { sqliteDbImageToObjectUrl } from "./sqlite-db/sqlite-db-image";
 import { getLibraryRoot } from "./db/ensure-db";
-import { platformFetch } from "./platform-fetch";
 
 export type CoverInput = {
   artistName?: string | null;
@@ -15,7 +13,7 @@ export type CoverInput = {
   imageUrl?: string | null;
 };
 
-export type CoverSource = "img-folder" | "embedded" | "deezer" | "itunes" | "backend" | "none";
+export type CoverSource = "img-folder" | "embedded" | "deezer" | "itunes" | "local" | "remote" | "backend" | "none";
 
 export type CoverResult = {
   source: CoverSource;
@@ -27,10 +25,7 @@ async function cacheToStore(
   meta: { artistName?: string; albumName?: string; mbzArtistId?: string; mbzReleaseGroupId?: string; mbzReleaseId?: string },
 ): Promise<void> {
   try {
-    // blob: URLs are browser-local — use native fetch(), no IPC needed
-    const resp = blobUrl.startsWith("blob:")
-      ? await fetch(blobUrl)
-      : await platformFetch(blobUrl, { method: "GET" });
+    const resp = await fetch(blobUrl);
     if (!resp.ok) return;
     const blob = await resp.blob();
     const arrayBuffer = await blob.arrayBuffer();
@@ -85,17 +80,15 @@ async function findSqliteDbAlbumImage(artistName: string, albumName: string): Pr
 }
 
 export async function resolveCover(input: CoverInput): Promise<CoverResult> {
-  const coverPriority = useSettingsStore.getState().coverPriority;
-
   // ── Step 1: .img/ folder (filesystem) ──
-  if (coverPriority !== "embedded" && input.artistName && input.albumName) {
+  if (input.artistName && input.albumName) {
     try {
       const dotImgUrl = await loadFromAlbumDotImg(input.artistName, input.albumName);
       if (dotImgUrl) {
         cacheToStore(dotImgUrl, {
           artistName: input.artistName,
           albumName: input.albumName,
-        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
+        }).catch(() => {});
         return { source: "img-folder", blobUrl: dotImgUrl };
       }
     } catch {
@@ -103,7 +96,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
     }
   }
 
-  // ── Step 2: FSDB album images (.selftify/images/album/) ──
+  // ── Step 2: SQLite DB album images (.selftify/images/album/) ──
   if (input.artistName && input.albumName) {
     const sqliteDbUrl = await findSqliteDbAlbumImage(input.artistName, input.albumName);
     if (sqliteDbUrl) {
@@ -137,40 +130,6 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
     if (url) return { source: "embedded", blobUrl: url };
   }
 
-  // ── Step 4: Deezer (remote) ──
-  if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("deezer")) {
-    try {
-      const { findCoverFromDeezer } = await import("./artwork/resolve-cover");
-      const result = await findCoverFromDeezer(input.artistName, input.albumName);
-      if (result?.url) {
-        cacheToStore(result.url, {
-          artistName: input.artistName,
-          albumName: input.albumName,
-        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
-        return { source: "deezer", blobUrl: result.url };
-      }
-    } catch {
-      // deezer failed
-    }
-  }
-
-  // ── Step 5: iTunes (remote) ──
-  if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("itunes")) {
-    try {
-      const { findCoverFromItunes } = await import("./artwork/resolve-cover");
-      const result = await findCoverFromItunes(input.artistName, input.albumName);
-      if (result?.url) {
-        cacheToStore(result.url, {
-          artistName: input.artistName,
-          albumName: input.albumName,
-        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
-        return { source: "itunes", blobUrl: result.url };
-      }
-    } catch {
-      // itunes failed
-    }
-  }
-
   return { source: "none", blobUrl: null };
 }
 
@@ -179,9 +138,7 @@ export async function resolveCover(input: CoverInput): Promise<CoverResult> {
  * Never falls back to artist-only or cross-album images.
  */
 export async function resolveAlbumCoverLocalOnly(input: CoverInput): Promise<CoverResult> {
-  const coverPriority = useSettingsStore.getState().coverPriority;
-
-  if (coverPriority !== "embedded" && input.artistName && input.albumName) {
+  if (input.artistName && input.albumName) {
     try {
       const dotImgUrl = await loadFromAlbumDotImg(input.artistName, input.albumName);
       if (dotImgUrl) {
@@ -221,42 +178,6 @@ export async function resolveAlbumCoverLocalOnly(input: CoverInput): Promise<Cov
   return { source: "none", blobUrl: null };
 }
 
-export async function resolveAlbumCoverRemote(input: CoverInput): Promise<CoverResult> {
-  if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("deezer")) {
-    try {
-      const { findCoverFromDeezer } = await import("./artwork/resolve-cover");
-      const result = await findCoverFromDeezer(input.artistName, input.albumName);
-      if (result?.url) {
-        cacheToStore(result.url, {
-          artistName: input.artistName,
-          albumName: input.albumName,
-        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
-        return { source: "deezer", blobUrl: result.url };
-      }
-    } catch {
-    }
-  }
-
-  if (input.artistName && input.albumName && useSettingsStore.getState().isArtworkProviderEnabled("itunes")) {
-    try {
-      const { findCoverFromItunes } = await import("./artwork/resolve-cover");
-      const result = await findCoverFromItunes(input.artistName, input.albumName);
-      if (result?.url) {
-        cacheToStore(result.url, {
-          artistName: input.artistName,
-          albumName: input.albumName,
-        }).catch((err) => console.warn("[cover-resolver] cacheToStore failed:", err));
-        return { source: "itunes", blobUrl: result.url };
-      }
-    } catch {
-    }
-  }
-
-  return { source: "none", blobUrl: null };
-}
-
 export async function resolveAlbumCover(input: CoverInput): Promise<CoverResult> {
-  const local = await resolveAlbumCoverLocalOnly(input);
-  if (local.blobUrl) return local;
-  return resolveAlbumCoverRemote(input);
+  return resolveAlbumCoverLocalOnly(input);
 }

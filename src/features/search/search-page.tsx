@@ -42,7 +42,7 @@ import { moveSongToTrash } from "../../services/move-to-trash";
 type SearchMode = "local" | "musicbrainz" | "youtube";
 
 function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavigate?: (artist: AlbumArtist) => void }) {
-  const { imageUrl, triggerRemote } = useArtistImage(artist.mbz, artist.name, artist.imageUrl);
+  const { imageUrl } = useArtistImage(artist.mbz, artist.name, artist.imageUrl);
   return (
     <div
       className="flex cursor-pointer flex-col items-center gap-2 transition-opacity hover:opacity-80"
@@ -55,7 +55,6 @@ function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavig
         emptySvg={<ArtistEmptySvg />}
         className="h-20 w-20 rounded-md"
         lazy={!imageUrl}
-        onLazyLoad={triggerRemote}
       />
       <p className="max-w-20 truncate text-center text-xs font-medium">{artist.name}</p>
     </div>

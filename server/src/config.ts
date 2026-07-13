@@ -18,8 +18,6 @@ export const config = {
   corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
   subsonicUser: strEnv(process.env.SUBSONIC_USER, "admin"),
   subsonicPassword: strEnv(process.env.SUBSONIC_PASSWORD, "admin"),
-  // Navidrome URL for proxying cover art (optional, for Navidrome remote backends)
-  navidromeUrl: strEnv(process.env.NAVIDROME_URL, ""),
   dbReadonly: boolEnv(process.env.DB_READONLY, false),
   serverVersion: "1.0.0",
   apiVersion: "1.16.1",

@@ -55,7 +55,7 @@ function CopyableId({ label, id }: { label: string; id: string }) {
 }
 
 export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Props) {
-  const { imageUrl: artistImageUrl, triggerRemote: triggerArtistImage } = useLazyArtistImage(song.mbzArtistId, song.artistName);
+  const { imageUrl: artistImageUrl } = useLazyArtistImage(song.mbzArtistId, song.artistName);
   const [mapping, setMapping] = useState<MbzYtMapping | null>(null);
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<CandidateData[]>([]);
@@ -361,7 +361,6 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
             emptySvg={<ArtistEmptySvg />}
             className="h-20 w-20 rounded-full shrink-0"
             lazy={!artistImageUrl}
-            onLazyLoad={triggerArtistImage}
           />
           <span className="text-[10px] text-muted-foreground truncate max-w-20 text-center">
             {song.artistName}

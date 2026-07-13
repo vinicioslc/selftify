@@ -59,7 +59,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   const [loading, setLoading] = useState(true);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [songInfoSong, setSongInfoSong] = useState<Song | null>(null);
-  const { coverUrl, source: coverSource, loading: coverLoading, triggerRemote } = useCover({
+  const { coverUrl, source: coverSource, loading: coverLoading } = useCover({
     artistName: album.albumArtistName,
     albumName: album.name,
     mbzReleaseGroupId: album.mbzReleaseGroupId,
@@ -77,7 +77,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   const [imageExpanded, setImageExpanded] = useState(false);
   const resolvedCoverUrl = albumImageUrl || coverUrl || album.imageUrl || null;
   const coverUrlRef = useRef<string | null>(resolvedCoverUrl);
-  const { imageUrl: artistImageUrl, triggerRemote: triggerArtistImage } = useArtistImage(undefined, album.albumArtistName);
+  const { imageUrl: artistImageUrl } = useArtistImage(undefined, album.albumArtistName);
 
   function handleImageSaved(blobUrl: string) {
     if (blobUrl) {
@@ -509,7 +509,6 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           emptySvg={<AlbumEmptySvg />}
           className="h-48 w-48 shrink-0 rounded-lg md:h-56 md:w-56"
           lazy={!resolvedCoverUrl}
-          onLazyLoad={triggerRemote}
           imageSource={coverSource}
         />
           {coverLoading && !resolvedCoverUrl && (

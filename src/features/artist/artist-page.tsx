@@ -52,7 +52,7 @@ function AlbumCover({ album, artistName, onNavigate }: {
   artistName: string;
   onNavigate: (album: ArtistAlbum) => void;
 }) {
-  const { coverUrl, source: coverSource, triggerRemote } = useCover({
+  const { coverUrl, source: coverSource } = useCover({
     artistName,
     albumName: album.name,
     mbzReleaseGroupId: MBID_RE.test(album.id) ? album.id : undefined,
@@ -74,7 +74,6 @@ function AlbumCover({ album, artistName, onNavigate }: {
           emptySvg={<AlbumEmptySvg />}
           className="aspect-square w-full rounded-[5px] h-auto"
           lazy={!finalUrl}
-          onLazyLoad={() => triggerRemote()}
           imageSource={coverSource}
         />
         {!album.hasLocal ? (
@@ -112,7 +111,7 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
   const [offset, setOffset] = useState(0);
   const [allLoaded, setAllLoaded] = useState(false);
   const [resolvedMbid, setResolvedMbid] = useState<string | null | undefined>(artist.mbz);
-  const { imageUrl: hookImageUrl, source: artistImageSource, triggerRemote: triggerArtistImage } = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name, artist.imageUrl);
+  const { imageUrl: hookImageUrl, source: artistImageSource } = useArtistImage(resolvedMbid || artist.mbz || undefined, artist.name, artist.imageUrl);
   const [artistImageOverride, setArtistImageOverride] = useState<string | null>(null);
   const artistImageUrl = artistImageOverride || hookImageUrl || artist.imageUrl;
   const [localAlbumNames, setLocalAlbumNames] = useState<Set<string>>(new Set());
@@ -511,7 +510,6 @@ export function ArtistPage({ artist, onBack, onNavigateAlbum }: ArtistPageProps)
             emptySvg={<ArtistEmptySvg />}
             className="h-40 w-40 shrink-0 shadow-lg md:h-48 md:w-48"
             lazy={!artistImageUrl}
-            onLazyLoad={triggerArtistImage}
             imageSource={artistImageSource}
           />
             {imageExpanded && artistImageUrl && (
