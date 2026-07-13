@@ -171,6 +171,28 @@ Two engines, selectable in Settings:
 
 Both read frequency data from the shared `AnalyserNode` exposed by `WebAudioProvider`.
 
+### 6. Frontend Dumb Shell
+
+The frontend is a **dumb shell** — it never resolves, transforms, or derives data on its own. All business logic, data fetching, and external API calls happen on the backend. The frontend only:
+
+1. **Renders what the backend provides** via `ServerController` or direct Subsonic/Selftify API URLs
+2. **Sends user actions** (play, search, add origin) to the backend
+3. **Shows fallback UI** (letter avatars, placeholders) when `imageUrl` is null
+
+This specifically applies to:
+
+| Data | Resolution location |
+|------|-------------------|
+| Album cover art | Backend `getCoverArt` → filesystem → cache → Deezer → iTunes |
+| Artist images | Backend `getCoverArt` (ar- prefix) → cache → Wikipedia thumbnail |
+| Song metadata | Backend controller (Subsonic/Local scan) |
+| Stream URLs | Backend `getStreamUrl` |
+| Search results | Backend `search()` |
+
+**The frontend never**: calls Wikipedia, Deezer, iTunes, Wikidata, Spotify, Discogs, or any external API directly. It never queries SQLite or IndexedDB for image data. It never constructs cover URLs or guesses paths.
+
+**Exceptions**: Interactive management UIs (e.g. `ArtistImageManager`, `AlbumImageManager`) that let the user browse and choose images may still fetch candidates from external APIs, but the *automatic* resolution chain lives entirely on the backend. These are future candidates for backend `/selftify/*` endpoints.
+
 ---
 
 ## Development

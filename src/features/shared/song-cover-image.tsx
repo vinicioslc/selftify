@@ -1,4 +1,3 @@
-import { useCover } from "../../hooks/use-cover";
 import { CoverImage } from "../../components/ui/art-image";
 import type { Song } from "../../types/domain-types";
 
@@ -10,26 +9,13 @@ type SongCoverImageProps = {
 };
 
 export function SongCoverImage({ song, alt, fallback, className }: SongCoverImageProps) {
-  const { coverUrl } = useCover(
-    {
-      artistName: song.artistName,
-      albumName: song.albumName,
-      mbzArtistId: song.mbzArtistId,
-      mbzReleaseGroupId: song.mbzReleaseGroupId,
-      mbzReleaseId: song.mbzAlbumId,
-      imageUrl: song.imageUrl,
-    },
-  );
-
-  const finalUrl = coverUrl;
-
   return (
     <CoverImage
-      src={finalUrl}
+      src={song.imageUrl ?? null}
       alt={alt || song.name}
       fallback={fallback || song.name.charAt(0)}
       className={className}
-      lazy={!finalUrl}
+      lazy={!song.imageUrl}
     />
   );
 }
