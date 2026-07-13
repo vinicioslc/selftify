@@ -15,6 +15,14 @@ function authParams(): string {
   return `u=${encodeURIComponent(user)}&p=${encodeURIComponent(password)}&v=${API_VERSION}&c=${CLIENT_NAME}&f=json`;
 }
 
+function authParamsForImage(): string {
+  const bc = useBackendStore.getState().config;
+  const user = bc?.user || "admin";
+  const password = bc?.password || "admin";
+  // Sem f=json - para endpoints de imagem que retornam binário
+  return `u=${encodeURIComponent(user)}&p=${encodeURIComponent(password)}&v=${API_VERSION}&c=${CLIENT_NAME}`;
+}
+
 function baseUrl(): string {
   const bc = useBackendStore.getState().config;
   return bc?.url || API_BASE;
@@ -46,7 +54,7 @@ function mapSong(item: any, originId: string): Song {
     discNumber: item.discNumber ?? undefined,
     duration: item.duration ?? null,
     bitrate: item.bitRate ?? undefined,
-    imageUrl: item.coverArt ? `${baseUrl()}/rest/getCoverArt.view?id=${encodeURIComponent(item.coverArt)}&${authParams()}` : null,
+    imageUrl: item.coverArt ? `${baseUrl()}/rest/getCoverArt.view?id=${encodeURIComponent(item.coverArt)}&${authParamsForImage()}` : null,
     path: item.path,
     genres: item.genre ? [item.genre] : undefined,
     releaseYear: item.year ?? undefined,
@@ -62,7 +70,7 @@ function mapAlbum(item: any, originId: string): Album {
     albumArtistName: item.artist || "Unknown Artist",
     songCount: item.songCount ?? undefined,
     duration: item.duration ?? undefined,
-    imageUrl: item.coverArt ? `${baseUrl()}/rest/getCoverArt.view?id=${encodeURIComponent(item.coverArt)}&${authParams()}` : null,
+    imageUrl: item.coverArt ? `${baseUrl()}/rest/getCoverArt.view?id=${encodeURIComponent(item.coverArt)}&${authParamsForImage()}` : null,
     releaseYear: item.year ?? undefined,
     genres: item.genre ? [item.genre] : undefined,
   };
@@ -75,7 +83,11 @@ function mapArtist(item: any, originId: string): AlbumArtist {
     originType: OriginType.LOCAL,
     name: item.name || "Unknown",
     albumCount: item.albumCount ?? undefined,
-    imageUrl: item.coverArt ? `${baseUrl()}/rest/getCoverArt.view?id=${encodeURIComponent(item.coverArt)}&${authParams()}` : null,
+    songCount: item.songCount ?? undefined,
+    imageUrl: item.coverArt ? `${baseUrl()}/rest/getCoverArt.view?id=${encodeURIComponent(item.coverArt)}&${authParamsForImage()}` : null,
+    biography: item.biography,
+    genres: item.genreTags,
+    mbz: item.mbzId,
   };
 }
 
