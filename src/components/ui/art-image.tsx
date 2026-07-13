@@ -101,18 +101,26 @@ export const CoverImage = forwardRef<HTMLDivElement, CoverImageProps>(
               <Search className="h-3.5 w-3.5" />
             </button>
           </div>
-        ) : status === "loaded" && src ? (
+        ) : src ? (
           <>
             <img
               src={src}
               alt={alt || ""}
-              className="aspect-square h-full w-full object-cover"
+              className={cn(
+                "aspect-square h-full w-full",
+                status === "loaded" ? "object-cover" : "invisible absolute",
+              )}
               onLoad={handleLoad}
               onError={handleError}
             />
+            {status === "loading" && (
+              <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+              </div>
+            )}
             {(() => {
               const info = formatImageSource(imageSource);
-              if (!info) return null;
+              if (!info || status !== "loaded") return null;
               return (
                 <div className="absolute bottom-1 left-1 z-10 rounded-sm px-1.5 py-0.5 text-[9px] font-medium text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
                   <span className={cn("rounded-sm px-1 py-0.5", info.color)}>{info.label}</span>
@@ -120,10 +128,6 @@ export const CoverImage = forwardRef<HTMLDivElement, CoverImageProps>(
               );
             })()}
           </>
-        ) : status === "loading" ? (
-          <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-          </div>
         ) : emptySvg ? (
           <div className="flex h-full w-full items-center justify-center bg-muted/50">
             {emptySvg}
