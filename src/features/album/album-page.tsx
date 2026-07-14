@@ -45,6 +45,7 @@ import { deleteAlbumFromLibrary } from "../../services/delete-album";
 import { useArtistImage } from "../../hooks/use-artist-image";
 import { moveSongToTrash } from "../../services/move-to-trash";
 import { getAllMbzYtMappings } from "../../api/backend-state";
+import { getBackendLibraryRoot } from "../../services/db/ensure-db";
 
 interface AlbumPageProps {
   album: Album;
@@ -94,11 +95,11 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
     try {
       const { getReleaseDetail, getReleaseByReleaseGroup, searchReleases } = await import("../../services/musicbrainz-client");
       const { initDatabase, isReady } = await import("../../services/db/database");
-      const { findAlbumByName, upsertAlbum } = await import("../../services/db/repositories/album-repo");
-      const root = useAuthStore.getState().origins.find((o) => o.type === OriginType.LOCAL)?.folderPath;
-      if (!root) { addMsg("No local library configured", "warn", "MusicBrainz"); return; }
-      if (!isReady()) await initDatabase(root);
-      if (!isReady()) { addMsg("Database not ready", "warn", "MusicBrainz"); return; }
+      const root = await getBackendLibraryRoot();
+
+      let dbReady = false;
+      if (root && !isReady()) await initDatabase(root);
+      dbReady = isReady();
 
       let releaseMbid = album.mbzId;
 
@@ -116,38 +117,39 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
         return;
       }
 
-      const existing = findAlbumByName(album.albumArtistName, album.name);
-      if (!existing) {
-        addMsg(`Album not found in library for ${album.name}`, "warn", "MusicBrainz");
-        return;
-      }
-
       const releaseData = await getReleaseDetail(releaseMbid);
       if (!releaseData) {
         addMsg(`No MusicBrainz data returned for ${album.name}`, "warn", "MusicBrainz");
         return;
       }
 
-      const meta: import("../../services/sqlite-db/sqlite-db-types").SqliteDbAlbumMeta = {
-        $schema: "selftify-album",
-        version: 1,
-        name: album.name,
-        artistName: album.albumArtistName,
-        albumArtist: releaseData["artist-credit"]?.map((a: any) => a.name).join(", ") || existing.albumArtist || null,
-        releaseYear: releaseData.date ? parseInt(releaseData.date.slice(0, 4), 10) : existing.releaseYear || null,
-        mbzId: releaseMbid || existing.mbzId || null,
-        mbzReleaseGroupId: existing.mbzReleaseGroupId || null,
-        genres: existing.genres || [],
-        images: existing.images || [],
-        songCount: existing.songCount || 0,
-        duration: existing.duration || 0,
-        tracks: existing.tracks || [],
-        updatedAt: Date.now(),
-        enrichedAt: Date.now(),
-      };
-      upsertAlbum(meta, album.albumArtistName);
+      if (dbReady) {
+        const { findAlbumByName, upsertAlbum } = await import("../../services/db/repositories/album-repo");
+        const existing = findAlbumByName(album.albumArtistName, album.name);
+        if (existing) {
+          const meta: import("../../services/sqlite-db/sqlite-db-types").SqliteDbAlbumMeta = {
+            $schema: "selftify-album",
+            version: 1,
+            name: album.name,
+            artistName: album.albumArtistName,
+            albumArtist: releaseData["artist-credit"]?.map((a: any) => a.name).join(", ") || existing.albumArtist || null,
+            releaseYear: releaseData.date ? parseInt(releaseData.date.slice(0, 4), 10) : existing.releaseYear || null,
+            mbzId: releaseMbid || existing.mbzId || null,
+            mbzReleaseGroupId: existing.mbzReleaseGroupId || null,
+            genres: existing.genres || [],
+            images: existing.images || [],
+            songCount: existing.songCount || 0,
+            duration: existing.duration || 0,
+            tracks: existing.tracks || [],
+            updatedAt: Date.now(),
+            enrichedAt: Date.now(),
+          };
+          upsertAlbum(meta, album.albumArtistName);
+        }
+      }
+
       setIsAlbumCached(true);
-      addMsg(`MusicBrainz data saved for ${album.name}`, "success", "MusicBrainz");
+      addMsg(`MusicBrainz data fetched for ${album.name}`, "success", "MusicBrainz");
     } catch (err) {
       console.error("[album-page] MB fetch error:", err);
       addMsg(`Failed to fetch MusicBrainz data for ${album.name}`, "danger", "MusicBrainz");
@@ -291,41 +293,39 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
           }
         }
 
-        // 3. Merge: local songs win over MBZ tracks by name key.
-        //    MBZ metadata (imageUrl, mbz IDs) merged into local entry when available.
+        // 3. Merge: local songs are the source of truth; MBZ tracks only enrich
+        //    matching entries (imageUrl, mbz IDs). MBZ-only entries are discarded
+        //    since the backend already provides complete song data.
         if (!cancelled) {
           const merged = new Map<string, Song>();
           const nameKey = (s: Song): string =>
             `name:${(s.artistName || "").toLowerCase()}|${(s.name || "").toLowerCase()}`;
 
-          for (const t of mbzTracks) {
-            const key = nameKey(t);
-            if (merged.has(key)) continue;
-            merged.set(key, t);
+          for (const t of filteredLocal) {
+            merged.set(nameKey(t), t);
           }
 
-          for (const t of filteredLocal) {
+          for (const t of mbzTracks) {
             const key = nameKey(t);
             const existing = merged.get(key);
             if (existing) {
-              // Merge: local id + path+duration+trackNumber win;
-              // keep MBZ imageUrl+mbz metadata when local lacks them.
               merged.set(key, {
                 ...existing,
-                id: t.id ?? existing.id,
-                originId: t.originId ?? existing.originId,
-                path: t.path ?? existing.path,
-                duration: t.duration ?? existing.duration,
-                trackNumber: t.trackNumber ?? existing.trackNumber,
-                discNumber: t.discNumber ?? existing.discNumber,
+                id: existing.id ?? t.id,
+                originId: existing.originId ?? t.originId,
+                path: existing.path,
+                duration: existing.duration ? existing.duration : t.duration,
+                trackNumber: existing.trackNumber ?? t.trackNumber,
+                discNumber: existing.discNumber ?? t.discNumber,
                 imageUrl: existing.imageUrl ?? t.imageUrl,
+                mbzRecordingId: existing.mbzRecordingId ?? t.mbzRecordingId,
+                mbzTrackId: existing.mbzTrackId ?? t.mbzTrackId,
+                mbzArtistId: existing.mbzArtistId ?? t.mbzArtistId,
               });
-            } else {
-              merged.set(key, t);
             }
           }
 
-          // 4. Enrich MBZ-only tracks with cached YouTube mappings (no network request)
+          // 4. Enrich songs with cached YouTube mappings (no network request)
           const allMappings = await getAllMbzYtMappings().catch(() => []);
           const albumArtistLower = album.albumArtistName.toLowerCase();
           const albumNameLower = album.name.toLowerCase();
@@ -350,18 +350,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
             }
           }
 
-          // Secondary dedup by track number: if two songs share the same track number,
-          // prefer the one with a path (local file) over a stub (MBZ-only no path).
-          const trackDedup = new Map<string, Song>();
-          for (const song of merged.values()) {
-            const trackKey = `${song.discNumber ?? 1}:${song.trackNumber ?? 999}`;
-            const existing = trackDedup.get(trackKey);
-            if (!existing || (song.path && !existing.path)) {
-              trackDedup.set(trackKey, song);
-            }
-          }
-
-          const mergedList = Array.from(trackDedup.values()).sort(
+          const mergedList = Array.from(merged.values()).sort(
             (a, b) => (a.trackNumber ?? 999) - (b.trackNumber ?? 999) || a.name.localeCompare(b.name),
           );
           setSongs(mergedList);
@@ -400,12 +389,18 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   }
 
   async function handleDeleteSong(song: Song) {
-    if (!song.path) return;
+    if (!song.path) {
+      addMsg(`"${song.name}" cannot be deleted: no local file path`, "warn", "Album");
+      return;
+    }
     const addMsg = useStatusStore.getState().addMessage;
     setContextMenuSong(null);
     try {
       const origin = useAuthStore.getState().currentOrigin;
-      if (!origin) return;
+      if (!origin) {
+        addMsg("Cannot delete: no origin configured", "warn", "Album");
+        return;
+      }
       await moveSongToTrash(song.path, origin);
       setSongs((prev) => prev.map((s) =>
         s.id === song.id ? { ...s, path: undefined } : s,
