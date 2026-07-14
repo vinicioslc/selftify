@@ -7,7 +7,7 @@ import type {
   MusicBrainzReleaseGroupResponse,
 } from "./musicbrainz-types";
 import type { MusicBrainzContext } from "./musicbrainz-types";
-import { getCachedQuery, setCachedQuery, hashQuery } from "../api/backend-state";
+import { getCachedQuery, setCachedQuery } from "../api/backend-state";
 import { useOnlineSearchStore } from "../stores/online-search.store";
 
 const BASE_URL = "https://musicbrainz.org/ws/2";
@@ -17,15 +17,21 @@ const APP_NAME = "Selftify/1.0.0";
 
 let lastMbRequestAt = 0;
 
-function hashSearchQuery(params: Record<string, unknown>): string {
-  const sorted = Object.keys(params).sort().map((k) => `${k}:${JSON.stringify(params[k])}`).join("|");
+function md5Hash(str: string): string {
   let hash = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    const chr = sorted.charCodeAt(i);
-    hash = ((hash << 5) - hash) + chr;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
     hash |= 0;
   }
-  return "q_" + Math.abs(hash).toString(36);
+  return Math.abs(hash).toString(16).padStart(32, "0");
+}
+
+function buildQuery(terms: Record<string, string>): string {
+  return Object.entries(terms)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}:"${v.replace(/"/g, "")}"`)
+    .join(" AND ");
 }
 
 async function musicbrainzFetch(url: string, init: RequestInit = {}): Promise<Response> {
@@ -72,11 +78,9 @@ async function apiGet<T>(endpoint: string): Promise<T> {
   return response.json();
 }
 
-function buildQuery(terms: Record<string, string>): string {
-  return Object.entries(terms)
-    .filter(([, v]) => v)
-    .map(([k, v]) => `${k}:"${v.replace(/"/g, "")}"`)
-    .join(" AND ");
+async function getCached<T>(cacheKey: string): Promise<T | null> {
+  const cached = await getCachedQuery("musicbrainz", cacheKey);
+  return cached?.results as T | null;
 }
 
 export type MusicBrainzSearchOpts = {
@@ -84,15 +88,6 @@ export type MusicBrainzSearchOpts = {
   offset?: number;
   rawQuery?: string;
 };
-
-async function getSqliteDbCached<T>(cacheKey: string): Promise<T | null> {
-  const cached = await getCachedQuery("musicbrainz", cacheKey);
-  return cached?.results as T | null;
-}
-
-async function setSqliteDbCached(cacheKey: string, data: unknown): Promise<void> {
-  await setCachedQuery("musicbrainz", cacheKey, data, "mb");
-}
 
 export async function searchRecordings(
   artist: string,
@@ -102,16 +97,16 @@ export async function searchRecordings(
   const query = opts.rawQuery ?? buildQuery({ artist, recording });
   const limit = opts.limit ?? 25;
   const offset = opts.offset ?? 0;
-  const cacheKey = hashSearchQuery({ type: "recording", rawQuery: opts.rawQuery, artist, recording, limit, offset, inc: "releases+artist-credits" });
+  const cacheKey = md5Hash(query);
 
-  const cached = await getSqliteDbCached<MusicBrainzResponse<MBRecording>>(cacheKey);
+  const cached = await getCached<MusicBrainzResponse<MBRecording>>(cacheKey);
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBRecording>>(
     `/recording/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json&inc=releases+artist-credits`,
   );
 
-  await setSqliteDbCached(cacheKey, result);
+  await setCachedQuery("musicbrainz", cacheKey, result, "mb");
   return result;
 }
 
@@ -123,16 +118,16 @@ export async function searchReleases(
   const query = opts.rawQuery ?? buildQuery({ artist, release });
   const limit = opts.limit ?? 25;
   const offset = opts.offset ?? 0;
-  const cacheKey = hashSearchQuery({ type: "release", rawQuery: opts.rawQuery, artist, release, limit, offset });
+  const cacheKey = md5Hash(query);
 
-  const cached = await getSqliteDbCached<MusicBrainzResponse<MBRelease>>(cacheKey);
+  const cached = await getCached<MusicBrainzResponse<MBRelease>>(cacheKey);
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBRelease>>(
     `/release/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json&inc=release-groups`,
   );
 
-  await setSqliteDbCached(cacheKey, result);
+  await setCachedQuery("musicbrainz", cacheKey, result, "mb");
   return result;
 }
 
@@ -143,16 +138,16 @@ export async function searchArtists(
   const query = opts.rawQuery ?? buildQuery({ artist });
   const limit = opts.limit ?? 25;
   const offset = opts.offset ?? 0;
-  const cacheKey = hashSearchQuery({ type: "artist", rawQuery: opts.rawQuery, artist, limit, offset });
+  const cacheKey = md5Hash(query);
 
-  const cached = await getSqliteDbCached<MusicBrainzResponse<MBArtist>>(cacheKey);
+  const cached = await getCached<MusicBrainzResponse<MBArtist>>(cacheKey);
   if (cached) return cached;
 
   const result = await apiGet<MusicBrainzResponse<MBArtist>>(
     `/artist/?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}&fmt=json`,
   );
 
-  await setSqliteDbCached(cacheKey, result);
+  await setCachedQuery("musicbrainz", cacheKey, result, "mb");
   return result;
 }
 
@@ -174,14 +169,14 @@ export async function getReleaseDetail(
 ): Promise<MBRelease | null> {
   const cacheKey = `rel-${releaseMbid}`;
 
-  const cached = await getSqliteDbCached<MBRelease>(cacheKey);
+  const cached = await getCached<MBRelease>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBRelease>(
       `/release/${releaseMbid}?fmt=json&inc=artist-credits+recordings+media`,
     );
-    await setSqliteDbCached(cacheKey, result);
+    await setCachedQuery("musicbrainz", cacheKey, result, "mb");
     return result;
   } catch (err) {
     console.warn("[mb-client] getReleaseDetail failed:", err);
@@ -195,7 +190,7 @@ export async function getReleaseByReleaseGroup(
 ): Promise<MBRelease | null> {
   const cacheKey = `rel-rg-${rgId}`;
 
-  const cached = await getSqliteDbCached<MBRelease>(cacheKey);
+  const cached = await getCached<MBRelease>(cacheKey);
   if (cached) return cached;
 
   try {
@@ -204,7 +199,7 @@ export async function getReleaseByReleaseGroup(
     );
     const release = result.releases?.[0] ?? null;
     if (release) {
-      await setSqliteDbCached(cacheKey, release);
+      await setCachedQuery("musicbrainz", cacheKey, release, "mb");
     }
     return release;
   } catch (err) {
@@ -219,14 +214,14 @@ export async function getRecordingDetail(
 ): Promise<MBRecording | null> {
   const cacheKey = `rec-${recordingMbid}`;
 
-  const cached = await getSqliteDbCached<MBRecording>(cacheKey);
+  const cached = await getCached<MBRecording>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBRecording>(
       `/recording/${recordingMbid}?fmt=json&inc=artist-credits+releases`,
     );
-    await setSqliteDbCached(cacheKey, result);
+    await setCachedQuery("musicbrainz", cacheKey, result, "mb");
     return result;
   } catch (err) {
     console.warn("[mb-client] getRecordingDetail failed:", err);
@@ -242,7 +237,7 @@ export async function getArtistReleaseGroups(
 ): Promise<{ groups: MBReleaseGroup[]; total: number }> {
   const cacheKey = `rg-art-${artistMbid}-${limit}-${offset}`;
 
-  const cached = await getSqliteDbCached<MusicBrainzReleaseGroupResponse>(cacheKey);
+  const cached = await getCached<MusicBrainzReleaseGroupResponse>(cacheKey);
   if (cached) {
     return { groups: cached["release-groups"] ?? [], total: cached.count ?? 0 };
   }
@@ -251,7 +246,7 @@ export async function getArtistReleaseGroups(
     const result = await apiGet<MusicBrainzReleaseGroupResponse>(
       `/release-group?artist=${artistMbid}&fmt=json&limit=${limit}&offset=${offset}`,
     );
-    await setSqliteDbCached(cacheKey, result);
+    await setCachedQuery("musicbrainz", cacheKey, result, "mb");
     return { groups: result["release-groups"] ?? [], total: result.count ?? 0 };
   } catch (err) {
     console.warn("[mb-client] getArtistReleaseGroups failed:", err);
@@ -265,14 +260,14 @@ export async function getArtistDetail(
 ): Promise<MBArtist | null> {
   const cacheKey = `art-${artistMbid}`;
 
-  const cached = await getSqliteDbCached<MBArtist>(cacheKey);
+  const cached = await getCached<MBArtist>(cacheKey);
   if (cached) return cached;
 
   try {
     const result = await apiGet<MBArtist>(
       `/artist/${artistMbid}?fmt=json&inc=tags`,
     );
-    await setSqliteDbCached(cacheKey, result);
+    await setCachedQuery("musicbrainz", cacheKey, result, "mb");
     return result;
   } catch (err) {
     console.warn("[mb-client] getArtistDetail failed:", err);

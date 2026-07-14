@@ -11,6 +11,9 @@ import { getScanStatus, resetScanState, startScan as runScan } from "./scanner/s
 import subsonicRouter from "./subsonic/routes";
 import { getSettings, updateSettings } from "./services/settings";
 import { downloadSong, isYtDlpAvailable } from "./services/download-service";
+import * as downloadQueue from "./services/download-queue";
+import { searchAllYouTube, isSearchAvailable } from "./services/youtube-search";
+import { handleSseRequest } from "./services/sse-events";
 import * as mappingRepo from "./repositories/mapping-repo";
 import * as rankingRepo from "./repositories/ranking-repo";
 import * as cacheRepo from "./repositories/cache-repo";
@@ -50,10 +53,12 @@ export function createApp(): express.Express {
         "youtube",
         "lyrics-lrc",
         "download",
+        "download-v2",
         "ranking",
         "organizer",
         "origins",
         "search-online",
+        "youtube-search",
         "scan",
         "settings",
       ],
@@ -116,6 +121,7 @@ export function createApp(): express.Express {
     const dirs: { name: string; path: string; hasAudio: boolean; audioCount: number }[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (entry.name === ".trash" || entry.name === ".img" || entry.name === ".selftify") continue;
       const fullPath = path.join(resolved, entry.name);
       let audioCount = 0;
       try {
@@ -208,9 +214,11 @@ export function createApp(): express.Express {
     });
   });
 
-  // ---- Download endpoint ----
+  // ---- Download endpoints ----
+
+  // Direct download (legacy, requires videoId)
   app.post("/api/selftify/download", async (req, res) => {
-    const { videoId, searchQuery, songName, artistName, albumName, albumArtistName, trackNumber, releaseYear, genres, imageUrl, coverArtData } = req.body;
+    const { videoId, searchQuery, songName, artistName, albumName, albumArtistName, trackNumber, releaseYear, genres, imageUrl, coverBytes } = req.body;
 
     if (!videoId || !songName || !artistName) {
       res.status(400).json({ success: false, error: "Missing required fields: videoId, songName, artistName" });
@@ -222,8 +230,125 @@ export function createApp(): express.Express {
       return;
     }
 
-    const result = await downloadSong({ videoId, searchQuery, songName, artistName, albumName, albumArtistName, trackNumber, releaseYear, genres, imageUrl, coverArtData });
+    const result = await downloadSong({ videoId, searchQuery, songName, artistName, albumName, albumArtistName, trackNumber, releaseYear, genres, imageUrl, coverBytes });
     res.json(result);
+  });
+
+  // Enqueue a download task (handles search + download + cover + library insert)
+  app.post("/api/selftify/download/enqueue", (req, res) => {
+    const { song } = req.body;
+    if (!song || !song.id || !song.name || !song.artistName) {
+      res.status(400).json({ error: "song.id, song.name, and song.artistName are required" });
+      return;
+    }
+
+    const task = downloadQueue.enqueueTask({
+      id: song.id,
+      name: song.name,
+      artistName: song.artistName,
+      albumName: song.albumName,
+      albumArtistName: song.albumArtistName,
+      trackNumber: song.trackNumber,
+      discNumber: song.discNumber,
+      duration: song.duration ?? null,
+      bitrate: song.bitrate,
+      genres: song.genres,
+      releaseYear: song.releaseYear,
+      imageUrl: song.imageUrl ?? null,
+      mbzRecordingId: song.mbzRecordingId,
+      mbzArtistId: song.mbzArtistId,
+      mbzReleaseGroupId: song.mbzReleaseGroupId,
+      mbzAlbumId: song.mbzAlbumId,
+      youtubeVideoId: song.youtubeVideoId,
+    });
+
+    downloadQueue.processNext();
+    res.json({ task });
+  });
+
+  // Enqueue multiple downloads
+  app.post("/api/selftify/download/enqueue-multiple", (req, res) => {
+    const { songs } = req.body;
+    if (!Array.isArray(songs) || songs.length === 0) {
+      res.status(400).json({ error: "songs array is required" });
+      return;
+    }
+
+    const tasks = downloadQueue.enqueueMultiple(songs.map((song: any) => ({
+      id: song.id,
+      name: song.name,
+      artistName: song.artistName,
+      albumName: song.albumName,
+      albumArtistName: song.albumArtistName,
+      trackNumber: song.trackNumber,
+      discNumber: song.discNumber,
+      duration: song.duration ?? null,
+      bitrate: song.bitrate,
+      genres: song.genres,
+      releaseYear: song.releaseYear,
+      imageUrl: song.imageUrl ?? null,
+      mbzRecordingId: song.mbzRecordingId,
+      mbzArtistId: song.mbzArtistId,
+      mbzReleaseGroupId: song.mbzReleaseGroupId,
+      mbzAlbumId: song.mbzAlbumId,
+      youtubeVideoId: song.youtubeVideoId,
+    })));
+
+    downloadQueue.processNext();
+    res.json({ tasks });
+  });
+
+  // List all download tasks
+  app.get("/api/selftify/download/tasks", (_req, res) => {
+    res.json({ tasks: downloadQueue.getTasks() });
+  });
+
+  // Get a single task
+  app.get("/api/selftify/download/tasks/:id", (req, res) => {
+    const task = downloadQueue.getTask(req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.json({ task });
+  });
+
+  // Cancel a task
+  app.post("/api/selftify/download/tasks/:id/cancel", (req, res) => {
+    const ok = downloadQueue.cancelTask(req.params.id);
+    res.json({ success: ok });
+  });
+
+  // Retry a failed/cancelled task
+  app.post("/api/selftify/download/tasks/:id/retry", (req, res) => {
+    const ok = downloadQueue.retryTask(req.params.id);
+    res.json({ success: ok });
+  });
+
+  // Clear completed/cancelled tasks
+  app.delete("/api/selftify/download/tasks/completed", (_req, res) => {
+    downloadQueue.clearCompleted();
+    res.json({ success: true });
+  });
+
+  // SSE events for download progress
+  app.get("/api/selftify/download/events", (req, res) => {
+    handleSseRequest(req, res);
+  });
+
+  // ---- YouTube search ----
+  app.get("/api/selftify/youtube/search", async (req, res) => {
+    const query = req.query.query as string;
+    if (!query) {
+      res.status(400).json({ error: "query parameter is required" });
+      return;
+    }
+    if (!isSearchAvailable()) {
+      res.status(500).json({ error: "yt-dlp not available for search" });
+      return;
+    }
+    const results = await searchAllYouTube(query);
+    res.json({ results });
   });
 
   // ---- MusicBrainz <-> YouTube mappings (state owned by backend) ----
@@ -348,7 +473,7 @@ export function createApp(): express.Express {
       return;
     }
     const hash = Array.from(
-      createHash("sha256").update(query).digest(),
+      createHash("md5").update(query).digest(),
     )
       .map((b: number) => b.toString(16).padStart(2, "0"))
       .join("");
@@ -362,7 +487,7 @@ export function createApp(): express.Express {
       return;
     }
     const hash = Array.from(
-      createHash("sha256").update(query).digest(),
+      createHash("md5").update(query).digest(),
     )
       .map((b: number) => b.toString(16).padStart(2, "0"))
       .join("");

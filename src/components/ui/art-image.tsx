@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, forwardRef } from "react";
+import { useState, useEffect, useCallback, useRef, forwardRef } from "react";
 import { cn } from "../../lib/utils";
 import { Loader2, Search } from "lucide-react";
 
@@ -16,6 +16,8 @@ const SOURCE_MAP: Record<string, CoverImageSource> = {
   "remote":    { label: "Online", color: "bg-orange-600" },
   "backend":   { label: "Server", color: "bg-cyan-600" },
 };
+
+const IMAGE_LOAD_TIMEOUT_MS = 10000;
 
 function formatImageSource(source: string | null | undefined): CoverImageSource | null {
   if (!source || source === "none") return null;
@@ -38,21 +40,49 @@ export const CoverImage = forwardRef<HTMLDivElement, CoverImageProps>(
   ({ src, alt, fallback, className, emptySvg, onClick, lazy, onLazyLoad, imageSource }, ref) => {
     const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
     const [fetchStarted, setFetchStarted] = useState(false);
+    const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     const isLazyPending = lazy && !fetchStarted && !src;
 
     useEffect(() => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+
       if (src && src.startsWith("blob:")) {
         setStatus("loaded");
       } else if (src) {
         setStatus("loading");
+        timeoutRef.current = setTimeout(() => {
+          setStatus("error");
+          console.warn("[CoverImage] load timeout:", src);
+        }, IMAGE_LOAD_TIMEOUT_MS);
       } else if (!isLazyPending) {
         setStatus("error");
       }
+
+      return () => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+      };
     }, [src, isLazyPending]);
 
-    const handleLoad = useCallback(() => setStatus("loaded"), []);
+    const handleLoad = useCallback(() => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      setStatus("loaded");
+    }, []);
+
     const handleError = useCallback(() => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
       setStatus("error");
       console.warn("[CoverImage] failed to load:", src);
     }, [src]);
@@ -116,6 +146,11 @@ export const CoverImage = forwardRef<HTMLDivElement, CoverImageProps>(
             {status === "loading" && (
               <div className="flex h-full w-full items-center justify-center bg-muted text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
+              </div>
+            )}
+            {status === "error" && (
+              <div className="flex h-full w-full items-center justify-center bg-muted text-xs font-medium text-muted-foreground">
+                {fallback || alt?.charAt(0)?.toUpperCase() || "?"}
               </div>
             )}
             {(() => {
