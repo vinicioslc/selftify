@@ -193,6 +193,8 @@ This specifically applies to:
 
 **Exceptions**: Interactive management UIs (e.g. `ArtistImageManager`, `AlbumImageManager`) that let the user browse and choose images may still fetch candidates from external APIs, but the *automatic* resolution chain lives entirely on the backend. These are future candidates for backend `/selftify/*` endpoints.
 
+**Migration rule**: Whenever you find logic, validation, data derivation, or stateful computation in the frontend that could — given the current or planned backend — live on the server, move it to the backend. This includes but is not limited to: default value computation, filtering/sorting of lists, counting/aggregating, permission checks, path construction, URL resolution, and format conversion. The frontend should only dispatch user actions and render what the backend returns.
+
 ---
 
 ## Development

@@ -1,59 +1,19 @@
 import type { ArtworkProvider, ArtworkSearchInput, ArtworkCandidate } from "./types";
-import { platformFetch } from "../../platform-fetch";
+import { deezerAlbumCandidates } from "../../image-resolution/providers/shared";
 
 const LOG = "[Deezer]";
 
 export class DeezerProvider implements ArtworkProvider {
   readonly name = "deezer";
+  readonly modes = ["album"] as const;
 
   async search(
     input: ArtworkSearchInput,
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
   ): Promise<ArtworkCandidate[]> {
-    const query = encodeURIComponent(`${input.artist} ${input.album || input.title || ""}`);
-    const url = `https://api.deezer.com/search/album?q=${query}`;
-
-    console.log(`${LOG} searching: artist="${input.artist}" album="${input.album}" url=${url}`);
-
-    const res = await platformFetch(url, { signal });
-    if (!res.ok) {
-      if (res.status >= 400 && res.status < 500) {
-        console.warn(`${LOG} HTTP ${res.status} for "${input.artist}" / "${input.album}"`);
-      } else {
-        console.error(`${LOG} HTTP ${res.status} for "${input.artist}" / "${input.album}"`);
-      }
-      throw new Error(`Deezer ${res.status}`);
-    }
-
-    const data = await res.json();
-    if (!data.data?.length) {
-      console.log(`${LOG} no results for "${input.artist}" / "${input.album}"`);
-      return [];
-    }
-
-    const artistLower = input.artist.toLowerCase();
-    const albumLower = (input.album || input.title || "").toLowerCase();
-
-    const exact = data.data.find((item: any) => {
-      return (
-        item.artist?.name?.toLowerCase() === artistLower &&
-        item.title?.toLowerCase() === albumLower
-      );
-    });
-
-    const results = exact ? [exact, ...data.data.filter((r: any) => r !== exact).slice(0, 4)] : data.data.slice(0, 5);
-
-    console.log(`${LOG} got ${results.length} candidate(s) (exact=${!!exact}) for "${input.artist}" / "${input.album}"`);
-
-    return results.map(
-      (r: any): ArtworkCandidate => ({
-        provider: this.name,
-        url: r.cover_xl || r.cover_big || r.cover_medium || r.cover,
-        thumbnailUrl: r.cover_small || r.cover_medium,
-        confidence: r === exact ? 0.95 : 0.78,
-        sourceReleaseId: String(r.id),
-        isFrontCover: true,
-      }),
-    );
+    console.log(`${LOG} searching: artist="${input.artist}" album="${input.album}"`);
+    const results = await deezerAlbumCandidates(input.artist, input.album || input.title || "");
+    console.log(`${LOG} got ${results.length} candidate(s) for "${input.artist}" / "${input.album}"`);
+    return results;
   }
 }

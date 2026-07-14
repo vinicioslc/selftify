@@ -4,12 +4,13 @@ import { useSettingsStore } from "../../../stores/settings.store";
 
 export class DiscogsProvider implements ArtworkProvider {
   readonly name = "discogs";
+  readonly modes = ["album"] as const;
 
   async search(
     input: ArtworkSearchInput,
     signal?: AbortSignal,
   ): Promise<ArtworkCandidate[]> {
-    const token = useSettingsStore.getState().artworkProviders.discogs?.token;
+    const token = (useSettingsStore.getState().artworkProviders as Record<string, any>).discogs?.token;
     if (!token) return [];
 
     const query = `${input.artist} ${input.album || input.title || ""}`.trim();

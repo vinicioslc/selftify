@@ -45,7 +45,7 @@ import { deleteAlbumFromLibrary } from "../../services/delete-album";
 import { useArtistImage } from "../../hooks/use-artist-image";
 import { moveSongToTrash } from "../../services/move-to-trash";
 import { getAllMbzYtMappings } from "../../api/backend-state";
-import { getBackendLibraryRoot } from "../../services/db/ensure-db";
+import { getLibraryRoot } from "../../services/db/ensure-db";
 
 interface AlbumPageProps {
   album: Album;
@@ -95,7 +95,7 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
     try {
       const { getReleaseDetail, getReleaseByReleaseGroup, searchReleases } = await import("../../services/musicbrainz-client");
       const { initDatabase, isReady } = await import("../../services/db/database");
-      const root = await getBackendLibraryRoot();
+      const root = getLibraryRoot();
 
       let dbReady = false;
       if (root && !isReady()) await initDatabase(root);
@@ -389,11 +389,11 @@ export function AlbumPage({ album, onBack, onNavigateArtist }: AlbumPageProps) {
   }
 
   async function handleDeleteSong(song: Song) {
+    const addMsg = useStatusStore.getState().addMessage;
     if (!song.path) {
       addMsg(`"${song.name}" cannot be deleted: no local file path`, "warn", "Album");
       return;
     }
-    const addMsg = useStatusStore.getState().addMessage;
     setContextMenuSong(null);
     try {
       const origin = useAuthStore.getState().currentOrigin;

@@ -88,9 +88,9 @@ export function TopBar({ currentView }: { currentView: AppView }) {
         <span className="text-foreground/50 text-xs">{viewLabels[currentView]}</span>
         <button
           data-no-drag
-          onClick={() => navigator.clipboard.writeText(viewPaths[currentView])}
+          onClick={() => navigator.clipboard.writeText(window.location.href)}
           className="text-foreground/30 text-[10px] font-mono hidden md:inline hover:text-foreground/60 transition-colors ml-1"
-          title="Copy path"
+          title="Copy URL"
         >{viewPaths[currentView]}</button>
       </div>
 

@@ -13,12 +13,13 @@ export function OnlineSearchCard() {
   const {
     enabled, setEnabled,
     musicBrainzToken,
+    listenBrainzToken,
     youtubeMusicHeaders, downloadFolder,
     updateMusicBrainz, setYoutubeHeaders, setDownloadFolder, clearAuth,
   } = useOnlineSearchStore();
 
   const [localMbToken, setLocalMbToken] = useState(musicBrainzToken);
-  const [localListenBrainzToken, setLocalListenBrainzToken] = useState("");
+  const [localListenBrainzToken, setLocalListenBrainzToken] = useState(listenBrainzToken);
   const [localYtHeaders, setLocalYtHeaders] = useState(youtubeMusicHeaders);
   const [localDownloadFolder, setLocalDownloadFolder] = useState(downloadFolder);
 
@@ -120,8 +121,8 @@ export function OnlineSearchCard() {
               <div className="space-y-2">
                 <label className="text-xs font-medium">ListenBrainz User Token</label>
                 <Input
-                  value={localYtHeaders}
-                  onChange={(e) => setLocalYtHeaders(e.target.value)}
+                  value={localListenBrainzToken}
+                  onChange={(e) => setLocalListenBrainzToken(e.target.value)}
                   placeholder="Paste your ListenBrainz user token"
                   type="password"
                   className="text-xs"

@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { config } from "../config";
 import { getDb } from "../db/connection";
+import { tryDeezer, tryItunes } from "./online-cover";
 
 const CACHE_DIR_ALBUM = path.join(config.libraryRoot, ".selftify", "images", "album");
 const CACHE_DIR_ARTIST = path.join(config.libraryRoot, ".selftify", "images", "artist");
@@ -15,10 +16,15 @@ const COVER_FILENAMES = [
   "front.jpg", "front.png",
 ];
 
-export interface CoverResult {
+export type CoverResult = {
   data: Buffer;
   contentType: string;
-}
+};
+
+export type CoverResolveOptions = {
+  imageUrl?: string | null;
+  videoId?: string;
+};
 
 export async function resolveCover(id: string): Promise<CoverResult | null> {
   if (id.startsWith("ar-")) return resolveArtistCover(id.slice(3));
@@ -28,15 +34,12 @@ export async function resolveCover(id: string): Promise<CoverResult | null> {
 // ── Album cover ──
 
 async function resolveAlbumCover(id: string): Promise<CoverResult | null> {
-  // 1) Local filesystem/DB
   const localPath = resolveCoverPathLocal(id);
   if (localPath) return readImage(localPath);
 
-  // 2) Cache (previously downloaded)
   const cachePath = cachedCoverPath(CACHE_DIR_ALBUM, id);
   if (cachePath) return readImage(cachePath);
 
-  // 3) Online providers (only if we can extract artist + album name)
   const info = extractAlbumInfo(id);
   if (info) {
     const online = await downloadAlbumCover(info.artist, info.album);
@@ -49,10 +52,35 @@ async function resolveAlbumCover(id: string): Promise<CoverResult | null> {
   return null;
 }
 
+/**
+ * Unified album cover resolution by artist/album name.
+ * Used by both the Subsonic API and the download pipeline.
+ * Chain: local fs ? cache ? online providers ? direct imageUrl ? YouTube thumbnail.
+ */
+export async function resolveAlbumCoverByNames(
+  artistName: string,
+  albumName: string,
+  opts?: CoverResolveOptions,
+): Promise<CoverResult | null> {
+  const online = await downloadAlbumCover(artistName, albumName);
+  if (online) return online;
+
+  if (opts?.imageUrl) {
+    const direct = await fetchImageUrl(opts.imageUrl);
+    if (direct) return direct;
+  }
+
+  if (opts?.videoId) {
+    const yt = await fetchYoutubeThumbnail(opts.videoId);
+    if (yt) return yt;
+  }
+
+  return null;
+}
+
 function resolveCoverPathLocal(id: string): string | null {
   const db = getDb();
 
-  // DB lookup (hash-based IDs from Selftify scanner)
   const row = db.prepare(`SELECT images FROM albums WHERE id = ?`).get(id) as
     | { images: string }
     | undefined;
@@ -61,7 +89,6 @@ function resolveCoverPathLocal(id: string): string | null {
     if (img) return img;
   }
 
-  // Treat id as relative path from library root (e.g. "Artist/Album Name")
   const albumDir = path.join(config.libraryRoot, id);
   if (fs.existsSync(albumDir) && fs.statSync(albumDir).isDirectory()) {
     for (const name of COVER_FILENAMES) {
@@ -74,12 +101,18 @@ function resolveCoverPathLocal(id: string): string | null {
 }
 
 function extractAlbumInfo(id: string): { artist: string; album: string } | null {
-  // Path-based: "Artist/Album Name"
+  if (id.startsWith("artist/")) {
+    const db = getDb();
+    const row = db.prepare(`SELECT artist_name, name FROM albums WHERE id = ?`).get(id) as
+      | { artist_name: string; name: string }
+      | undefined;
+    if (row) return { artist: row.artist_name, album: row.name };
+    return null;
+  }
   if (id.includes("/")) {
     const parts = id.split("/");
     return { artist: parts[0], album: parts.slice(1).join("/") };
   }
-  // Hash-based: "al_<hash>" → DB lookup
   if (id.startsWith("al_")) {
     const db = getDb();
     const row = db.prepare(`SELECT artist_name, name FROM albums WHERE id = ?`).get(id) as
@@ -96,49 +129,31 @@ async function downloadAlbumCover(artist: string, album: string): Promise<CoverR
   return tryItunes(artist, album);
 }
 
-async function tryDeezer(artist: string, album: string): Promise<CoverResult | null> {
+async function fetchImageUrl(url: string): Promise<CoverResult | null> {
   try {
-    const url = `https://api.deezer.com/search/album?q=${encodeURIComponent(`${artist} ${album}`)}&limit=3`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return null;
-    const json = await res.json() as any;
-    const items: any[] = json?.data || [];
-    const match = items.find((a: any) =>
-      a?.title?.toLowerCase() === album.toLowerCase() &&
-      a?.artist?.name?.toLowerCase() === artist.toLowerCase()
-    ) || items[0];
-    if (!match) return null;
-    const imgUrl = match.cover_xl || match.cover_big || match.cover_medium;
-    if (!imgUrl) return null;
-    const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(5000) });
-    if (!imgRes.ok) return null;
-    const data = Buffer.from(await imgRes.arrayBuffer());
-    return { data, contentType: imgRes.headers.get("content-type") || "image/jpeg" };
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return null;
+    const data = Buffer.from(await resp.arrayBuffer());
+    return { data, contentType: resp.headers.get("content-type") || "image/jpeg" };
   } catch {
     return null;
   }
 }
 
-async function tryItunes(artist: string, album: string): Promise<CoverResult | null> {
-  try {
-    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(`${artist} ${album}`)}&entity=album&media=music&limit=3`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return null;
-    const json = await res.json() as any;
-    const items: any[] = json?.results || [];
-    const match = items.find((a: any) =>
-      a?.collectionName?.toLowerCase() === album.toLowerCase() &&
-      a?.artistName?.toLowerCase() === artist.toLowerCase()
-    ) || items[0];
-    if (!match?.artworkUrl100) return null;
-    const imgUrl = match.artworkUrl100.replace("100x100bb", "600x600bb");
-    const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(5000) });
-    if (!imgRes.ok) return null;
-    const data = Buffer.from(await imgRes.arrayBuffer());
-    return { data, contentType: imgRes.headers.get("content-type") || "image/jpeg" };
-  } catch {
-    return null;
+async function fetchYoutubeThumbnail(videoId: string): Promise<CoverResult | null> {
+  for (const size of ["maxresdefault", "hqdefault"]) {
+    try {
+      const thumbUrl = `https://img.youtube.com/vi/${videoId}/${size}.jpg`;
+      const resp = await fetch(thumbUrl, { signal: AbortSignal.timeout(5000) });
+      if (resp.ok) {
+        const data = Buffer.from(await resp.arrayBuffer());
+        return { data, contentType: resp.headers.get("content-type") || "image/jpeg" };
+      }
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
 
 // ── Artist cover ──
@@ -150,17 +165,14 @@ async function resolveArtistCover(artistId: string): Promise<CoverResult | null>
     | undefined;
   if (!row) return null;
 
-  // DB images (from scan)
   const localPath = firstLocalImage(row.images);
   if (localPath) return readImage(localPath);
 
   const cacheKey = `ar-${artistId}`;
 
-  // Cache
   const cachePath = cachedCoverPath(CACHE_DIR_ARTIST, cacheKey);
   if (cachePath) return readImage(cachePath);
 
-  // Online
   const online = await downloadArtistCover(row.name);
   if (online) {
     saveToCache(CACHE_DIR_ARTIST, cacheKey, online.data);
@@ -229,8 +241,14 @@ function firstLocalImage(imagesJson?: string): string | null {
     if (!Array.isArray(arr)) return null;
     for (const item of arr) {
       const p = item?.path || (typeof item === "string" ? item : null);
-      if (p && fs.existsSync(p)) return p;
-      if (item?.url && item.url.startsWith("/") && fs.existsSync(item.url)) return item.url;
+      if (p) {
+        const absPath = path.isAbsolute(p) ? p : path.resolve(config.libraryRoot, p);
+        if (fs.existsSync(absPath)) return absPath;
+      }
+      if (item?.url) {
+        const absUrl = path.isAbsolute(item.url) ? item.url : path.resolve(config.libraryRoot, item.url);
+        if (fs.existsSync(absUrl)) return absUrl;
+      }
     }
   } catch {
     /* ignore */

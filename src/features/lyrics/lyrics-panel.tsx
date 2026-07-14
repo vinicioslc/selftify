@@ -138,7 +138,7 @@ export function LyricsPanel() {
     }
   }, [currentTrack, setCurrentResult, setError]);
 
-  const hasIpc = !!(window as any).electronApi?.lyrics;
+  const hasIpc = false;
 
   if (isLoading) {
     return (

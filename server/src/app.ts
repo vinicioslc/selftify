@@ -13,6 +13,8 @@ import { getSettings, updateSettings } from "./services/settings";
 import { downloadSong, isYtDlpAvailable } from "./services/download-service";
 import * as downloadQueue from "./services/download-queue";
 import { searchAllYouTube, isSearchAvailable } from "./services/youtube-search";
+import { resolvePlaylistUrl } from "./services/youtube-playlist";
+import * as playlistQueries from "./db/queries";
 import { handleSseRequest } from "./services/sse-events";
 import * as mappingRepo from "./repositories/mapping-repo";
 import * as rankingRepo from "./repositories/ranking-repo";
@@ -349,6 +351,108 @@ export function createApp(): express.Express {
     }
     const results = await searchAllYouTube(query);
     res.json({ results });
+  });
+
+  // ---- YouTube URL resolve (playlist or single video) ----
+  app.post("/api/selftify/youtube/resolve", async (req, res) => {
+    const { url } = req.body;
+    if (!url) {
+      res.status(400).json({ error: "url is required" });
+      return;
+    }
+    if (!isYtDlpAvailable()) {
+      res.status(500).json({ error: "yt-dlp not available" });
+      return;
+    }
+    try {
+      const result = await resolvePlaylistUrl(url);
+      res.json({ playlist: result });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // ---- Save imported playlist ----
+  app.post("/api/selftify/youtube/playlist/save", (req, res) => {
+    const { url, name, songs } = req.body;
+    if (!url || !name || !Array.isArray(songs)) {
+      res.status(400).json({ error: "url, name, and songs array are required" });
+      return;
+    }
+    const id = `imported-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const playlist = playlistQueries.saveImportedPlaylist(
+      id,
+      name,
+      url,
+      songs[0]?.source || null,
+      songs[0]?.imageUrl || null,
+      songs.map((s: any, i: number) => ({
+        videoId: s.youtubeVideoId || s.videoId || `v-${i}`,
+        title: s.name || s.title || "Unknown",
+        uploader: s.artistName || s.uploader || null,
+        duration: s.duration ?? null,
+        thumbnail: s.imageUrl || s.thumbnail || null,
+        position: i + 1,
+      })),
+    );
+    res.json({ playlist });
+  });
+
+  // ---- Refresh imported playlist ----
+  app.put("/api/selftify/youtube/playlist/:id/refresh", async (req, res) => {
+    const id = req.params.id;
+    const existing = playlistQueries.getImportedPlaylist(id);
+    if (!existing) {
+      res.status(404).json({ error: "Imported playlist not found" });
+      return;
+    }
+    if (!isYtDlpAvailable()) {
+      res.status(500).json({ error: "yt-dlp not available" });
+      return;
+    }
+    try {
+      const result = await resolvePlaylistUrl(existing.playlist.url);
+      const updated = playlistQueries.saveImportedPlaylist(
+        id,
+        result.name,
+        existing.playlist.url,
+        result.source,
+        result.imageUrl,
+        result.entries.map((e) => ({
+          videoId: e.videoId,
+          title: e.title,
+          uploader: e.uploader,
+          duration: e.duration,
+          thumbnail: e.thumbnail,
+          position: e.position,
+        })),
+      );
+      res.json({ playlist: updated, songs: result.entries });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // ---- List imported playlists ----
+  app.get("/api/selftify/playlists", (_req, res) => {
+    const playlists = playlistQueries.getImportedPlaylists();
+    res.json({ playlists });
+  });
+
+  // ---- Get imported playlist detail ----
+  app.get("/api/selftify/playlist/:id", (req, res) => {
+    const result = playlistQueries.getImportedPlaylist(req.params.id);
+    if (!result) {
+      res.status(404).json({ error: "Imported playlist not found" });
+      return;
+    }
+    res.json({ playlist: result.playlist, songs: result.tracks });
+  });
+
+  // ---- Delete imported playlist ----
+  app.delete("/api/selftify/playlist/:id", (req, res) => {
+    playlistQueries.deleteImportedPlaylist(req.params.id);
+    res.json({ success: true });
   });
 
   // ---- MusicBrainz <-> YouTube mappings (state owned by backend) ----

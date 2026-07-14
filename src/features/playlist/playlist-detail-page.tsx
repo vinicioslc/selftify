@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { useStatusStore } from "../../stores/status.store";
+import { useToastStore } from "../../stores/toast.store";
 import {
   getPlaylistSongIds,
   removeSongFromPlaylist,
@@ -12,13 +13,14 @@ import { getSongByMbid } from "../../api/local/local-queries";
 import { OriginType } from "../../types/domain-types";
 import type { Album, AlbumArtist, Playlist, Song } from "../../types/domain-types";
 import { sqliteDbTrackToSong } from "../../services/sqlite-db/sqlite-db-resolver";
+import { refreshImportedPlaylist, getImportedPlaylistDetail, deleteImportedPlaylist } from "../../services/playlist-import-service";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { DataTable } from "../shared/data-table";
 import { songColumns } from "../shared/song-columns";
-import { ArrowLeft, Play, Trash2, Pencil, X, Check } from "lucide-react";
-import { useState as useStateFn } from "react";
+import { DownloadButton } from "../download/download-button";
+import { ArrowLeft, Play, Trash2, Pencil, X, Check, RefreshCw } from "lucide-react";
 
 interface PlaylistDetailPageProps {
   playlist: Playlist;
@@ -35,28 +37,43 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
   const [isRenaming, setIsRenaming] = useState(false);
   const [newName, setNewName] = useState(playlist.name);
   const [songCount, setSongCount] = useState(playlist.songCount ?? 0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [selectedForDownload, setSelectedForDownload] = useState<Set<string>>(new Set());
 
   const loadSongs = useCallback(async () => {
     setLoading(true);
     try {
-      const mbids = await getPlaylistSongIds(playlist.id);
-      if (mbids.length === 0) {
-        setSongs([]);
-        setSongCount(0);
-        return;
+      if (playlist.imported && playlist.sourceUrl) {
+        const detail = await getImportedPlaylistDetail(playlist.id);
+        if (!detail) {
+          setSongs([]);
+          setSongCount(0);
+          setLoading(false);
+          return;
+        }
+        setSongs(detail.songs);
+        setSongCount(detail.songs.length);
+      } else {
+        const mbids = await getPlaylistSongIds(playlist.id);
+        if (mbids.length === 0) {
+          setSongs([]);
+          setSongCount(0);
+          setLoading(false);
+          return;
+        }
+        const dbSongs = (await Promise.all(mbids.map((mbid) => getSongByMbid(mbid)))).filter(Boolean);
+        const originId = currentOrigin?.id || playlist.originId;
+        const mapped: Song[] = dbSongs.map((s) => sqliteDbTrackToSong(s!, originId, OriginType.LOCAL));
+        setSongs(mapped);
+        setSongCount(mapped.length);
       }
-      const dbSongs = (await Promise.all(mbids.map((mbid) => getSongByMbid(mbid)))).filter(Boolean);
-      const originId = currentOrigin?.id || playlist.originId;
-      const mapped: Song[] = dbSongs.map((s) => sqliteDbTrackToSong(s!, originId, OriginType.LOCAL));
-      setSongs(mapped);
-      setSongCount(mapped.length);
     } catch (err) {
       console.error("[playlist-detail] load error:", err);
       setSongs([]);
     } finally {
       setLoading(false);
     }
-  }, [playlist.id, playlist.originId, currentOrigin]);
+  }, [playlist.id, playlist.originId, currentOrigin, playlist.imported, playlist.sourceUrl]);
 
   useEffect(() => {
     loadSongs();
@@ -88,13 +105,61 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
   }
 
   async function handleDelete() {
-    await deletePlaylist(playlist.id);
+    if (playlist.imported) {
+      await deleteImportedPlaylist(playlist.id);
+    } else {
+      await deletePlaylist(playlist.id);
+    }
     useStatusStore.getState().addMessage(`"${playlist.name}" deleted`, "info", "Playlist");
     onBack();
   }
 
+  async function handleRefresh() {
+    if (!playlist.sourceUrl) return;
+    setRefreshing(true);
+    try {
+      const result = await refreshImportedPlaylist(playlist.id);
+      setSongs(result.songs);
+      setSongCount(result.songs.length);
+      playlist.name = result.playlist.name;
+      setNewName(result.playlist.name);
+      playlist.imageUrl = result.playlist.imageUrl;
+      useStatusStore.getState().addMessage(`Playlist refreshed — ${result.songs.length} songs`, "success", "Playlist");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      useToastStore.getState().toast(`Falha: ${msg}`, "danger");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   function handlePlaySong(song: Song) {
     setQueue([song], { type: "now" });
+  }
+
+  function toggleSelect(songId: string) {
+    setSelectedForDownload((prev) => {
+      const next = new Set(prev);
+      if (next.has(songId)) next.delete(songId);
+      else next.add(songId);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedForDownload.size === songs.length) {
+      setSelectedForDownload(new Set());
+    } else {
+      setSelectedForDownload(new Set(songs.map((s) => s.id)));
+    }
+  }
+
+  function handleDownloadSelected() {
+    if (selectedForDownload.size === 0) return;
+    const selected = songs.filter((s) => selectedForDownload.has(s.id));
+    import("../../stores/download.store").then((m) => {
+      m.useDownloadStore.getState().enqueueMultiple(selected);
+    });
   }
 
   const handleNavArtist = useCallback((song: Song) => {
@@ -120,9 +185,38 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
     });
   }, [onNavigateAlbum]);
 
-  const columns = [
-    ...songColumns({ onNavigateArtist: handleNavArtist, onNavigateAlbum: handleNavAlbum }),
-    {
+  const columns = useMemo(() => {
+    const base: any[] = [
+      ...songColumns({ onNavigateArtist: handleNavArtist, onNavigateAlbum: handleNavAlbum }),
+    ];
+
+    // For imported playlists, add checkbox + download columns
+    if (playlist.imported) {
+      base.unshift({
+        id: "select",
+        label: "",
+        width: "2rem",
+        sortable: false,
+        render: (song: Song) => (
+          <input
+            type="checkbox"
+            checked={selectedForDownload.has(song.id)}
+            onChange={() => toggleSelect(song.id)}
+            className="h-4 w-4 cursor-pointer accent-primary"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+      });
+      base.push({
+        id: "download",
+        label: "",
+        width: "2rem",
+        sortable: false,
+        render: (song: Song) => <DownloadButton song={song} variant="icon" size="sm" />,
+      });
+    }
+
+    base.push({
       id: "remove",
       label: "",
       width: "40px",
@@ -140,8 +234,10 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
           <X className="h-4 w-4" />
         </Button>
       ),
-    },
-  ];
+    });
+
+    return base;
+  }, [handleNavArtist, handleNavAlbum, playlist.imported, selectedForDownload]);
 
   return (
     <div className="flex h-full flex-col">
@@ -196,6 +292,35 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
                   <Play className="mr-2 h-4 w-4" />
                   Play All
                 </Button>
+                {playlist.imported && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={toggleSelectAll}
+                      title={selectedForDownload.size === songs.length ? "Deselect all" : "Select all"}
+                    >
+                      {selectedForDownload.size === songs.length ? "Deselect All" : "Select All"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDownloadSelected}
+                      disabled={selectedForDownload.size === 0}
+                    >
+                      Download Selected ({selectedForDownload.size})
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRefresh}
+                      disabled={refreshing}
+                    >
+                      <RefreshCw className={`mr-1 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                      Refresh
+                    </Button>
+                  </>
+                )}
                 <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleDelete}>
                   <Trash2 className="mr-2 h-4 w-4" />
                   Delete
@@ -206,7 +331,7 @@ export function PlaylistDetailPage({ playlist, onBack, onNavigateAlbum, onNaviga
 
           {/* Song List */}
           {loading ? (
-            <DataTable
+            <DataTable<Song>
               data={[]}
               columns={columns}
               getRowId={(s) => s.id}

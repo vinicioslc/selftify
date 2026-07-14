@@ -106,6 +106,9 @@ export type Playlist = {
   duration?: number;
   imageUrl: string | null;
   public?: boolean;
+  sourceUrl?: string;
+  imported?: boolean;
+  source?: string;
 };
 
 export type QueueSong = Song & {

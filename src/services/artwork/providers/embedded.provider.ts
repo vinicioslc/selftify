@@ -3,6 +3,7 @@ import { findImages, recordToBlobUrl } from "../../image-store";
 
 export class EmbeddedProvider implements ArtworkProvider {
   readonly name = "embedded";
+  readonly modes = ["album"] as const;
 
   async search(
     input: ArtworkSearchInput,

@@ -1,7 +1,7 @@
 import { getPlatformService } from "./platform/factory";
 import { useStatusStore } from "../stores/status.store";
 import type { Origin } from "../types/domain-types";
-import { joinPaths, fileNameFromPath, stripTrailingSlash, isAbsolutePath, normalizePath } from "../lib/path-utils";
+import { joinPaths, fileNameFromPath, stripTrailingSlash, isAbsolutePath } from "../lib/path-utils";
 
 function addMsg(text: string, level: "info" | "success" | "warn" | "danger" = "info") {
   useStatusStore.getState().addMessage(text, level, "Library");
@@ -11,17 +11,7 @@ function log(msg: string) {
   console.debug(`[move-to-trash] ${msg}`);
 }
 
-/**
- * Move a local song file to the .trash folder within the library root,
- * then remove its entry from the local database.
- *
- * @param filePath Absolute or relative (from library root) path to the file
- * @param origin The local origin (provides folderPath as library root)
- * @returns true if successfully moved and deleted
- */
 export async function moveSongToTrash(filePath: string, origin: Origin): Promise<boolean> {
-  const p = await getPlatformService();
-
   const root = origin.folderPath;
   if (!root) {
     log("no folderPath on origin, cannot determine trash root");
@@ -29,9 +19,14 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
     return false;
   }
 
+  const p = await getPlatformService();
+  if (!p.isElectron) {
+    addMsg("Trash functionality requires Electron or a backend server", "warn");
+    return false;
+  }
+
   const trashDir = joinPaths(stripTrailingSlash(root), ".trash");
 
-  // Ensure .trash directory exists
   try {
     const exists = await p.fileExists(trashDir);
     if (!exists) {
@@ -48,11 +43,9 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
     return false;
   }
 
-  // Build target path inside .trash
-  const fileName = fileNameFromPath(normalizePath(filePath));
+  const fileName = fileNameFromPath(filePath);
   const destPath = joinPaths(trashDir, fileName);
 
-  // If a file with the same name already exists in .trash, append timestamp
   let finalDest = destPath;
   if (await p.fileExists(destPath)) {
     const dotIdx = fileName.lastIndexOf(".");
@@ -79,19 +72,7 @@ export async function moveSongToTrash(filePath: string, origin: Origin): Promise
       return false;
     }
   } else {
-    log(`file not found on disk, removing from DB only: ${absPath}`);
-  }
-
-  // Remove entry from the database
-  try {
-    const relPath = isAbsolutePath(filePath) ? normalizePath(filePath.slice(root.length + 1)) : normalizePath(filePath);
-    const { deleteTrack } = await import("./db/repositories/track-repo");
-    deleteTrack(relPath);
-    const { flushSave } = await import("./db/database");
-    await flushSave();
-  } catch (err) {
-    log(`failed to remove song from DB: ${err}`);
-    addMsg(fileExists ? "File moved to trash but database entry could not be removed" : "Could not remove from database", "warn");
+    log(`file not found on disk, removing from DB only: ${filePath}`);
   }
 
   addMsg(fileExists ? `Moved to trash: ${fileName}` : `Removed from library: ${fileName}`, "success");

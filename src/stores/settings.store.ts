@@ -80,6 +80,7 @@ export const DEFAULT_ARTWORK_PROVIDERS: ArtworkProviders = {
   musicbrainz_release_group: { enabled: true, paceMs: 1000 },
   itunes: { enabled: false, paceMs: 500 },
   deezer: { enabled: false, paceMs: 500 },
+  wikipedia: { enabled: true, paceMs: 1000 },
 };
 
 type SettingsState = {

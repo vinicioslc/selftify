@@ -6,6 +6,7 @@ const USER_AGENT = "Selftify/1.0.0 (music-player)";
 
 export class MusicBrainzRGProvider implements ArtworkProvider {
   readonly name = "musicbrainz_release_group";
+  readonly modes = ["album"] as const;
 
   async search(
     input: ArtworkSearchInput,

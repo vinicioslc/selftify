@@ -89,6 +89,13 @@ export async function startScan(libraryRoot: string): Promise<void> {
   }
 
   if (allFiles.length === 0) {
+    // Still run the clean-slate sweep so stale albums from prior scans are
+    // properly soft-deleted even when there are no files to index.
+    const db = getDb();
+    db.transaction(() => {
+      db.prepare(`DELETE FROM tracks`).run();
+      db.prepare(`UPDATE albums SET deleted_at = ?`).run(Date.now());
+    })();
     scanState.status = "done";
     scanState.finishedAt = Date.now();
     scanState.progress = { total: 0, done: 0, currentItem: "" };
@@ -104,6 +111,14 @@ export async function startScan(libraryRoot: string): Promise<void> {
   const BATCH_SIZE = 5;
   const db = getDb();
   let hadErrors = false;
+
+  // Clean slate: delete all tracks (re-inserted below) and soft-delete all
+  // albums. Albums still encountered during this scan get restored (deleted_at
+  // = NULL); leftovers are ghosts from removed/reorganized files.
+  db.transaction(() => {
+    db.prepare(`DELETE FROM tracks`).run();
+    db.prepare(`UPDATE albums SET deleted_at = ?`).run(Date.now());
+  })();
 
   for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
     const batch = allFiles.slice(i, i + BATCH_SIZE);
@@ -214,28 +229,25 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
 
   const db = getDb();
 
-  // Upsert artist
-  const artistId = generateId("ar", artistName);
+  // Upsert artist — hierarchical: artist/<mbid> or artist/<hash>
+  const artistId = mbzArtistId ? `artist/${mbzArtistId}` : `artist/${generatePart("ar", artistName)}`;
   db.prepare(
     `INSERT OR IGNORE INTO artists (id, name, genres, mbz_id, updated_at)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(artistId, artistName, genre ? JSON.stringify([genre]) : "[]", mbzArtistId, Date.now());
-  if (mbzArtistId) {
-    db.prepare(
-      `UPDATE artists SET mbz_id = ? WHERE id = ? AND (mbz_id IS NULL OR mbz_id = '')`,
-    ).run(mbzArtistId, artistId);
-  }
+  ).run(artistId, artistName, genre ? JSON.stringify([genre]) : "[]", mbzArtistId || null, Date.now());
 
-  // Upsert album
-  const albumId = generateId("al", artistName, albumName || artistName);
+  // Upsert album — hierarchical: <artistId>/album/<rgid> or <artistId>/album/<hash>
+  const albumId = mbzReleaseGroupId
+    ? `${artistId}/album/${mbzReleaseGroupId}`
+    : `${artistId}/album/${generatePart("al", artistName, albumName || artistName)}`;
   const existingAlbum = db.prepare(`SELECT id, song_count, duration FROM albums WHERE id = ?`).get(albumId) as
     | { id: string; song_count: number; duration: number }
     | undefined;
 
   if (existingAlbum) {
     db.prepare(
-      `UPDATE albums SET song_count = song_count + 1, duration = duration + ?, updated_at = ? WHERE id = ?`,
-    ).run(duration || 0, Date.now(), albumId);
+      `UPDATE albums SET song_count = (SELECT COUNT(*) FROM tracks WHERE album_id = ?) + 1, duration = (SELECT COALESCE(SUM(duration), 0) FROM tracks WHERE album_id = ?) + ?, deleted_at = NULL, updated_at = ? WHERE id = ?`,
+    ).run(albumId, albumId, duration || 0, Date.now(), albumId);
   } else {
     db.prepare(
       `INSERT INTO albums (id, artist_id, name, artist_name, album_artist, release_year, genres, images, song_count, duration, mbz_id, mbz_release_group_id, updated_at)
@@ -255,17 +267,12 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
       Date.now(),
     );
   }
-  if (mbzAlbumId || mbzReleaseGroupId) {
-    db.prepare(
-      `UPDATE albums
-         SET mbz_id = COALESCE(NULLIF(mbz_id, ''), ?),
-             mbz_release_group_id = COALESCE(NULLIF(mbz_release_group_id, ''), ?)
-       WHERE id = ? AND (mbz_id IS NULL OR mbz_id = '' OR mbz_release_group_id IS NULL OR mbz_release_group_id = '')`,
-    ).run(mbzAlbumId, mbzReleaseGroupId, albumId);
-  }
 
-  // Insert track
-  const trackId = generateId("tr", relPath);
+  // Insert track — hierarchical: <albumId>/music/<recordingId> or <albumId>/music/<hash>
+  const trackMid = mbzRecordingId || mbzTrackId;
+  const trackId = trackMid
+    ? `${albumId}/music/${trackMid}`
+    : `${albumId}/music/${generatePart("tr", relPath)}`;
   db.prepare(
     `INSERT OR REPLACE INTO tracks (id, album_id, path, name, artist_name, album_name, track_number, disc_number, duration, bitrate, genre, mbz_recording_id, mbz_track_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -276,7 +283,7 @@ function writeFileToDb(filePath: string, libraryRoot: string, meta: mm.IAudioMet
   );
 }
 
-function generateId(prefix: string, ...parts: string[]): string {
+function generatePart(prefix: string, ...parts: string[]): string {
   return `${prefix}_${simpleHash(parts.join("|")).substring(0, 12)}`;
 }
 

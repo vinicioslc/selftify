@@ -3,7 +3,7 @@ import { useStatusStore } from "../../stores/status.store";
 import { OriginType } from "../../types/domain-types";
 import { createFileOrganizer } from "./file-organizer";
 import { sanitizeForPath } from "./sanitizer";
-import { getPlatformService } from "../platform/factory";
+import { electronFs } from "../platform/electron-fs";
 import { joinPaths, normalizePath } from "../../lib/path-utils";
 import type { OrganizeResult } from "./file-organizer";
 
@@ -128,7 +128,6 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
 
   const artists = getAllArtists();
   const artistMap = new Map(artists.map((a) => [a.name.toLowerCase(), a]));
-  const p = await getPlatformService();
 
   for (const { meta } of albums) {
     try {
@@ -140,7 +139,7 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
 
       const artistEntry = artistMap.get(meta.artistName.toLowerCase());
 
-      await p.deleteFile(joinPaths(targetAlbumDir, "album.nfo")).catch(() => {});
+      await electronFs.deleteFile(joinPaths(targetAlbumDir, "album.nfo")).catch(() => {});
 
       await organizer.writeAlbumArtifacts(targetAlbumDir, {
         libraryRoot,
@@ -174,7 +173,7 @@ export async function organizeAllFiles(): Promise<OrganizeAllResult> {
     try {
       const targetArtistDir = joinPaths(libraryRoot, sanitize(artist.name));
 
-      await p.deleteFile(joinPaths(targetArtistDir, "artist.nfo")).catch(() => {});
+      await electronFs.deleteFile(joinPaths(targetArtistDir, "artist.nfo")).catch(() => {});
 
       await organizer.writeArtistArtifacts(targetArtistDir, {
         artistName: artist.name,

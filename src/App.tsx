@@ -19,7 +19,7 @@ import { AlbumPage } from "./features/album/album-page";
 import { ArtistPage } from "./features/artist/artist-page";
 import { PlaylistListPage } from "./features/playlist/playlist-list-page";
 import { PlaylistDetailPage } from "./features/playlist/playlist-detail-page";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Menu, X } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { useIsMobile } from "./hooks/use-media-query";
@@ -33,10 +33,12 @@ import { Toaster } from "./components/ui/toaster";
 import { useGlobalErrorHandler } from "./hooks/use-global-error-handler";
 import { useSettingsSync } from "./hooks/use-settings-sync";
 import { detectBackend } from "./api/backend-detector";
+import { pushViewState, replaceViewState, parseCurrentUrl, safeId } from "./services/url-router";
+import type { HistoryState, ParsedRoute } from "./services/url-router";
 
 type SearchState = {
   query: string;
-  mode: "local" | "musicbrainz" | "youtube";
+  mode: "local" | "musicbrainz" | "youtube" | "playlist";
 };
 
 type NavEntry = {
@@ -92,21 +94,20 @@ export function App() {
           console.debug("[app] saved backend config unreachable — clearing");
           useBackendStore.getState().clearConfig();
         }
-        return;
-      }
-
-      try {
-        const detected = await detectBackend(API_BASE);
-        if (detected.type === "selftify" || detected.type === "subsonic") {
-          const cfg = { type: detected.type, url: detected.url, user: "admin", password: "admin" };
-          const ok = await verifyConnection(cfg);
-          if (ok) setBackendConfig(cfg);
+      } else {
+        try {
+          const detected = await detectBackend(API_BASE);
+          if (detected.type === "selftify" || detected.type === "subsonic") {
+            const cfg = { type: detected.type, url: detected.url, user: "admin", password: "admin" };
+            const ok = await verifyConnection(cfg);
+            if (ok) setBackendConfig(cfg);
+          }
+        } catch {
+          // not reachable — leave backendConfig as null, local controllers will be used
         }
-      } catch {
-        // not reachable — leave backendConfig as null, local controllers will be used
       }
 
-      // Sync online-search config from backend (if reachable)
+      // Always sync online-search config from backend (if reachable)
       await useOnlineSearchStore.getState().syncFromBackend();
     })();
   }, []);
@@ -120,11 +121,67 @@ export function App() {
     setNavFuture([]);
   }
 
+  // Ref for pushState tracking (popstate guard)
+  const isHistoryNavRef = useRef(false);
+
+  // Restore full state from a history entry (used by popstate)
+  function restoreFromHistory(state: HistoryState) {
+    setCurrentView(state.view);
+    setSelectedAlbum(state.album ?? null);
+    setSelectedArtist(state.artist ?? null);
+    setSelectedPlaylist(state.playlist ?? null);
+    if (state.searchState) {
+      setSearchState(state.searchState as SearchState);
+    }
+  }
+
+  // Restore from a parsed URL route (used on initial load)
+  function restoreFromRoute(route: ParsedRoute) {
+    setCurrentView(route.view);
+    if (route.searchState) {
+      setSearchState(route.searchState as SearchState);
+    }
+    if (route.albumIdent) {
+      const album: Album = {
+        id: `album-${safeId(route.albumIdent.albumArtistName)}-${safeId(route.albumIdent.name)}`,
+        originId: currentOrigin?.id ?? "",
+        originType: currentOrigin?.type ?? OriginType.LOCAL,
+        name: route.albumIdent.name,
+        albumArtistName: route.albumIdent.albumArtistName,
+        imageUrl: null,
+      };
+      setSelectedAlbum(album);
+      setSelectedArtist(null);
+    }
+    if (route.artistIdent) {
+      const artist: AlbumArtist = {
+        id: `artist-${safeId(route.artistIdent.name)}`,
+        originId: currentOrigin?.id ?? "",
+        originType: currentOrigin?.type ?? OriginType.LOCAL,
+        name: route.artistIdent.name,
+        imageUrl: null,
+      };
+      setSelectedArtist(artist);
+      setSelectedAlbum(null);
+    }
+    if (route.playlistIdent) {
+      const playlist: Playlist = {
+        id: route.playlistIdent.id,
+        originId: currentOrigin?.id ?? "",
+        originType: currentOrigin?.type ?? OriginType.LOCAL,
+        name: route.playlistIdent.name,
+        imageUrl: null,
+      };
+      setSelectedPlaylist(playlist);
+    }
+  }
+
   function handleNavigateAlbum(album: Album) {
     pushNavEntry(currentView, selectedAlbum, selectedArtist);
     setSelectedAlbum(album);
     setSelectedArtist(null);
     setCurrentView("album-detail");
+    pushViewState("album-detail", { album });
   }
 
   function handleNavigateArtist(artist: AlbumArtist) {
@@ -132,6 +189,7 @@ export function App() {
     setSelectedArtist(artist);
     setSelectedAlbum(null);
     setCurrentView("artist-detail");
+    pushViewState("artist-detail", { artist });
   }
 
   function handleNavigatePlaylist(playlist: Playlist) {
@@ -140,6 +198,7 @@ export function App() {
     setSelectedAlbum(null);
     setSelectedArtist(null);
     setCurrentView("playlist-detail");
+    pushViewState("playlist-detail", { playlist });
   }
 
   function handleBack() {
@@ -147,16 +206,20 @@ export function App() {
     setSelectedAlbum(null);
     setSelectedArtist(null);
     setCurrentView("search");
+    pushViewState("search");
   }
 
   function navigateTo(view: AppView) {
     pushNavEntry(currentView, selectedAlbum, selectedArtist);
     setCurrentView(view);
+    const params = view === "search" ? { searchState } : {};
+    pushViewState(view, params);
   }
 
   function handleGoBack() {
     if (navHistory.length === 0) return;
     const entry = navHistory[navHistory.length - 1];
+    isHistoryNavRef.current = true;
     setNavFuture(prev => [...prev, { view: currentView, album: selectedAlbum, artist: selectedArtist, searchState: { ...searchState } }]);
     setNavHistory(prev => prev.slice(0, -1));
     setCurrentView(entry.view);
@@ -165,11 +228,19 @@ export function App() {
     if (entry.searchState) {
       setSearchState(entry.searchState);
     }
+    replaceViewState(entry.view, {
+      album: entry.album,
+      artist: entry.artist,
+      ...(entry.searchState && { searchState: entry.searchState }),
+    });
+    // Reset flag after React has processed the state update
+    setTimeout(() => { isHistoryNavRef.current = false; }, 0);
   }
 
   function handleGoForward() {
     if (navFuture.length === 0) return;
     const entry = navFuture[navFuture.length - 1];
+    isHistoryNavRef.current = true;
     setNavHistory(prev => [...prev, { view: currentView, album: selectedAlbum, artist: selectedArtist, searchState: { ...searchState } }]);
     setNavFuture(prev => prev.slice(0, -1));
     setCurrentView(entry.view);
@@ -178,32 +249,82 @@ export function App() {
     if (entry.searchState) {
       setSearchState(entry.searchState);
     }
+    replaceViewState(entry.view, {
+      album: entry.album,
+      artist: entry.artist,
+      ...(entry.searchState && { searchState: entry.searchState }),
+    });
+    setTimeout(() => { isHistoryNavRef.current = false; }, 0);
   }
 
   const handleSearchStateChange = useCallback((state: SearchState) => {
     setSearchState(state);
-    syncUrlWithSearch(state);
+    replaceViewState("search", { searchState: state });
   }, []);
 
-  function syncUrlWithSearch(state: SearchState) {
-    const params = new URLSearchParams();
-    if (state.query) params.set("q", state.query);
-    if (state.mode) params.set("mode", state.mode);
-    const search = params.toString();
-    const url = search ? `?${search}` : window.location.pathname;
-    window.history.replaceState(null, "", url);
-  }
+  // --- URL Routing: popstate + initial route restore ---
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const q = params.get("q");
-    const mode = params.get("mode");
-    if (q || mode) {
-      setSearchState({
-        query: q || "",
-        mode: (mode === "local" || mode === "musicbrainz" || mode === "youtube") ? mode : (useOnlineSearchStore.getState().enabled ? "musicbrainz" : "local"),
-      });
+    // Check if we already have history state from a previous pushState
+    const hs = window.history.state as HistoryState | null;
+    if (hs?.view && hs.view !== "home") {
+      restoreFromHistory(hs);
+      return;
     }
+
+    // Parse URL to restore initial route
+    const route = parseCurrentUrl();
+    if (route && route.view !== "home") {
+      restoreFromRoute(route);
+      // Sync the URL with proper history state
+      const urlParams: Parameters<typeof replaceViewState>[1] = {};
+      if (route.albumIdent) {
+        urlParams.album = {
+          id: `album-${safeId(route.albumIdent.albumArtistName)}-${safeId(route.albumIdent.name)}`,
+          originId: currentOrigin?.id ?? "",
+          originType: currentOrigin?.type ?? OriginType.LOCAL,
+          name: route.albumIdent.name,
+          albumArtistName: route.albumIdent.albumArtistName,
+          imageUrl: null,
+        };
+      }
+      if (route.artistIdent) {
+        urlParams.artist = {
+          id: `artist-${safeId(route.artistIdent.name)}`,
+          originId: currentOrigin?.id ?? "",
+          originType: currentOrigin?.type ?? OriginType.LOCAL,
+          name: route.artistIdent.name,
+          imageUrl: null,
+        };
+      }
+      if (route.playlistIdent) {
+        urlParams.playlist = {
+          id: route.playlistIdent.id,
+          originId: currentOrigin?.id ?? "",
+          originType: currentOrigin?.type ?? OriginType.LOCAL,
+          name: route.playlistIdent.name,
+          imageUrl: null,
+        };
+      }
+      if (route.searchState) {
+        urlParams.searchState = route.searchState;
+      }
+      replaceViewState(route.view, urlParams);
+    }
+
+    // Popstate listener for browser back/forward
+    const onPopState = (e: PopStateEvent) => {
+      if (isHistoryNavRef.current) return; // ignore events triggered by our own handleGoBack/Forward
+      const st = e.state as HistoryState | null;
+      if (st?.view) {
+        restoreFromHistory(st);
+      } else {
+        const r = parseCurrentUrl();
+        if (r) restoreFromRoute(r);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   function renderView() {

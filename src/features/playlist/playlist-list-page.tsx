@@ -2,15 +2,18 @@ import { useEffect, useState, useCallback } from "react";
 import { useAuthStore } from "../../stores/auth.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { useStatusStore } from "../../stores/status.store";
+import { useBackendStore } from "../../stores/backend.store";
 import { createPlaylist, deletePlaylist, getAllPlaylists } from "../../services/playlist-service";
 import { getController } from "../../api/controller";
+import { getImportedPlaylists, deleteImportedPlaylist } from "../../services/playlist-import-service";
 import { type Album, type AlbumArtist, type Playlist } from "../../types/domain-types";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "../../components/ui/dialog";
-import { Plus, Play, Trash2, ListMusic, Music } from "lucide-react";
+import { Badge } from "../../components/ui/badge";
+import { Plus, Play, Trash2, ListMusic, Music, RefreshCw } from "lucide-react";
 
 interface PlaylistListPageProps {
   onNavigatePlaylist: (playlist: Playlist) => void;
@@ -21,6 +24,7 @@ interface PlaylistListPageProps {
 export function PlaylistListPage({ onNavigatePlaylist, onNavigateAlbum, onNavigateArtist }: PlaylistListPageProps) {
   const { currentOrigin } = useAuthStore();
   const { setQueue } = usePlayerStore();
+  const backendConfig = useBackendStore((s) => s.config);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
@@ -36,14 +40,32 @@ export function PlaylistListPage({ onNavigatePlaylist, onNavigateAlbum, onNaviga
     try {
       const controller = await getController();
       const list = await controller.getPlaylistList();
-      setPlaylists(list);
+
+      // Merge with imported playlists from backend
+      let all: Playlist[] = [...list];
+      if (backendConfig) {
+        const imported = await getImportedPlaylists();
+        all = [...all, ...imported];
+      }
+
+      setPlaylists(all);
     } catch (err) {
       console.error("[playlist-list] failed to load playlists:", err);
-      setPlaylists([]);
+      // If controller fails, try to at least show imported
+      try {
+        if (backendConfig) {
+          const imported = await getImportedPlaylists();
+          setPlaylists(imported);
+        } else {
+          setPlaylists([]);
+        }
+      } catch {
+        setPlaylists([]);
+      }
     } finally {
       setLoading(false);
     }
-  }, [currentOrigin]);
+  }, [currentOrigin, backendConfig]);
 
   useEffect(() => {
     loadPlaylists();
@@ -66,7 +88,11 @@ export function PlaylistListPage({ onNavigatePlaylist, onNavigateAlbum, onNaviga
   async function handleDelete(e: React.MouseEvent, playlist: Playlist) {
     e.stopPropagation();
     try {
-      await deletePlaylist(playlist.id);
+      if (playlist.imported) {
+        await deleteImportedPlaylist(playlist.id);
+      } else {
+        await deletePlaylist(playlist.id);
+      }
       useStatusStore.getState().addMessage(`Playlist "${playlist.name}" deleted`, "info", "Playlist");
       loadPlaylists();
     } catch (err) {
@@ -197,9 +223,15 @@ export function PlaylistListPage({ onNavigatePlaylist, onNavigateAlbum, onNaviga
                     </div>
                     <CardTitle className="mt-3 truncate text-base">
                       {playlist.name}
+                      {playlist.imported && (
+                        <Badge variant="outline" className="ml-2 text-[10px] font-normal text-green-500 border-green-500/30">
+                          Importada
+                        </Badge>
+                      )}
                     </CardTitle>
                     <CardDescription className="text-xs">
                       {playlist.songCount ?? 0} song{(playlist.songCount ?? 0) !== 1 ? "s" : ""}
+                      {playlist.source && <span className="ml-1 text-muted-foreground/60">· {playlist.source}</span>}
                     </CardDescription>
                   </CardHeader>
                 </Card>

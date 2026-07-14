@@ -85,8 +85,8 @@ describe("useArtistImage — internal logic", () => {
       return Promise.reject(new Error(`unexpected url: ${url}`));
     });
 
-    const { fetchArtistImage } = await import("../../services/artist-image");
-    const result = await fetchArtistImage("Trapt", "8876c0be-ccff-4d46-aa91-7f935a3b3b6b");
+    const { imageResolutionService } = await import("../../services/image-resolution/service");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Trapt", musicbrainzArtistId: "8876c0be-ccff-4d46-aa91-7f935a3b3b6b" });
     expect(result).toMatch(/^blob:/);
   });
 
@@ -110,16 +110,16 @@ describe("useArtistImage — internal logic", () => {
       return Promise.reject(new Error(`unexpected url: ${url}`));
     });
 
-    const { fetchArtistImage } = await import("../../services/artist-image");
-    const result = await fetchArtistImage("Radiohead");
+    const { imageResolutionService } = await import("../../services/image-resolution/service");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Radiohead" });
     expect(result).toMatch(/^blob:/);
   });
 
   it("retorna null quando todas as fontes falham", async () => {
     globalFetchMock.mockRejectedValue(new Error("network timeout"));
 
-    const { fetchArtistImage } = await import("../../services/artist-image");
-    const result = await fetchArtistImage("NonExistent");
+    const { imageResolutionService } = await import("../../services/image-resolution/service");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "NonExistent" });
     expect(result).toBeNull();
   });
 
@@ -146,8 +146,8 @@ describe("useArtistImage — internal logic", () => {
       return Promise.reject(new Error(`unexpected url: ${url}`));
     });
 
-    const { fetchArtistImage } = await import("../../services/artist-image");
-    const result = await fetchArtistImage("Radiohead", "a74b1b7f-71a5-4011-9441-d0b5e4122711");
+    const { imageResolutionService } = await import("../../services/image-resolution/service");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Radiohead", musicbrainzArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711" });
     expect(result).toMatch(/^blob:/);
     expect(result).toBeTruthy();
   });

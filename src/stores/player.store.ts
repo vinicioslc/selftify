@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { PlayerStatus, PlayerRepeat, PlayerShuffle, QueueSong, Song, PlayQueueAddOptions } from "../types/domain-types";
 import { generateId } from "../lib/utils";
 
@@ -14,12 +15,15 @@ type PlayerState = {
   repeat: PlayerRepeat;
   shuffle: PlayerShuffle;
   positionMs: number;
+  resumeMs: number;
+  pendingResume: boolean;
   isBuffering: boolean;
   isFullScreen: boolean;
   fullScreenTab: string; // "queue" | "lyrics" | "visualizer"
   transitionProgress: number; // 0 = no transition, 0-1 = crossfade progress
 
   setVolume: (volume: number) => void;
+  setResumeMs: (ms: number) => void;
   setSeek: (seek: number) => void;
   setDuration: (duration: number) => void;
   setPositionMs: (ms: number) => void;
@@ -51,32 +55,37 @@ function buildQueue(songs: Song[]): QueueSong[] {
   }));
 }
 
-export const usePlayerStore = create<PlayerState>()((set, get) => ({
-  currentTrack: null,
-  queue: [],
-  originalQueue: [],
-  status: PlayerStatus.STOPPED,
-  volume: 0.8,
-  seek: 0,
-  seekId: 0,
-  duration: 0,
-  repeat: PlayerRepeat.NONE,
-  shuffle: PlayerShuffle.NONE,
-  positionMs: 0,
-  isBuffering: false,
-  isFullScreen: false,
-  fullScreenTab: "queue",
-  transitionProgress: 0,
+export const usePlayerStore = create<PlayerState>()(
+  persist(
+    (set, get) => ({
+      currentTrack: null,
+      queue: [],
+      originalQueue: [],
+      status: PlayerStatus.STOPPED,
+      volume: 0.8,
+      seek: 0,
+      seekId: 0,
+      duration: 0,
+      repeat: PlayerRepeat.NONE,
+      shuffle: PlayerShuffle.NONE,
+      positionMs: 0,
+      resumeMs: 0,
+      pendingResume: false,
+      isBuffering: false,
+      isFullScreen: false,
+      fullScreenTab: "queue",
+      transitionProgress: 0,
 
-  setVolume: (volume) => set({ volume }),
+      setVolume: (volume) => set({ volume }),
+      setResumeMs: (ms) => set({ resumeMs: ms }),
   setSeek: (seek) => set((state) => ({ seek, seekId: state.seekId + 1 })),
   setDuration: (duration) => set({ duration }),
   setPositionMs: (positionMs) => set({ positionMs }),
   setBuffering: (isBuffering) => set({ isBuffering }),
 
   play: () => set({ status: PlayerStatus.PLAYING }),
-  pause: () => set({ status: PlayerStatus.PAUSED }),
-  stop: () => set({ status: PlayerStatus.STOPPED, currentTrack: null, seek: 0, positionMs: 0 }),
+  pause: () => set((s) => ({ status: PlayerStatus.PAUSED, resumeMs: s.positionMs })),
+  stop: () => set({ status: PlayerStatus.STOPPED, currentTrack: null, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false }),
   togglePlay: () => {
     const { status } = get();
     set({ status: status === PlayerStatus.PLAYING ? PlayerStatus.PAUSED : PlayerStatus.PLAYING });
@@ -87,9 +96,9 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     if (!currentTrack || queue.length === 0) return;
     const currentIndex = queue.findIndex((t) => t.queueId === currentTrack.queueId);
     if (currentIndex < queue.length - 1) {
-      set({ currentTrack: queue[currentIndex + 1], seek: 0, positionMs: 0 });
+      set({ currentTrack: queue[currentIndex + 1], seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false });
     } else if (repeat === PlayerRepeat.ALL) {
-      set({ currentTrack: queue[0], seek: 0, positionMs: 0 });
+      set({ currentTrack: queue[0], seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false });
     }
   },
 
@@ -127,7 +136,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     set({ queue: newQueue, originalQueue: [] });
     if (options?.type === "now" || !options) {
       const startIndex = options?.startIndex || 0;
-      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, positionMs: 0, status: PlayerStatus.PLAYING });
+      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false, status: PlayerStatus.PLAYING });
     }
   },
 
@@ -149,7 +158,7 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     } else if (options?.type === "now") {
       const startIndex = options?.startIndex || 0;
       const newQueue = buildQueue(songs);
-      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, positionMs: 0, status: PlayerStatus.PLAYING, queue: [...queue, ...newQueue] });
+      set({ currentTrack: newQueue[startIndex] || newQueue[0] || null, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false, status: PlayerStatus.PLAYING, queue: [...queue, ...newQueue] });
     } else {
       newSongs.forEach((s, i) => (s.queueIndex = offset + i));
       set({ queue: [...queue, ...newSongs] });
@@ -162,25 +171,53 @@ export const usePlayerStore = create<PlayerState>()((set, get) => ({
     newQueue.forEach((s, i) => (s.queueIndex = i));
     if (currentTrack?.queueId === queueId) {
       const nextTrack = newQueue[Math.min(queue.indexOf(currentTrack), newQueue.length - 1)];
-      set({ queue: newQueue, currentTrack: nextTrack || null, seek: 0, positionMs: 0 });
+      set({ queue: newQueue, currentTrack: nextTrack || null, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false });
     } else {
       set({ queue: newQueue });
     }
   },
 
-  clearQueue: () => set({ queue: [], originalQueue: [], currentTrack: null, status: PlayerStatus.STOPPED, seek: 0, positionMs: 0 }),
+  clearQueue: () => set({ queue: [], originalQueue: [], currentTrack: null, status: PlayerStatus.STOPPED, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false }),
 
   setCurrentTrack: (song) => {
     if (!song) {
-      set({ currentTrack: null, status: PlayerStatus.STOPPED });
+      set({ currentTrack: null, status: PlayerStatus.STOPPED, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false });
       return;
     }
     const queueSong: QueueSong = { ...song, queueId: generateId(), queueIndex: 0 };
-    set({ currentTrack: queueSong, seek: 0, positionMs: 0, status: PlayerStatus.PLAYING });
+    set({ currentTrack: queueSong, seek: 0, positionMs: 0, resumeMs: 0, pendingResume: false, status: PlayerStatus.PLAYING });
   },
 
   setIsFullScreen: (isFullScreen) => set({ isFullScreen }),
   toggleFullScreen: () => set((state) => ({ isFullScreen: !state.isFullScreen })),
   setFullScreenTab: (fullScreenTab) => set({ fullScreenTab }),
   setTransitionProgress: (transitionProgress) => set({ transitionProgress }),
-}));
+    }),
+    {
+      name: "ytmusic-player",
+      partialize: (state) => ({
+        currentTrack: state.currentTrack,
+        queue: state.queue,
+        originalQueue: state.originalQueue,
+        volume: state.volume,
+        repeat: state.repeat,
+        shuffle: state.shuffle,
+        duration: state.duration,
+        resumeMs: state.resumeMs,
+        pendingResume: state.pendingResume,
+      }),
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<PlayerState>;
+        return {
+          ...current,
+          ...p,
+          status: PlayerStatus.PAUSED,
+          positionMs: p.resumeMs ?? 0,
+          pendingResume: (p.resumeMs ?? 0) > 0,
+          isBuffering: false,
+          transitionProgress: 0,
+        };
+      },
+    }
+  )
+);

@@ -380,17 +380,16 @@ describe("EmbeddedProvider", async () => {
 // ──────────────────────────────────────────────
 describe("ArtworkResolver", () => {
   // Re-import with fresh mock state per test
-  let resolver: typeof import("../artwork-resolver").artworkResolver;
+  let service: typeof import("../../image-resolution/service").imageResolutionService;
 
   beforeEach(async () => {
-    // We import fresh each time to get clean singleton
     vi.resetModules();
-    const mod = await import("../artwork-resolver");
-    resolver = mod.artworkResolver;
+    const mod = await import("../../image-resolution/service");
+    service = mod.imageResolutionService;
   });
 
-  it("getProviderNames retorna todos os 5 providers registrados", () => {
-    const names = resolver.getProviderNames();
+  it("listProviders retorna todos os 6 providers registrados", () => {
+    const names = service.listProviders("album");
     expect(names).toContain("cover_art_archive");
     expect(names).toContain("musicbrainz_release_group");
     expect(names).toContain("itunes");
@@ -399,10 +398,7 @@ describe("ArtworkResolver", () => {
     expect(names).toHaveLength(6);
   });
 
-  it("resolveFromProvider tenta IPC primeiro, depois cai para renderer se IPC retornar vazio", async () => {
-    const mockIpc = vi.fn().mockResolvedValue([]);
-    (globalThis as any).window = { electronApi: { artworkSearch: mockIpc } };
-
+  it("getCandidates consulta provider diretamente (sem IPC)", async () => {
     platformFetch.mockResolvedValue(
       mockJsonResponse({
         images: [
@@ -411,21 +407,18 @@ describe("ArtworkResolver", () => {
       }),
     );
 
-    const result = await resolver.resolveFromProvider("cover_art_archive", {
+    const result = await service.getCandidates("cover_art_archive", "album", {
       artist: "A",
       album: "B",
       musicbrainzReleaseId: "mbid",
     });
 
-    // IPC foi chamado
-    expect(mockIpc).toHaveBeenCalledWith("cover_art_archive", expect.any(Object));
-    // Como IPC retornou [], o renderer-side foi usado como fallback
     expect(result).toHaveLength(1);
     expect(result[0].provider).toBe("cover_art_archive");
   });
 
-  it("resolveFromProvider retorna vazio para provider desconhecido", async () => {
-    const result = await resolver.resolveFromProvider("unknown_provider", { artist: "A" });
+  it("getCandidates retorna vazio para provider desconhecido", async () => {
+    const result = await service.getCandidates("unknown_provider", "album", { artist: "A" });
     expect(result).toEqual([]);
   });
 });

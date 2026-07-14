@@ -3,6 +3,7 @@ import { platformFetch } from "../../platform-fetch";
 
 export class CoverArtArchiveProvider implements ArtworkProvider {
   readonly name = "cover_art_archive";
+  readonly modes = ["album"] as const;
 
   async search(
     input: ArtworkSearchInput,

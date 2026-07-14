@@ -14,7 +14,7 @@ vi.mock("../image-fetch", () => ({
   tagImageSource: vi.fn(() => Promise.resolve()),
 }));
 
-import { fetchArtistImage } from "../artist-image";
+import { imageResolutionService } from "../image-resolution/service";
 
 function mockJsonResponse(data: unknown) {
   return {
@@ -73,7 +73,7 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const result = await fetchArtistImage("Trapt");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Trapt" });
     expect(result).toMatch(/^blob:/);
   });
 
@@ -87,7 +87,7 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const result = await fetchArtistImage("NonExistentArtist");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "NonExistentArtist" });
     expect(result).toBeNull();
   });
 
@@ -99,13 +99,13 @@ describe("fetchArtistImage — Wikipedia fallback", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const result = await fetchArtistImage("Error500Artist");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Error500Artist" });
     expect(result).toBeNull();
   });
 
   it("retorna null quando Wikipedia lança exceção de rede", async () => {
     globalFetchMock.mockRejectedValue(new Error("network error"));
-    const result = await fetchArtistImage("NetworkErrorArtist");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "NetworkErrorArtist" });
     expect(result).toBeNull();
   });
 });
@@ -134,7 +134,7 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const result = await fetchArtistImage("Trapt", "8876c0be-ccff-4d46-aa91-7f935a3b3b6b");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Trapt", musicbrainzArtistId: "8876c0be-ccff-4d46-aa91-7f935a3b3b6b" });
     expect(result).toMatch(/^blob:/);
   });
 
@@ -166,7 +166,7 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const result = await fetchArtistImage("FallbackArtist", "p18-absent-mbid");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "FallbackArtist", musicbrainzArtistId: "p18-absent-mbid" });
     expect(result).toMatch(/^blob:/);
   });
 
@@ -193,7 +193,7 @@ describe("fetchArtistImage — Wikidata by MBID", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const result = await fetchArtistImage("Some Artist", "some-mbid");
+    const result = await imageResolutionService.resolveArtistImage({ artist: "Some Artist", musicbrainzArtistId: "some-mbid" });
     expect(result).toMatch(/^blob:/);
   });
 });
@@ -221,11 +221,11 @@ describe("fetchArtistImage — cache sem request repetido", () => {
       return Promise.reject(new Error(`unexpected: ${url}`));
     });
 
-    const first = await fetchArtistImage("CacheTest");
+    const first = await imageResolutionService.resolveArtistImage({ artist: "CacheTest" });
     expect(first).toMatch(/^blob:/);
     expect(wikiCallCount).toBe(1);
 
-    const second = await fetchArtistImage("CacheTest");
+    const second = await imageResolutionService.resolveArtistImage({ artist: "CacheTest" });
     expect(second).toMatch(/^blob:/);
     expect(wikiCallCount).toBe(1);
   });

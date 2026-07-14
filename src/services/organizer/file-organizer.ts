@@ -1,4 +1,4 @@
-import { getPlatformService } from "../platform/factory";
+import { electronFs } from "../platform/electron-fs";
 import { cachedRead, cachedReadDirectory, cachedWrite, cachedDelete, cachedExists, cachedCreateDirectory, cachedRename } from "../sqlite-db/sqlite-db-cache";
 import { sanitizeForPath } from "./sanitizer";
 import { joinPaths } from "../../lib/path-utils";
@@ -112,8 +112,7 @@ export function createFileOrganizer(libraryRoot: string): FileOrganizer {
         targetPath.substring(0, targetPath.lastIndexOf("/")),
       );
 
-      const p = await getPlatformService();
-      const ok = await p.renameFile(sourcePath, targetPath);
+      const ok = await electronFs.renameFile(sourcePath, targetPath);
       if (ok) return true;
 
       const data = await cachedRead(sourcePath);

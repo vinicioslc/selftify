@@ -1,7 +1,13 @@
 import { useState, useEffect } from "react";
-import type { CoverInput } from "../services/cover-resolver";
 
-export type { CoverInput };
+export type CoverInput = {
+  artistName?: string | null;
+  albumName?: string | null;
+  mbzArtistId?: string | null;
+  mbzReleaseGroupId?: string | null;
+  mbzReleaseId?: string | null;
+  imageUrl?: string | null;
+};
 
 export function useCover(input: CoverInput) {
   const [coverUrl, setCoverUrl] = useState<string | null>(input.imageUrl ?? null);

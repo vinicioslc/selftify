@@ -70,6 +70,29 @@ export function initDb(): void {
       PRIMARY KEY (playlist_id, track_id, position)
     );
     CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id);
+
+    CREATE TABLE IF NOT EXISTS imported_playlists (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      url         TEXT NOT NULL,
+      source      TEXT,
+      image_url   TEXT,
+      song_count  INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS imported_playlist_tracks (
+      playlist_id TEXT NOT NULL REFERENCES imported_playlists(id) ON DELETE CASCADE,
+      video_id    TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      uploader    TEXT,
+      duration    INTEGER,
+      thumbnail   TEXT,
+      position    INTEGER NOT NULL,
+      downloaded  INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (playlist_id, video_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_imported_playlist_tracks_playlist ON imported_playlist_tracks(playlist_id);
   `);
 }
 

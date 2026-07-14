@@ -14,9 +14,9 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/ta
 import { AlbumEmptySvg, ArtistEmptySvg } from "../../components/ui/empty-image-svg";
 import { cn, formatDuration } from "../../lib/utils";
 import { Loader2, ExternalLink, Copy, Check, Search, FolderOpen } from "lucide-react";
-import { artworkResolver } from "../../services/artwork/artwork-resolver";
+import { imageResolutionService } from "../../services/image-resolution/service";
 import { ARTWORK_PROVIDER_META } from "../../services/artwork/providers/meta";
-import type { ArtworkCandidate } from "../../services/artwork/providers/types";
+import type { ImageCandidate } from "../../services/image-resolution/types";
 import { fetchImageAsBlobUrl } from "../../services/image-fetch";
 import { storeImage, md5Hash } from "../../services/image-store";
 
@@ -69,7 +69,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
   const [fetchingCustom, setFetchingCustom] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
 
-  const [coverResults, setCoverResults] = useState<Record<string, ArtworkCandidate[]>>({});
+  const [coverResults, setCoverResults] = useState<Record<string, ImageCandidate[]>>({});
   const [coverLoading, setCoverLoading] = useState<Record<string, boolean>>({});
   const [selectedCoverUrl, setSelectedCoverUrl] = useState<string | null>(null);
   const [activeCoverProvider, setActiveCoverProvider] = useState<string | null>(null);
@@ -252,7 +252,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     setCoverError(null);
     console.log(`[SongInfoContent] fetching from provider: "${providerName}" song="${song.name}" artist="${song.artistName}"`);
     try {
-      const items = await artworkResolver.resolveFromProvider(providerName, {
+      const items = await imageResolutionService.getCandidates(providerName, "album", {
         artist: song.artistName,
         album: song.albumName || undefined,
         title: song.name,
@@ -280,7 +280,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
     }
   }
 
-  async function handleSelectCover(candidate: ArtworkCandidate) {
+  async function handleSelectCover(candidate: ImageCandidate) {
     try {
       const blobUrl = await fetchImageAsBlobUrl(candidate.url);
       if (!blobUrl) return;
@@ -387,6 +387,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
             )}
           </div>}
           {song.duration && <div><span className="text-muted-foreground">Duration:</span> <span className="text-foreground tabular-nums">{formatDuration(song.duration)}</span></div>}
+          {song.bitrate && <div><span className="text-muted-foreground">Quality:</span> <span className="text-foreground tabular-nums">{song.bitrate} kbps</span></div>}
           {song.releaseYear && <div><span className="text-muted-foreground">Year:</span> <span className="text-foreground">{song.releaseYear}</span></div>}
           {song.trackNumber && <div><span className="text-muted-foreground">Track:</span> <span className="text-foreground">{song.trackNumber}{song.discNumber ? ` (Disc ${song.discNumber})` : ""}</span></div>}
           {song.genres && song.genres.length > 0 && (
@@ -668,7 +669,7 @@ export function SongInfoContent({ song, onNavigateAlbum, onNavigateArtist }: Pro
               <p className="text-[10px] text-destructive">{coverError}</p>
             )}
             <div className="space-y-1.5">
-              {artworkResolver.getProviderNames().map((name) => {
+              {imageResolutionService.listProviders("album").map((name) => {
                 const candidates = coverResults[name] || [];
                 const loading = coverLoading[name];
                 const label = ARTWORK_PROVIDER_META[name]?.label || name;

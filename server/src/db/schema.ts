@@ -1,7 +1,7 @@
 // Core library schema for the Selftify server. Mirrors the shared schema used
 // by the frontend indexer so the server is the single owner of the database
 // in client-server mode.
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const CREATE_TABLES = [
   `CREATE TABLE IF NOT EXISTS _meta (
@@ -134,4 +134,20 @@ export const CREATE_TABLES = [
     created_at   INTEGER NOT NULL,
     expires_at   INTEGER NOT NULL
   )`,
+
+  `CREATE TABLE IF NOT EXISTS download_tasks (
+    id            TEXT PRIMARY KEY,
+    song_id       TEXT NOT NULL,
+    song_json     TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    progress      REAL NOT NULL DEFAULT 0,
+    step_label    TEXT NOT NULL DEFAULT 'Waiting...',
+    error         TEXT,
+    video_id      TEXT,
+    audio_path    TEXT,
+    cover_path    TEXT,
+    created_at    INTEGER NOT NULL,
+    completed_at  INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_download_tasks_status ON download_tasks(status)`,
 ];

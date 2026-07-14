@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { getController, type SearchResults } from "../../api/controller";
 import { useAuthStore } from "../../stores/auth.store";
+import { useBackendStore } from "../../stores/backend.store";
 import { usePlayerStore } from "../../stores/player.store";
 import { useStatusStore } from "../../stores/status.store";
 import { useOnlineSearchStore } from "../../stores/online-search.store";
@@ -22,6 +23,7 @@ import type { YoutubeSearchScoredVideo } from "../../services/youtube-ranking";
 import { getMbzYtMapping, setMbzYtMapping, type CandidateData } from "../../api/backend-state";
 import { useSettingsStore } from "../../stores/settings.store";
 import { searchMusicBrainz } from "../../services/search-service";
+import { resolveUrl, saveImportedPlaylist } from "../../services/playlist-import-service";
 import { DataTable, type ColumnDef } from "../shared/data-table";
 import { songTitleColumn, sourceBadgeColumn } from "../shared/song-columns";
 import { AddToPlaylistDialog } from "../playlist/add-to-playlist-dialog";
@@ -39,7 +41,7 @@ import { cn, formatDuration } from "../../lib/utils";
 import { buildArtistNav, buildAlbumNav } from "../../lib/build-navigation";
 import { moveSongToTrash } from "../../services/move-to-trash";
 
-type SearchMode = "local" | "musicbrainz" | "youtube";
+type SearchMode = "local" | "musicbrainz" | "youtube" | "playlist";
 
 function SearchArtistCard({ artist, onNavigate }: { artist: AlbumArtist; onNavigate?: (artist: AlbumArtist) => void }) {
   const { imageUrl } = useArtistImage(artist.mbz, artist.name, artist.imageUrl);
@@ -72,6 +74,9 @@ interface SearchPageProps {
 
 export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onNavigateAlbum, onNavigateArtist, onNavigate }: SearchPageProps) {
   const { currentOrigin, origins } = useAuthStore();
+  const backendConfig = useBackendStore((s) => s.config);
+  const hasSource = !!currentOrigin || !!backendConfig;
+  const originId = currentOrigin?.id ?? "selftify-server";
   const { setQueue, addToQueue } = usePlayerStore();
   const [query, setQuery] = useState(initialQuery || "");
 
@@ -83,11 +88,20 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     hasMore: boolean;
     offset: number;
   }>({ songs: [], hasMore: false, offset: 0 });
+  const [playlistResults, setPlaylistResults] = useState<{
+    songs: Song[];
+    playlistName: string;
+    playlistId: string;
+    source: string | null;
+    imageUrl: string | null;
+  } | null>(null);
 
   const onlineSearchEnabled = useOnlineSearchStore((s) => s.enabled);
   const ytHeaders = useOnlineSearchStore((s) => s.youtubeMusicHeaders);
   const hasOnlineSearch = onlineSearchEnabled;
 
+  const [playlistUrl, setPlaylistUrl] = useState("");
+  const [selectedForDownload, setSelectedForDownload] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [searchMode, setSearchMode] = useState<SearchMode>(
     initialMode ?? (onlineSearchEnabled ? "musicbrainz" : "local"),
@@ -155,7 +169,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   }
 
   async function handleSearchInternal(q: string, mode: SearchMode) {
-    if (!q.trim() || !currentOrigin) return;
+    if (!q.trim() || !hasSource) return;
     const addMsg = useStatusStore.getState().addMessage;
     const { getSearchCache, setSearchCache } = await import("../../api/backend-state");
 
@@ -265,7 +279,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
         } else {
           addMsg("Searching MusicBrainz...", "info", "Search");
 
-          const promise = searchMusicBrainz(q, 20, currentOrigin.id);
+          const promise = searchMusicBrainz(q, 20, originId);
           pendingCache.set(mbKey, promise);
           mbRaw = await promise;
           resultCache.set(mbKey, mbRaw);
@@ -330,7 +344,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       }
 
       const ytRaw = await doSearch<{ songs: Song[]; hasMore: boolean }>("youtube", q, () =>
-        searchYouTubePure(q, 0, ytHeaders || undefined, currentOrigin.id).then((r) => ({
+        searchYouTubePure(q, 0, ytHeaders || undefined, originId).then((r) => ({
           songs: r.songs,
           hasMore: r.hasMore,
         })),
@@ -349,9 +363,89 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     } finally {
       setLoading(false);
     }
+    return;
+  }
+
+  // Playlist mode — resolves URL and shows songs
+  async function handlePlaylistResolve() {
+    if (!playlistUrl.trim()) return;
+    const addMsg = useStatusStore.getState().addMessage;
+    setLoading(true);
+    setLocalResults([]);
+    setMbResults(null);
+    setYtResults({ songs: [], hasMore: false, offset: 0 });
+    setPlaylistResults(null);
+    setSelectedForDownload(new Set());
+    try {
+      addMsg("Resolving URL...", "info", "Playlist");
+      const { playlist, songs } = await resolveUrl(playlistUrl.trim());
+      setPlaylistResults({
+        songs,
+        playlistName: playlist.name,
+        playlistId: playlist.id,
+        source: playlist.source,
+        imageUrl: playlist.imageUrl,
+      });
+      addMsg(`Found ${songs.length} song${songs.length !== 1 ? "s" : ""} in "${playlist.name}"`, "success", "Playlist");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      useToastStore.getState().toast(`Falha: ${msg}`, "danger");
+      addMsg(`Failed to resolve URL: ${msg}`, "danger", "Playlist");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSavePlaylist() {
+    if (!playlistResults || playlistResults.songs.length === 0) return;
+    try {
+      const pl = await saveImportedPlaylist(playlistUrl.trim(), playlistResults.playlistName, playlistResults.songs);
+      useStatusStore.getState().addMessage(`Playlist "${pl.name}" saved`, "success", "Playlist");
+      setPlaylistResults(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      useToastStore.getState().toast(`Falha: ${msg}`, "danger");
+    }
+  }
+
+  function toggleSelect(songId: string) {
+    setSelectedForDownload((prev) => {
+      const next = new Set(prev);
+      if (next.has(songId)) next.delete(songId);
+      else next.add(songId);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (!playlistResults) return;
+    if (selectedForDownload.size === playlistResults.songs.length) {
+      setSelectedForDownload(new Set());
+    } else {
+      setSelectedForDownload(new Set(playlistResults.songs.map((s) => s.id)));
+    }
+  }
+
+  function handleDownloadSelected() {
+    if (selectedForDownload.size === 0 || !playlistResults) return;
+    const selected = playlistResults.songs.filter((s) => selectedForDownload.has(s.id));
+    import("../../stores/download.store").then((m) => {
+      m.useDownloadStore.getState().enqueueMultiple(selected);
+    });
+  }
+
+  function handleDownloadAll() {
+    if (!playlistResults || playlistResults.songs.length === 0) return;
+    import("../../stores/download.store").then((m) => {
+      m.useDownloadStore.getState().enqueueMultiple(playlistResults.songs);
+    });
   }
 
   async function handleSearch() {
+    if (searchMode === "playlist") {
+      await handlePlaylistResolve();
+      return;
+    }
     await handleSearchInternal(query, searchMode);
   }
 
@@ -359,7 +453,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     if (!query.trim() || ytLoadingMore || !ytResults.hasMore) return;
     setYtLoadingMore(true);
     try {
-      const res = await         searchYouTubePure(query, ytResults.offset, ytHeaders || undefined, currentOrigin?.id);
+      const res = await         searchYouTubePure(query, ytResults.offset, ytHeaders || undefined, originId);
       setYtResults((prev) => ({
         songs: [...prev.songs, ...res.songs],
         hasMore: res.hasMore,
@@ -374,9 +468,6 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
 
 
   function getElectronYt() {
-    if (typeof window !== "undefined" && (window as any).electronApi?.yt) {
-      return (window as any).electronApi.yt as { getStreamUrl: (videoId: string, cookies?: string) => Promise<string | null>; };
-    }
     return null;
   }
 
@@ -504,19 +595,7 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
   async function playYtPure(song: Song): Promise<string | null> {
     const videoId = song.id.slice(7);
     const log = (msg: string, f?: string) => playbackLog("playYtPure", `${videoId}: ${msg}`, f);
-    const yt = getElectronYt();
-    if (!yt) { log("no electron API"); return null; }
-      const cookies = ytHeaders || undefined;
-    log("yt:stream-url started", `▶ Streaming "${song.name}" directly from YouTube...`);
-    try {
-      const url = await yt.getStreamUrl(videoId, cookies || undefined);
-      if (url) log(`yt:stream-url OK → url length=${url.length}`, "Audio stream ready ✓");
-      else log("yt:stream-url returned null", "Stream resolution failed");
-      if (url) {
-        console.debug("[search-page] stream URL resolved", { videoId, song: song.name });
-      }
-      return url;
-    } catch (e) { log(`yt:stream-url error: ${e}`); return null; }
+    return null;
   }
 
   async function playSong(song: Song) {
@@ -847,15 +926,31 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
     <div className="flex h-full flex-col">
       <div className="border-b p-4">
         <div className="mx-auto flex max-w-2xl gap-2">
-          <Input
-            placeholder={currentOrigin ? `Search ${currentOrigin.name}...` : "Add an origin first"}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          />
-          <Button onClick={handleSearch} disabled={loading || !query.trim()}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          </Button>
+          {searchMode === "playlist" ? (
+            <>
+              <Input
+                placeholder="Cole o link do YouTube (playlist ou musica)"
+                value={playlistUrl}
+                onChange={(e) => setPlaylistUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handlePlaylistResolve()}
+              />
+              <Button onClick={handlePlaylistResolve} disabled={loading || !playlistUrl.trim()}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Carregar"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Input
+                placeholder={hasSource ? `Search ${currentOrigin?.name ?? "your library"}...` : "Add a source first"}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              />
+              <Button onClick={handleSearch} disabled={loading || !query.trim()}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              </Button>
+            </>
+          )}
         </div>
         {hasOnlineSearch && (
           <div className="mt-2 flex justify-center gap-2">
@@ -895,6 +990,17 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
               </svg>
               YouTube
             </Button>
+            <Button
+              variant={searchMode === "playlist" ? "default" : "outline"}
+              size="sm"
+              className="gap-1"
+              onClick={() => setSearchMode("playlist")}
+            >
+              <svg className="h-3.5 w-3.5 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-label="Playlist">
+                <path d="M10 14H3" /><path d="M10 18H3" /><path d="M10 6H3" /><path d="M14 6L21 6" /><path d="M14 10L21 10" /><path d="M14 14L21 14" /><path d="M14 18L21 18" />
+              </svg>
+              Playlist
+            </Button>
           </div>
         )}
         {searchMode === "musicbrainz" && (
@@ -907,6 +1013,11 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
             Search YouTube for songs
           </p>
         )}
+        {searchMode === "playlist" && (
+          <p className="mt-1 text-center text-xs text-muted-foreground">
+            Cole o link de uma playlist ou video do YouTube para listar as musicas
+          </p>
+        )}
         {searchMode === "local" && (
           <p className="mt-1 text-center text-xs text-muted-foreground">
             Search local files
@@ -915,29 +1026,31 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
       </div>
 
       <ScrollArea className="relative flex-1">
-        {!currentOrigin && (
+        {!hasSource && (
           <div className="flex h-full items-center justify-center p-8">
             <p className="text-center text-sm text-muted-foreground">
-              Connect to an origin in Settings
+              Add a music source in Settings to start searching
             </p>
           </div>
         )}
 
-        {currentOrigin && !loading && (
+        {hasSource && !loading && (
           (searchMode === "local" && localResults.length === 0 && !query.trim()) ||
           (searchMode === "musicbrainz" && !mbResults && !query.trim()) ||
-          (searchMode === "youtube" && ytResults.songs.length === 0 && !query.trim())
+          (searchMode === "youtube" && ytResults.songs.length === 0 && !query.trim()) ||
+          (searchMode === "playlist" && !playlistResults && !playlistUrl.trim())
         ) && (
           <div className="flex h-full items-center justify-center p-8">
             <p className="text-center text-sm text-muted-foreground">
               {searchMode === "local" && "Search your local music files"}
               {searchMode === "musicbrainz" && "Search MusicBrainz for albums, artists & recordings"}
               {searchMode === "youtube" && "Search YouTube for songs"}
+              {searchMode === "playlist" && "Cole o link de uma playlist ou video do YouTube"}
             </p>
           </div>
         )}
 
-        {currentOrigin && !loading && searchMode === "local" && localResults.length === 0 && query.trim() && (
+        {hasSource && !loading && searchMode === "local" && localResults.length === 0 && query.trim() && (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-8">
             <Music className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-center text-sm text-muted-foreground">
@@ -1026,6 +1139,89 @@ export function SearchPage({ initialQuery, initialMode, onSearchStateChange, onN
                   </Button>
                 </div>
               )}
+            </section>
+          </div>
+        )}
+
+        {/* ── PLAYLIST RESULTS ── */}
+        {searchMode === "playlist" && playlistResults && (
+          <div className="mx-auto max-w-4xl space-y-6 p-6">
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <svg className="h-4 w-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M10 14H3" /><path d="M10 18H3" /><path d="M10 6H3" /><path d="M14 6L21 6" /><path d="M14 10L21 10" /><path d="M14 14L21 14" /><path d="M14 18L21 18" />
+                  </svg>
+                  <h2 className="text-lg font-semibold">{playlistResults.playlistName}</h2>
+                  <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">{playlistResults.songs.length} songs</span>
+                  {playlistResults.source && (
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{playlistResults.source}</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleSelectAll}
+                    title={selectedForDownload.size === playlistResults.songs.length ? "Deselect all" : "Select all"}
+                  >
+                    {selectedForDownload.size === playlistResults.songs.length ? "Deselect All" : "Select All"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDownloadSelected}
+                    disabled={selectedForDownload.size === 0}
+                  >
+                    Download Selected ({selectedForDownload.size})
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDownloadAll}
+                  >
+                    Download All
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleSavePlaylist}
+                  >
+                    Save as Playlist
+                  </Button>
+                </div>
+              </div>
+              <DataTable
+                data={playlistResults.songs}
+                columns={[
+                  {
+                    id: "select",
+                    label: "",
+                    width: "2rem",
+                    sortable: false,
+                    render: (song) => (
+                      <input
+                        type="checkbox"
+                        checked={selectedForDownload.has(song.id)}
+                        onChange={() => toggleSelect(song.id)}
+                        className="h-4 w-4 cursor-pointer accent-primary"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ),
+                  },
+                  ...searchColumns,
+                ]}
+                getRowId={(s) => s.id}
+                selectedId={selectedSongId}
+                onSelectedIdChange={setSelectedSongId}
+                onRowDoubleClick={playSong}
+                onRowContextMenu={(song, e) => {
+                  e.preventDefault();
+                  setContextMenuSong(song);
+                  setContextMenuPos({ x: e.clientX, y: e.clientY });
+                }}
+                storageKey="search-playlist"
+              />
             </section>
           </div>
         )}

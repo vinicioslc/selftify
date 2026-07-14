@@ -1,5 +1,6 @@
 import { useAuthStore } from "../../stores/auth.store";
 import { useSettingsStore, VisualizerType, type YtSearchFields } from "../../stores/settings.store";
+import { useOnlineSearchStore } from "../../stores/online-search.store";
 import { useBackendStore } from "../../stores/backend.store";
 import { buildLocalOrigin } from "../../lib/build-navigation";
 import { Origin } from "../../types/domain-types";
@@ -114,13 +115,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
   const [editingOrigin, setEditingOrigin] = useState<Origin | null>(null);
   const [cacheModalOpen, setCacheModalOpen] = useState(false);
   const [clearingImageCache, setClearingImageCache] = useState(false);
-  const [organizing, setOrganizing] = useState(false);
-  const [syncingMetadata, setSyncingMetadata] = useState(false);
-  const [ytDlpVersion, setYtDlpVersion] = useState<string | null>(null);
-  const [ytDlpFound, setYtDlpFound] = useState(false);
-  const [checkingYtDlp, setCheckingYtDlp] = useState(false);
-  const [updatingYtDlp, setUpdatingYtDlp] = useState(false);
-  const [ytDlpUpdateMsg, setYtDlpUpdateMsg] = useState<string | null>(null);
+
 
   // Server config
   const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:6189";
@@ -162,6 +157,7 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
 
   useEffect(() => {
     fetchServerConfig();
+    useOnlineSearchStore.getState().syncFromBackend();
   }, [fetchServerConfig]);
 
   useEffect(() => {
@@ -275,54 +271,6 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
       useStatusStore.getState().addMessage("Image cache clear failed", "danger", "Settings");
     } finally {
       setClearingImageCache(false);
-    }
-  }
-
-  async function handleCheckYtDlp() {
-    if (!(window as any).electronApi) return;
-    setCheckingYtDlp(true);
-    setYtDlpUpdateMsg(null);
-    try {
-      const result = await (window as any).electronApi.yt.checkVersion();
-      setYtDlpFound(result.found);
-      setYtDlpVersion(result.version);
-      useStatusStore.getState().addMessage(
-        result.found ? `yt-dlp v${result.version}` : "yt-dlp not found",
-        result.found ? "info" : "warn",
-        "Settings"
-      );
-    } catch (err) {
-      setYtDlpFound(false);
-      setYtDlpVersion(null);
-      useStatusStore.getState().addMessage("Failed to check yt-dlp", "danger", "Settings");
-    } finally {
-      setCheckingYtDlp(false);
-    }
-  }
-
-  async function handleUpdateYtDlp() {
-    if (!(window as any).electronApi) return;
-    setUpdatingYtDlp(true);
-    setYtDlpUpdateMsg(null);
-    useStatusStore.getState().addMessage("Updating yt-dlp...", "info", "Settings");
-    try {
-      const result = await (window as any).electronApi.yt.update();
-      setYtDlpUpdateMsg(result.message);
-      useStatusStore.getState().addMessage(
-        result.success ? "yt-dlp updated" : "yt-dlp update failed",
-        result.success ? "success" : "danger",
-        "Settings"
-      );
-      if (result.success) {
-        const version = await (window as any).electronApi.yt.checkVersion();
-        setYtDlpFound(version.found);
-        setYtDlpVersion(version.version);
-      }
-    } catch (err) {
-      setYtDlpUpdateMsg("Update failed");
-      useStatusStore.getState().addMessage("yt-dlp update failed", "danger", "Settings");
-    } finally {
-      setUpdatingYtDlp(false);
     }
   }
 
@@ -525,50 +473,11 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                   <CardTitle className="text-lg">Local Library</CardTitle>
                   <CardDescription>Manage your local music collection</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <p className="font-medium mb-1">Organize Files</p>
-                    <p className="text-sm text-muted-foreground mb-3">
-                      Rename and move files to follow the <code>Artist/Album (Year)/NN - Title.ext</code> convention.
-                      Generates <code>cover.jpg</code>, <code>album.nfo</code>, and <code>artist.nfo</code> sidecar files.
-                    </p>
-                    <Button
-                      variant="default"
-                      onClick={async () => {
-                        const { organizeAllFiles } = await import("../../services/organizer/manual-organizer");
-                        setOrganizing(true);
-                        try {
-                          await organizeAllFiles();
-                        } finally {
-                          setOrganizing(false);
-                        }
-                      }}
-                      disabled={organizing}
-                    >
-                      {organizing ? "Organizing..." : "Organize Files"}
-                    </Button>
-                    <div className="mt-4">
-                      <p className="font-medium mb-1">Sync Metadata</p>
-                      <p className="text-sm text-muted-foreground mb-3">
-                        Update audio file metadata tags, embed cover art from .img/ folders, and regenerate album/artist .nfo files.
-                      </p>
-                      <Button
-                        variant="default"
-                        onClick={async () => {
-                          const { syncAlbumMetadata } = await import("../../services/organizer/sync-metadata");
-                          setSyncingMetadata(true);
-                          try {
-                            await syncAlbumMetadata();
-                          } finally {
-                            setSyncingMetadata(false);
-                          }
-                        }}
-                        disabled={syncingMetadata}
-                      >
-                        {syncingMetadata ? "Syncing..." : "Sync Metadata"}
-                      </Button>
-                    </div>
-                  </div>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">
+                    File organization, metadata syncing, and library scanning are managed by the backend server.
+                    Use the server's API to trigger scans and manage your library.
+                  </p>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -803,32 +712,9 @@ export function SettingsPage({ initialTab }: SettingsPageProps) {
                     <p className="mt-1 text-xs text-muted-foreground">Remove cached album, artist, and search thumbnails so they are fetched again</p>
                   </div>
                   <Separator />
-                  <div className="space-y-3">
-                    <div>
-                      <p className="font-medium">yt-dlp</p>
-                      <p className="text-sm text-muted-foreground">
-                        {ytDlpFound
-                          ? `Version ${ytDlpVersion}`
-                          : ytDlpVersion === null && !checkingYtDlp
-                            ? "Click check to detect"
-                            : "Not found"}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="gap-2" onClick={handleCheckYtDlp} disabled={checkingYtDlp || updatingYtDlp}>
-                        <RefreshCw className={`h-4 w-4 ${checkingYtDlp ? "animate-spin" : ""}`} />
-                        {checkingYtDlp ? "Checking..." : "Check Version"}
-                      </Button>
-                      {ytDlpFound && (
-                        <Button variant="outline" size="sm" className="gap-2" onClick={handleUpdateYtDlp} disabled={updatingYtDlp}>
-                          <Download className={`h-4 w-4 ${updatingYtDlp ? "animate-spin" : ""}`} />
-                          {updatingYtDlp ? "Updating..." : "Update"}
-                        </Button>
-                      )}
-                    </div>
-                    {ytDlpUpdateMsg && (
-                      <p className="text-xs text-muted-foreground whitespace-pre-wrap">{ytDlpUpdateMsg}</p>
-                    )}
+                  <div className="space-y-2">
+                    <p className="font-medium">yt-dlp</p>
+                    <p className="text-sm text-muted-foreground">Managed by backend server</p>
                   </div>
                 </CardContent>
               </Card>

@@ -216,9 +216,18 @@ export function getAlbumList2(
     case "recent": orderBy = "a.updated_at DESC"; break;
     default: orderBy = "a.name COLLATE NOCASE";
   }
-  const sql = `SELECT a.* FROM albums a
+  // Deduplicate by artist_name + name using ROW_NUMBER to keep the most
+  // recently updated row (handles stale ghost rows from metadata drift).
+  const sql = `SELECT a.* FROM (
+                 SELECT *, ROW_NUMBER() OVER (
+                   PARTITION BY artist_name, name
+                   ORDER BY updated_at DESC
+                 ) AS rn
+                 FROM albums
+                 WHERE deleted_at IS NULL
+               ) a
                JOIN artists ar ON ar.id = a.artist_id
-               WHERE a.deleted_at IS NULL
+               WHERE a.rn = 1
                ORDER BY ${orderBy}
                LIMIT ? OFFSET ?`;
   const rows = db.prepare(sql).all(size, offset) as AlbumRow[];
@@ -344,4 +353,130 @@ export function getPlaylist(id: string): { playlist: PlaylistDto; songs: SongDto
     coverArt: row.id,
   };
   return { playlist, songs };
+}
+
+// ── Imported Playlists ──
+
+export interface ImportedPlaylistDto {
+  id: string;
+  name: string;
+  url: string;
+  source: string | null;
+  imageUrl: string | null;
+  songCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ImportedPlaylistTrackDto {
+  videoId: string;
+  title: string;
+  uploader: string | null;
+  duration: number | null;
+  thumbnail: string | null;
+  position: number;
+  downloaded: boolean;
+}
+
+export function getImportedPlaylists(): ImportedPlaylistDto[] {
+  const db = getDb();
+  const rows = db
+    .prepare(`SELECT * FROM imported_playlists ORDER BY updated_at DESC`)
+    .all() as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    url: r.url,
+    source: r.source || null,
+    imageUrl: r.image_url || null,
+    songCount: r.song_count,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+}
+
+export function getImportedPlaylist(id: string): { playlist: ImportedPlaylistDto; tracks: ImportedPlaylistTrackDto[] } | null {
+  const db = getDb();
+  const row = db.prepare(`SELECT * FROM imported_playlists WHERE id = ?`).get(id) as any;
+  if (!row) return null;
+  const trackRows = db
+    .prepare(`SELECT * FROM imported_playlist_tracks WHERE playlist_id = ? ORDER BY position`)
+    .all(id) as any[];
+  const playlist: ImportedPlaylistDto = {
+    id: row.id,
+    name: row.name,
+    url: row.url,
+    source: row.source || null,
+    imageUrl: row.image_url || null,
+    songCount: row.song_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  const tracks: ImportedPlaylistTrackDto[] = trackRows.map((t) => ({
+    videoId: t.video_id,
+    title: t.title,
+    uploader: t.uploader || null,
+    duration: t.duration ?? null,
+    thumbnail: t.thumbnail || null,
+    position: t.position,
+    downloaded: !!t.downloaded,
+  }));
+  return { playlist, tracks };
+}
+
+export function saveImportedPlaylist(
+  id: string,
+  name: string,
+  url: string,
+  source: string | null,
+  imageUrl: string | null,
+  tracks: { videoId: string; title: string; uploader: string | null; duration: number | null; thumbnail: string | null; position: number }[],
+): ImportedPlaylistDto {
+  const db = getDb();
+  const now = Date.now();
+
+  db.prepare(`
+    INSERT OR REPLACE INTO imported_playlists (id, name, url, source, image_url, song_count, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    name,
+    url,
+    source || null,
+    imageUrl || null,
+    tracks.length,
+    now,
+    now,
+  );
+
+  // Replace all tracks
+  db.prepare(`DELETE FROM imported_playlist_tracks WHERE playlist_id = ?`).run(id);
+  const insertTrack = db.prepare(`
+    INSERT INTO imported_playlist_tracks (playlist_id, video_id, title, uploader, duration, thumbnail, position, downloaded)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+  `);
+  for (const t of tracks) {
+    insertTrack.run(id, t.videoId, t.title, t.uploader, t.duration, t.thumbnail, t.position);
+  }
+
+  return {
+    id,
+    name,
+    url,
+    source: source || null,
+    imageUrl: imageUrl || null,
+    songCount: tracks.length,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function deleteImportedPlaylist(id: string): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM imported_playlists WHERE id = ?`).run(id);
+}
+
+export function markTrackDownloaded(playlistId: string, videoId: string): void {
+  const db = getDb();
+  db.prepare(`UPDATE imported_playlist_tracks SET downloaded = 1 WHERE playlist_id = ? AND video_id = ?`).run(playlistId, videoId);
 }

@@ -1,34 +1,10 @@
-export type ArtworkSearchInput = {
-  artist: string;
-  album?: string;
-  title?: string;
-  musicbrainzReleaseId?: string;
-  musicbrainzReleaseGroupId?: string;
-  isrc?: string;
-  durationMs?: number;
-};
+import type { ImageCandidate, ImageSearchInput, ImageProvider } from "../../image-resolution/types";
 
-export type ArtworkCandidate = {
-  provider: string;
-  url: string;
-  thumbnailUrl?: string;
-  width?: number;
-  height?: number;
-  mimeType?: string;
-  sourceReleaseId?: string;
-  confidence: number;
-  isFrontCover: boolean;
-  blobUrl?: string | null;
-};
+export type { ImageCandidate as ArtworkCandidate, ImageSearchInput as ArtworkSearchInput, ImageProvider as ArtworkProvider } from "../../image-resolution/types";
 
 export type ArtworkResult = {
   status: "resolved" | "no_providers" | "not_found" | "error";
-  candidates: ArtworkCandidate[];
+  candidates: ImageCandidate[];
   winner?: string;
   elapsedMs: number;
 };
-
-export interface ArtworkProvider {
-  readonly name: string;
-  search(input: ArtworkSearchInput, signal?: AbortSignal): Promise<ArtworkCandidate[]>;
-}

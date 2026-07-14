@@ -56,14 +56,6 @@ export function LyricsSearchModal({
   const { data: searchResults, isLoading: isSearchLoading } = useQuery({
     queryKey: ["lyrics", "search", { name: debouncedName, artist: debouncedArtist }],
     queryFn: async () => {
-      const hasIpc = !!(window as any).electronApi?.lyrics;
-      if (hasIpc) {
-        return (window as any).electronApi.lyrics.searchRemoteLyrics({
-          name: debouncedName,
-          artist: debouncedArtist,
-        });
-      }
-      // Web fallback - search both providers
       const { searchAll } = await import("../../../services/lyrics/lyrics-service");
       return searchAll({ name: debouncedName, artist: debouncedArtist });
     },
@@ -74,16 +66,6 @@ export function LyricsSearchModal({
     queryKey: ["lyrics", "preview", selectedResult?.source, selectedResult?.id],
     queryFn: async () => {
       if (!selectedResult) return null;
-      const hasIpc = !!(window as any).electronApi?.lyrics;
-      if (hasIpc) {
-        const raw = await (window as any).electronApi.lyrics.getRemoteLyricsByRemoteId({
-          remoteSongId: selectedResult.id,
-          remoteSource: selectedResult.source,
-        });
-        if (!raw) return null;
-        return parseLrc(raw);
-      }
-      // Web fallback
       const { getRemoteLyricsById } = await import("../../../services/lyrics/lyrics-service");
       const raw = await getRemoteLyricsById({
         remoteSongId: selectedResult.id,

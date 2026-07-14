@@ -1,7 +1,7 @@
 import type { Song, Album, AlbumArtist } from "../types/domain-types";
 import { OriginType } from "../types/domain-types";
-import { fetchAlbumCover, clearImageQueue } from "./image-fetch";
-import { fetchArtistImage } from "./artist-image";
+import { clearImageQueue } from "./image-fetch";
+import { imageResolutionService } from "./image-resolution/service";
 import { useStatusStore } from "../stores/status.store";
 
 export type CoverArtCallbacks = {
@@ -169,7 +169,12 @@ async function processQueue(queue: CoverTask[], cb: CoverArtCallbacks): Promise<
         const mbzIds = [`rg=${a.mbzReleaseGroupId || '—'}`, `rel=${a.mbzId || '—'}`].join(', ');
         console.debug(`[search] cover queue ${position} album "${a.name}" (${mbzIds})`);
         useStatusStore.getState().addMessage(`📀 Album cover ${position}: ${a.name} (${mbzIds})`, "info", "Images");
-        const url = await fetchAlbumCover(a.mbzReleaseGroupId, a.mbzId, a.albumArtistName, a.name);
+        const url = await imageResolutionService.resolveAlbumCover({
+          artist: a.albumArtistName,
+          album: a.name,
+          musicbrainzReleaseGroupId: a.mbzReleaseGroupId,
+          musicbrainzReleaseId: a.mbzId,
+        });
         const src = url ? url.slice(0, 60) : '❌ none';
         useStatusStore.getState().addMessage(`✅ Album cover for "${a.name}": ${src}`, "success", "Images");
         cb.onAlbumCover(a.id, url);
@@ -178,7 +183,12 @@ async function processQueue(queue: CoverTask[], cb: CoverArtCallbacks): Promise<
         const mbzIds = [`rg=${task.rgId || '—'}`, `rel=${task.relId || '—'}`].join(', ');
         console.debug(`[search] cover queue ${position} song group "${task.artist} - ${task.album || '?'}" (${mbzIds})`);
         useStatusStore.getState().addMessage(`🎵 Song thumbnail ${position}: "${task.artist} - ${task.album || '?'}" (${mbzIds})`, "info", "Images");
-        const url = await fetchAlbumCover(task.rgId, task.relId, task.artist, task.album);
+        const url = await imageResolutionService.resolveAlbumCover({
+          artist: task.artist,
+          album: task.album,
+          musicbrainzReleaseGroupId: task.rgId,
+          musicbrainzReleaseId: task.relId,
+        });
         const src = url ? url.slice(0, 60) : '❌ none (no cover in archive)';
         useStatusStore.getState().addMessage(`✅ Song thumbnail "${task.artist} - ${task.album || '?'}": ${src}`, "success", "Images");
         cb.onSongCover(task.ids, url);
@@ -187,7 +197,7 @@ async function processQueue(queue: CoverTask[], cb: CoverArtCallbacks): Promise<
         const art = task.artist;
         console.debug(`[search] cover queue ${position} artist "${art.name}" (mbz=${art.mbz || '—'})`);
         useStatusStore.getState().addMessage(`👤 Artist image ${position}: ${art.name}`, "info", "Images");
-        const url = await fetchArtistImage(art.name, art.mbz || undefined);
+        const url = await imageResolutionService.resolveArtistImage({ artist: art.name, musicbrainzArtistId: art.mbz ?? null });
         const src = url ? url.slice(0, 60) : '❌ none (Wikipedia)';
         if (url && cb.onArtistImage) {
           useStatusStore.getState().addMessage(`✅ Artist image for "${art.name}": ${src}`, "success", "Images");
