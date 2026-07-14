@@ -1,7 +1,4 @@
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
-const youtubedl = require("youtube-dl-exec");
+import youtubedl from "youtube-dl-exec";
 
 export type ResolvedPlaylistEntry = {
   videoId: string;
@@ -48,7 +45,7 @@ export async function resolvePlaylistUrl(url: string): Promise<ResolvedPlaylist>
     });
 
     const entries = output?.entries || [];
-    const isSingle = !entries.length && output?.id;
+    const isSingle = !entries.length && output?.id && !output?.playlist_id;
 
     const playlistId = isSingle ? `single-${output.id}` : (output?.playlist_id || `pl-${Date.now()}`);
     const playlistName = isSingle ? output?.title || "Single Video" : (output?.playlist_title || output?.title || "Imported Playlist");
